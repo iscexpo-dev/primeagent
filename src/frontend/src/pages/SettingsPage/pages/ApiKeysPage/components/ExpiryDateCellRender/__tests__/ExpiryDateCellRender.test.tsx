@@ -27,21 +27,30 @@ describe("ExpiryDateCellRender", () => {
   });
 
   it("renders infinity symbol when value is null", () => {
-    const props = { value: null, node: undefined } as unknown as CustomCellRendererProps;
+    const props = {
+      value: null,
+      node: undefined,
+    } as unknown as CustomCellRendererProps;
     renderWithProvider(<ExpiryDateCellRender {...props} />);
     expect(screen.getByText("∞")).toBeInTheDocument();
     expect(screen.queryByTestId("date-reader")).not.toBeInTheDocument();
   });
 
   it("renders infinity symbol when value is undefined", () => {
-    const props = { value: undefined, node: undefined } as unknown as CustomCellRendererProps;
+    const props = {
+      value: undefined,
+      node: undefined,
+    } as unknown as CustomCellRendererProps;
     renderWithProvider(<ExpiryDateCellRender {...props} />);
     expect(screen.getByText("∞")).toBeInTheDocument();
     expect(screen.queryByTestId("date-reader")).not.toBeInTheDocument();
   });
 
   it("renders infinity symbol when value is an empty string", () => {
-    const props = { value: "", node: undefined } as unknown as CustomCellRendererProps;
+    const props = {
+      value: "",
+      node: undefined,
+    } as unknown as CustomCellRendererProps;
     renderWithProvider(<ExpiryDateCellRender {...props} />);
     expect(screen.getByText("∞")).toBeInTheDocument();
   });

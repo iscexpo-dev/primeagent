@@ -606,7 +606,9 @@ describe("useMessagesStore", () => {
 
       let removedMessages;
       await act(async () => {
-        removedMessages = await result.current.removeMessages([mockMessage.id ?? ""]);
+        removedMessages = await result.current.removeMessages([
+          mockMessage.id ?? "",
+        ]);
       });
 
       expect(removedMessages).toEqual([mockMessage2]);
@@ -703,7 +705,7 @@ describe("useMessagesStore", () => {
         ...mockMessage,
         category: "test-category",
         properties: { key: "value", nested: { prop: true } },
-        content_blocks: [{ type: "text", content: "block content" } as any],
+        content_blocks: [{ type: "text", content: "block content" } as unknown],
       };
 
       act(() => {

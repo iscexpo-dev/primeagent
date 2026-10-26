@@ -4,7 +4,7 @@ import { BuildStatus } from "@/constants/enums";
 // --- Mocks ---
 
 const mockFlowStoreState = {
-  nodes: [] as any[],
+  nodes: [] as unknown[],
   buildStartTime: null as number | null,
   stopNodeId: null as string | null,
   clearAndSetEdgesRunning: jest.fn(),
@@ -43,9 +43,10 @@ const mockUpdateMessageProperties = jest.fn();
 jest.mock(
   "@/components/core/playgroundComponent/chat-view/utils/message-utils",
   () => ({
-    findLastBotMessage: (...args: any[]) => mockFindLastBotMessage(...(args as any)),
-    updateMessageProperties: (...args: any[]) =>
-      mockUpdateMessageProperties(...(args as any)),
+    findLastBotMessage: (...args: unknown[]) =>
+      mockFindLastBotMessage(...(args as unknown)),
+    updateMessageProperties: (...args: unknown[]) =>
+      mockUpdateMessageProperties(...(args as unknown)),
   }),
 );
 
@@ -58,17 +59,18 @@ jest.mock(
 
 const mockIsErrorLogType = jest.fn(() => false);
 jest.mock("@/types/utils/typeCheckingUtils", () => ({
-  isErrorLogType: (...args: any[]) => mockIsErrorLogType(...(args as any)),
+  isErrorLogType: (...args: unknown[]) =>
+    mockIsErrorLogType(...(args as unknown)),
 }));
 
 const mockIsOutputType = jest.fn(() => false);
 jest.mock("@/utils/reactflowUtils", () => ({
-  isOutputType: (...args: any[]) => mockIsOutputType(...(args as any)),
+  isOutputType: (...args: unknown[]) => mockIsOutputType(...(args as unknown)),
 }));
 
 jest.mock("@/utils/utils", () => ({
-  isStringArray: (arr: any) =>
-    Array.isArray(arr) && arr.every((v: any) => typeof v === "string"),
+  isStringArray: (arr: unknown) =>
+    Array.isArray(arr) && arr.every((v: unknown) => typeof v === "string"),
   tryParseJson: jest.fn((s: string) => null),
 }));
 
@@ -332,7 +334,7 @@ describe("processEndVertexEvent", () => {
     mockFindLastBotMessage.mockReturnValue({
       message: { id: "msg-1", properties: {} },
       queryKey: ["messages"],
-    } as any);
+    } as unknown);
 
     const data = createValidBuildData("node-1");
     processEndVertexEvent(data, buildResults, {
@@ -657,7 +659,8 @@ describe("onEvent — log", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (mockFlowStoreState as any).appendLogToFlowPool = mockAppendLogToFlowPool;
+    (mockFlowStoreState as unknown).appendLogToFlowPool =
+      mockAppendLogToFlowPool;
   });
 
   it("calls appendLogToFlowPool with correct args for a valid log event", async () => {

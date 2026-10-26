@@ -15,8 +15,8 @@ const mockRemoveDismissedNodes = jest.fn();
 const mockRegisterNodeUpdate = jest.fn();
 const mockCompleteNodeUpdate = jest.fn();
 
-let mockTemplates: Record<string, any>;
-let mockFlowStoreState: any;
+let mockTemplates: Record<string, unknown>;
+let mockFlowStoreState: unknown;
 
 jest.mock("@xyflow/react", () => ({
   useUpdateNodeInternals: () => mockUpdateNodeInternals,
@@ -150,7 +150,7 @@ jest.mock("../../hooks/use-update-node-code", () => ({
 }));
 
 jest.mock("../../helpers/process-node-advanced-fields", () => ({
-  processNodeAdvancedFields: (...args: any[]) =>
+  processNodeAdvancedFields: (...args: unknown[]) =>
     mockProcessNodeAdvancedFields(...args),
 }));
 
@@ -260,7 +260,7 @@ describe("GenericNode dismissed update recovery", () => {
     });
 
     mockValidateComponentCode.mockImplementation(
-      (_payload, { onSuccess }: { onSuccess: (value: any) => void }) => {
+      (_payload, { onSuccess }: { onSuccess: (value: unknown) => void }) => {
         onSuccess({
           data: {
             display_name: "Prompt",
@@ -285,20 +285,20 @@ describe("GenericNode dismissed update recovery", () => {
         data={{
           id: "node-1",
           type: "Prompt",
-            node: {
-              display_name: "Prompt",
-              description: "Prompt node",
-              documentation: "",
-              template: {
-                code: {
-                  type: "str",
-                  value: "old_code",
-                  required: false,
-                  list: false,
-                  readonly: false,
-                  show: true,
-                },
+          node: {
+            display_name: "Prompt",
+            description: "Prompt node",
+            documentation: "",
+            template: {
+              code: {
+                type: "str",
+                value: "old_code",
+                required: false,
+                list: false,
+                readonly: false,
+                show: true,
               },
+            },
             outputs: [],
           },
         }}

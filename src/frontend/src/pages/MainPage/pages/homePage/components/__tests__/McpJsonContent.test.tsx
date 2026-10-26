@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { McpJsonContent } from "../McpJsonContent";
 import type { McpJsonContentProps } from "../McpJsonContent";
+import { McpJsonContent } from "../McpJsonContent";
 
 jest.mock("react-syntax-highlighter", () => ({
   Light: ({

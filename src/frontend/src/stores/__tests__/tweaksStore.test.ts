@@ -229,9 +229,9 @@ describe("useTweaksStore", () => {
         result.current.setNode("node-frozen", updatedNode);
       });
 
-      expect((result.current.nodes[0].data as unknown as NodeDataType).node?.frozen).toBe(
-        false,
-      );
+      expect(
+        (result.current.nodes[0].data as unknown as NodeDataType).node?.frozen,
+      ).toBe(false);
     });
 
     it("should handle updating non-existent node", () => {
@@ -554,7 +554,7 @@ describe("useTweaksStore", () => {
         });
       }).toThrow();
 
-      (JSON.parse as any).mockRestore();
+      (JSON.parse as unknown).mockRestore();
     });
 
     it("should handle multiple node updates with same ID", () => {

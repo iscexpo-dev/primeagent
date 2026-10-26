@@ -4,6 +4,7 @@
 # Variables
 FRONTEND_DIR = src/frontend
 NPM = npm
+CLEAR_DIRS = $(foreach dir,$1,$(shell mkdir -p $(dir) && find $(dir) -mindepth 1 -delete))
 
 .PHONY: install_frontend install_frontendci install_frontendc frontend_deps_check build_frontend run_frontend frontend frontendc format_frontend tests_frontend test_frontend test_frontend_watch test_frontend_coverage test_frontend_verbose test_frontend_ci test_frontend_clean test_frontend_file test_frontend_pattern test_frontend_snapshots test_frontend_config test_frontend_bail test_frontend_silent test_frontend_coverage_open help_frontend storybook storybook_build storybook_network
 
@@ -19,7 +20,7 @@ install_frontendci:
 	@cd $(FRONTEND_DIR) && npm ci > /dev/null 2>&1
 
 install_frontendc:
-	@cd $(FRONTEND_DIR) && $(call CLEAR_DIRS,node_modules) && rm -f package-lock.json && npm install > /dev/null 2>&1
+	@cd $(FRONTEND_DIR) && rm -rf node_modules && rm -f package-lock.json && npm install > /dev/null 2>&1
 
 # Check if frontend dependencies are installed
 frontend_deps_check:
