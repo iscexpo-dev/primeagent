@@ -37,9 +37,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
-from sqlmodel import col
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from wfx.log.logger import logger
 
@@ -752,13 +752,13 @@ class TelemetryWriterService(Service):
             return
         async with self._session_maker() as session:
             if tx_batch:
-                await session.execute(TransactionTable.__table__.insert(), tx_batch)
+                await session.exec(TransactionTable.__table__.insert(), params=tx_batch)
                 for row in tx_batch:
                     flow_id = row.get("flow_id")
                     if flow_id is not None:
                         self._dirty_tx_flows.add(str(flow_id))
             if vb_batch:
-                await session.execute(VertexBuildTable.__table__.insert(), vb_batch)
+                await session.exec(VertexBuildTable.__table__.insert(), params=vb_batch)
                 for row in vb_batch:
                     flow_id = row.get("flow_id")
                     if flow_id is not None:
@@ -817,7 +817,7 @@ class TelemetryWriterService(Service):
                         .order_by(col(TransactionTable.timestamp).desc())
                         .limit(max_transactions)
                     )
-                    await session.execute(
+                    await session.exec(
                         delete(TransactionTable).where(
                             TransactionTable.flow_id == flow_id,
                             col(TransactionTable.id).not_in(keep_subq),
@@ -827,11 +827,10 @@ class TelemetryWriterService(Service):
                 for flow_id in vb_flows:
                     vertex_ids = (
                         (
-                            await session.execute(
+                            await session.exec(
                                 select(VertexBuildTable.id).where(VertexBuildTable.flow_id == flow_id).distinct()
                             )
                         )
-                        .scalars()
                         .all()
                     )
                     for vertex_id in vertex_ids:
@@ -847,7 +846,7 @@ class TelemetryWriterService(Service):
                             )
                             .limit(max_per_vertex)
                         )
-                        await session.execute(
+                        await session.exec(
                             delete(VertexBuildTable).where(
                                 VertexBuildTable.flow_id == flow_id,
                                 VertexBuildTable.id == vertex_id,
@@ -863,7 +862,7 @@ class TelemetryWriterService(Service):
                     )
                     .limit(max_vertex_builds)
                 )
-                await session.execute(
+                await session.exec(
                     delete(VertexBuildTable).where(col(VertexBuildTable.build_id).not_in(keep_global_subq))
                 )
                 await session.commit()

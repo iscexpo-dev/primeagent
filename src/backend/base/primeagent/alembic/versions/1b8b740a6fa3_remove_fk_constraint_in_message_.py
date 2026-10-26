@@ -14,7 +14,7 @@ import sqlalchemy as sa
 import sqlmodel
 from alembic import op
 from primeagent.utils import migration
-from sqlalchemy.engine.reflection import Inspector
+from sqlalchemy import inspect
 
 # revision identifiers, used by Alembic.
 revision: str = "1b8b740a6fa3"
@@ -41,7 +41,7 @@ def constraint_exists(constraint_name: str, conn) -> bool:
     Returns:
         bool: True if the constraint exists, False otherwise
     """
-    inspector = Inspector.from_engine(conn)
+    inspector = inspect(conn)
 
     # Get all table names
     tables = inspector.get_table_names()

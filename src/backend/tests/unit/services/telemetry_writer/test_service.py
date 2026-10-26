@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 
 class _FakeSettings:
@@ -104,7 +105,11 @@ async def writer_with_engine():
         await conn.run_sync(SQLModel.metadata.create_all)
     writer = _build_writer()
     writer._engine = engine
-    writer._session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    writer._session_maker = async_sessionmaker(
+        engine,
+        class_=SQLModelAsyncSession,
+        expire_on_commit=False,
+    )
     writer._started = True
     writer._shutdown_event = asyncio.Event()
     try:
@@ -729,7 +734,7 @@ async def test_in_flight_batch_returned_on_cancel(writer_with_engine) -> None:
         writer.enqueue_transaction(_make_transaction_row(flow_id))
     assert len(writer._tx_buffer) == 20
 
-    # Replace the session_maker with one that hangs forever inside execute,
+    # Replace the session_maker with one that hangs forever inside exec,
     # so the writer is guaranteed to be blocked mid-flush when we cancel.
     hang = asyncio.Event()  # never set
 
@@ -743,7 +748,7 @@ async def test_in_flight_batch_returned_on_cancel(writer_with_engine) -> None:
         async def __aexit__(self, *_):
             return False
 
-        async def execute(self, *_):
+        async def exec(self, *_args, **_kwargs):
             await hang.wait()
 
         async def commit(self):
