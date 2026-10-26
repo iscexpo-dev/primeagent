@@ -58,7 +58,7 @@ const FilesTab = ({
   const handleRename = (params: NewValueParams<FileType, string>) => {
     rename({
       id: params.data.id,
-      name: params.newValue,
+      name: params.newValue ?? "",
     });
   };
 
@@ -382,7 +382,7 @@ const FilesTab = ({
                   isShiftPressed && quantitySelected > 0 && "no-select-cells",
                 )}
                 pagination
-                ref={tableRef}
+                ref={tableRef as unknown as React.Ref<AgGridReact>}
                 quickFilterText={quickFilterText}
                 gridOptions={{
                   stopEditingWhenCellsLoseFocus: true,

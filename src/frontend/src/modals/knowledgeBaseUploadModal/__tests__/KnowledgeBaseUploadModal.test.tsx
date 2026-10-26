@@ -236,16 +236,17 @@ describe("KnowledgeBaseUploadModal", () => {
       ).toBeInTheDocument();
     });
 
-    it("does not render the Hide Configuration footer toggle", () => {
+    it("toggles the advanced configuration from the footer", async () => {
+      const user = userEvent.setup();
       render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
         wrapper: createWrapper(),
       });
+      await user.click(
+        screen.getByRole("button", { name: /Hide Configuration/i }),
+      );
       expect(
-        screen.queryByRole("button", { name: /Hide Configuration/i }),
-      ).not.toBeInTheDocument();
-      expect(
-        screen.queryByRole("button", { name: /^Ingest Content$/i }),
-      ).not.toBeInTheDocument();
+        screen.getByRole("button", { name: /^Ingest Content$/i }),
+      ).toBeInTheDocument();
     });
 
     it("disables chunking inputs until at least one source is added", async () => {

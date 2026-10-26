@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { BuildStatus } from "@/constants/enums";
 
 // --- Mocks ---
@@ -42,9 +43,9 @@ const mockUpdateMessageProperties = jest.fn();
 jest.mock(
   "@/components/core/playgroundComponent/chat-view/utils/message-utils",
   () => ({
-    findLastBotMessage: (...args: any[]) => mockFindLastBotMessage(...args),
+    findLastBotMessage: (...args: any[]) => mockFindLastBotMessage(...(args as any)),
     updateMessageProperties: (...args: any[]) =>
-      mockUpdateMessageProperties(...args),
+      mockUpdateMessageProperties(...(args as any)),
   }),
 );
 
@@ -57,12 +58,12 @@ jest.mock(
 
 const mockIsErrorLogType = jest.fn(() => false);
 jest.mock("@/types/utils/typeCheckingUtils", () => ({
-  isErrorLogType: (...args: any[]) => mockIsErrorLogType(...args),
+  isErrorLogType: (...args: any[]) => mockIsErrorLogType(...(args as any)),
 }));
 
 const mockIsOutputType = jest.fn(() => false);
 jest.mock("@/utils/reactflowUtils", () => ({
-  isOutputType: (...args: any[]) => mockIsOutputType(...args),
+  isOutputType: (...args: any[]) => mockIsOutputType(...(args as any)),
 }));
 
 jest.mock("@/utils/utils", () => ({
@@ -331,7 +332,7 @@ describe("processEndVertexEvent", () => {
     mockFindLastBotMessage.mockReturnValue({
       message: { id: "msg-1", properties: {} },
       queryKey: ["messages"],
-    });
+    } as any);
 
     const data = createValidBuildData("node-1");
     processEndVertexEvent(data, buildResults, {

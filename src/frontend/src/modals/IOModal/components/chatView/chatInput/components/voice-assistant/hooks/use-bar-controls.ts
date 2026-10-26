@@ -97,7 +97,9 @@ export const useBarControls = (
             timeDataRef.current = new Uint8Array(analyser.fftSize);
           }
 
-          analyser.getByteTimeDomainData(timeDataRef.current);
+          analyser.getByteTimeDomainData(
+            timeDataRef.current as Uint8Array<ArrayBuffer>,
+          );
 
           let sum = 0;
           let max = 0;

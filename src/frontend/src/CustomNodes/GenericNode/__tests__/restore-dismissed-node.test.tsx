@@ -285,12 +285,20 @@ describe("GenericNode dismissed update recovery", () => {
         data={{
           id: "node-1",
           type: "Prompt",
-          node: {
-            display_name: "Prompt",
-            description: "Prompt node",
-            template: {
-              code: { value: "old_code" },
-            },
+            node: {
+              display_name: "Prompt",
+              description: "Prompt node",
+              documentation: "",
+              template: {
+                code: {
+                  type: "str",
+                  value: "old_code",
+                  required: false,
+                  list: false,
+                  readonly: false,
+                  show: true,
+                },
+              },
             outputs: [],
           },
         }}

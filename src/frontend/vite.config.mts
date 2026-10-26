@@ -42,6 +42,75 @@ export default defineConfig(({ mode }) => {
     base: BASENAME || "",
     build: {
       outDir: "build",
+      chunkSizeWarningLimit: 2300,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return;
+            if (id.includes("node_modules/elkjs/")) return "vendor-elk";
+            if (
+              id.includes("node_modules/vanilla-jsoneditor/") ||
+              id.includes("node_modules/@codemirror/") ||
+              id.includes("node_modules/@lezer/") ||
+              id.includes("node_modules/codemirror/")
+            )
+              return "vendor-jsoneditor";
+            if (id.includes("node_modules/ag-grid-")) return "vendor-ag-grid";
+            if (
+              id.includes("node_modules/moment-timezone/") ||
+              id.includes("node_modules/moment/")
+            )
+              return "vendor-moment";
+            if (id.includes("node_modules/ace-builds/")) return "vendor-ace";
+            if (id.includes("node_modules/lucide-react/"))
+              return "vendor-lucide";
+            if (
+              id.includes("node_modules/i18next/") ||
+              id.includes("node_modules/react-i18next/")
+            )
+              return "vendor-i18n";
+            if (
+              id.includes("node_modules/@xyflow/") ||
+              id.includes("node_modules/reactflow/")
+            )
+              return "vendor-flow";
+            if (id.includes("node_modules/lodash/")) return "vendor-lodash";
+            if (
+              id.includes("node_modules/react-dom/") ||
+              id.includes("node_modules/react/") ||
+              id.includes("node_modules/scheduler/")
+            )
+              return "vendor-react";
+            if (
+              id.includes("node_modules/@chakra-ui/") ||
+              id.includes("node_modules/@emotion/")
+            )
+              return "vendor-chakra";
+            if (id.includes("node_modules/@radix-ui/")) return "vendor-radix";
+            if (id.includes("node_modules/@tanstack/"))
+              return "vendor-tanstack";
+            if (id.includes("node_modules/framer-motion/"))
+              return "vendor-motion";
+            if (
+              id.includes("node_modules/react-syntax-highlighter/") ||
+              id.includes("node_modules/refractor/") ||
+              id.includes("node_modules/highlight.js/")
+            )
+              return "vendor-syntax";
+            if (id.includes("node_modules/mathjax")) return "vendor-mathjax";
+            if (
+              id.includes("node_modules/pdfjs-dist/") ||
+              id.includes("node_modules/react-pdf/")
+            )
+              return "vendor-pdf";
+            if (
+              id.includes("node_modules/react-icons/") ||
+              id.includes("node_modules/@fortawesome/")
+            )
+              return "vendor-icons";
+          },
+        },
+      },
     },
     define: {
       "import.meta.env.BACKEND_URL": JSON.stringify(

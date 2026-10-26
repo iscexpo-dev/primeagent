@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { McpJsonContent } from "../McpJsonContent";
+import type { McpJsonContentProps } from "../McpJsonContent";
 
 jest.mock("react-syntax-highlighter", () => ({
   Light: ({
@@ -110,7 +111,7 @@ jest.mock("@/utils/utils", () => ({
     args.filter(Boolean).join(" "),
 }));
 
-const defaultProps = {
+const defaultProps: McpJsonContentProps = {
   selectedPlatform: "macoslinux",
   setSelectedPlatform: jest.fn(),
   selectedTransport: "sse",

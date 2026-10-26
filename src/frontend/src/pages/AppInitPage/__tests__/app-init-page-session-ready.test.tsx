@@ -170,7 +170,10 @@ describe("AppInitPage - isSessionReady Logic", () => {
       const isSessionFetched = false;
 
       // Act: Initial state
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<
+        boolean,
+        { auto: boolean | undefined }
+      >(
         ({ auto }) => useIsSessionReady(auto, isSessionFetched),
         { initialProps: { auto: autoLogin } },
       );
@@ -179,7 +182,7 @@ describe("AppInitPage - isSessionReady Logic", () => {
 
       // Act: autoLogin determined to be true
       autoLogin = true;
-      rerender({ auto: autoLogin });
+      rerender({ auto: autoLogin } as { auto: boolean });
 
       // Assert: Now ready (auto-login mode)
       expect(result.current).toBe(true);
@@ -210,7 +213,10 @@ describe("AppInitPage - isSessionReady Logic", () => {
       let autoLogin: boolean | undefined = undefined;
       let isSessionFetched = false;
 
-      const { result, rerender } = renderHook(
+      const { result, rerender } = renderHook<
+        boolean,
+        { auto: boolean | undefined; fetched: boolean }
+      >(
         ({ auto, fetched }) => useIsSessionReady(auto, fetched),
         { initialProps: { auto: autoLogin, fetched: isSessionFetched } },
       );
@@ -220,12 +226,18 @@ describe("AppInitPage - isSessionReady Logic", () => {
 
       // Step 2: autoLogin determined (manual mode)
       autoLogin = false;
-      rerender({ auto: autoLogin, fetched: isSessionFetched });
+      rerender({ auto: autoLogin, fetched: isSessionFetched } as {
+        auto: boolean;
+        fetched: boolean;
+      });
       expect(result.current).toBe(false);
 
       // Step 3: Session validated - now ready
       isSessionFetched = true;
-      rerender({ auto: autoLogin, fetched: isSessionFetched });
+      rerender({ auto: autoLogin, fetched: isSessionFetched } as {
+        auto: boolean;
+        fetched: boolean;
+      });
       expect(result.current).toBe(true);
     });
   });

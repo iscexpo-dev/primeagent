@@ -40,6 +40,7 @@ describe("SortableListComponent reproduction", () => {
       onDelete: jest.fn(),
       id: "test-id",
       limit: 10,
+      editNode: false,
     };
 
     render(<SortableListComponent {...props} />);

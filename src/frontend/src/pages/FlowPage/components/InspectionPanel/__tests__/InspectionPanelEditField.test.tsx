@@ -40,10 +40,14 @@ describe("InspectionPanelEditField", () => {
     node: {
       display_name: "Test Node",
       description: "Test description",
+      documentation: "",
       template: {
         test_field: {
           type: "str",
           value: "test value",
+          required: false,
+          list: false,
+          readonly: false,
           advanced: false,
           show: true,
         },

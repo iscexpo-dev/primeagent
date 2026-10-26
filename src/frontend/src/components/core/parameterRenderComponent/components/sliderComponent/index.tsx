@@ -69,7 +69,7 @@ export default function SliderComponent({
   const step = rangeSpec?.step ?? 0.01;
 
   useEffect(() => {
-    if (disabled && value !== "") {
+    if (disabled && value.length > 0) {
       handleOnNewValue({ value: "" }, { skipSnapshot: true });
     }
   }, [disabled]);

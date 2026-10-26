@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, useNavigate } from "react-router-dom";
-import HelpDropdown from "../HelpDropdown";
+import { HelpDropdownView } from "../HelpDropdownView";
 
 jest.mock("@/components/ui/button", () => ({
   Button: ({ children, ...props }: any) => (
@@ -94,7 +94,17 @@ describe("HelpDropdown", () => {
 
     render(
       <MemoryRouter>
-        <HelpDropdown isOpen={true} onOpenChange={() => {}} />
+        <HelpDropdownView
+          isOpen={true}
+          onOpenChange={() => {}}
+          helperLineEnabled={false}
+          onToggleHelperLines={() => {}}
+          inspectionPanelVisible={false}
+          onToggleInspectionPanel={() => {}}
+          navigateTo={() => {}}
+          openLink={() => {}}
+          urls={{ docs: "", bugReport: "", desktop: "" }}
+        />
       </MemoryRouter>,
     );
 

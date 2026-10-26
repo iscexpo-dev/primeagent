@@ -62,7 +62,7 @@ import { ConnectionPanel } from "../components/step-attach-flows-connection-pane
 const _noop = jest.fn();
 
 const defaultProps = {
-  connectionTab: "available" as const,
+  connectionTab: "available" as "available" | "create",
   onTabChange: jest.fn(),
   connections: [] as ConnectionItem[],
   selectedConnections: new Set<string>(),

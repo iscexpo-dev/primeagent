@@ -153,7 +153,7 @@ export default function SecretKeyModal({
           <></>
         ) : (
           <FormKeyRender
-            modalProps={modalConfigProps}
+            modalProps={modalConfigProps as ModalConfigProps}
             apiKeyName={apiKeyName}
             inputRef={inputRef}
             setApiKeyName={setApiKeyName}

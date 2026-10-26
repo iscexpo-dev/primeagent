@@ -126,7 +126,7 @@ export const test = base.extend({
               return;
             }
 
-            responseBody = bodyResult;
+            responseBody = bodyResult as any;
           } catch (bodyReadErr) {
             if (timeoutId) {
               clearTimeout(timeoutId);
@@ -221,7 +221,7 @@ export const test = base.extend({
                 `If this error is expected, call page.allowFlowErrors() at the start of your test.`;
 
               // Use page.close() to fail the test immediately
-              page.emit("pageerror", new Error(errorMessage));
+              (page as any).emit("pageerror", new Error(errorMessage));
               throw new Error(errorMessage);
             }
           }

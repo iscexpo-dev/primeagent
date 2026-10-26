@@ -320,7 +320,10 @@ export type MutationFunctionType = (
   // biome-ignore lint/suspicious/noExplicitAny: legacy
   mutationFn: UseMutationOptions<any, any, any>["mutationFn"],
   // biome-ignore lint/suspicious/noExplicitAny: legacy
-  options?: Omit<UseMutationOptions<any, any>, "mutationFn" | "mutationKey">,
+  options?: Omit<
+    UseMutationOptions<any, any, any>,
+    "mutationFn" | "mutationKey"
+  >,
   // biome-ignore lint/suspicious/noExplicitAny: legacy
 ) => UseMutationResult<any, any, any, any>;
 
@@ -335,14 +338,14 @@ export type useMutationFunctionType<
 > = Params extends undefined
   ? (
       options?: Omit<
-        UseMutationOptions<Data, Error>,
+        UseMutationOptions<Data, Error, Variables>,
         "mutationFn" | "mutationKey"
       >,
     ) => UseMutationResult<Data, Error, Variables>
   : (
       params: Params,
       options?: Omit<
-        UseMutationOptions<Data, Error>,
+        UseMutationOptions<Data, Error, Variables>,
         "mutationFn" | "mutationKey"
       >,
     ) => UseMutationResult<Data, Error, Variables>;

@@ -116,6 +116,15 @@ jest.mock("@/utils/utils", () => ({
 }));
 
 describe("InspectionPanelHeader", () => {
+  const renderHeader = (data: NodeDataType) =>
+    render(
+      <InspectionPanelHeader
+        data={data}
+        isEditingFields={false}
+        setIsEditingFields={jest.fn()}
+      />,
+    );
+
   const createMockData = (overrides = {}): NodeDataType => ({
     id: "test-node-123",
     type: "TestComponent",
@@ -144,28 +153,28 @@ describe("InspectionPanelHeader", () => {
   describe("Basic Rendering", () => {
     it("should render node name from EditableHeaderContent", () => {
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       expect(screen.getByText("Test Node Name")).toBeInTheDocument();
     });
 
     it("should render description from EditableHeaderContent", () => {
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       expect(screen.getByText("Test Description")).toBeInTheDocument();
     });
 
     it("should render ID badge with truncated ID", () => {
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       expect(screen.getByText(/ID:/)).toBeInTheDocument();
     });
 
     it("should render edit button", () => {
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       expect(
         screen.getByTestId("edit-name-description-button"),
@@ -178,14 +187,14 @@ describe("InspectionPanelHeader", () => {
       const data = createMockData({
         documentation: "https://docs.example.com",
       });
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       expect(screen.getByTestId("docs-button-modal")).toBeInTheDocument();
     });
 
     it("should not render docs button when documentation is empty", () => {
       const data = createMockData({ documentation: "" });
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       expect(screen.queryByTestId("docs-button-modal")).not.toBeInTheDocument();
     });
@@ -198,7 +207,7 @@ describe("InspectionPanelHeader", () => {
         documentation: "https://docs.example.com",
       });
 
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       const docsButton = screen.getByTestId("docs-button-modal");
       await user.click(docsButton);
@@ -213,7 +222,7 @@ describe("InspectionPanelHeader", () => {
       const dataWithButton = { ...data };
       dataWithButton.node!.documentation = "";
 
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       // Since button won't render without docs, we test the callback logic
       // This is tested through the openDocs function
@@ -225,7 +234,7 @@ describe("InspectionPanelHeader", () => {
       const data = createMockData();
       data.id = "very-long-id-12345-67890-abcdef";
 
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       // Should show last part after last dash
       expect(screen.getByText(/ID:.*abcdef/)).toBeInTheDocument();
@@ -234,7 +243,7 @@ describe("InspectionPanelHeader", () => {
     it("should render ID badge", () => {
       const data = createMockData();
 
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       const badge = screen.getByText(/ID:/);
       expect(badge).toBeInTheDocument();
@@ -244,7 +253,7 @@ describe("InspectionPanelHeader", () => {
   describe("Edit Mode Toggle", () => {
     it("should show edit button in view mode", () => {
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       expect(
         screen.getByTestId("edit-name-description-button"),
@@ -255,7 +264,7 @@ describe("InspectionPanelHeader", () => {
     it("should toggle to save button in edit mode", async () => {
       const user = userEvent.setup();
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       const editButton = screen.getByTestId("edit-name-description-button");
       await user.click(editButton);
@@ -271,7 +280,7 @@ describe("InspectionPanelHeader", () => {
     it("should call handleSave when save button is clicked", async () => {
       const user = userEvent.setup();
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       const editButton = screen.getByTestId("edit-name-description-button");
       await user.click(editButton);
@@ -286,7 +295,7 @@ describe("InspectionPanelHeader", () => {
 
     it("should show edit button with opacity 0 when not hovering", () => {
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       const editButton = screen.getByTestId("edit-name-description-button");
       expect(editButton).toHaveClass("opacity-0");
@@ -295,7 +304,7 @@ describe("InspectionPanelHeader", () => {
     it("should show edit button with opacity 100 when hovering", async () => {
       const user = userEvent.setup();
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       const container = screen.getByTestId("panel-description");
       await user.hover(container);
@@ -310,7 +319,7 @@ describe("InspectionPanelHeader", () => {
       const onClose = jest.fn();
       const data = createMockData();
 
-      render(<InspectionPanelHeader data={data} onClose={onClose} />);
+      renderHeader(data);
 
       // onClose would be called by parent component, not directly by header
       // This test verifies the prop is accepted
@@ -321,7 +330,7 @@ describe("InspectionPanelHeader", () => {
       const data = createMockData();
 
       expect(() => {
-        render(<InspectionPanelHeader data={data} />);
+        renderHeader(data);
       }).not.toThrow();
     });
   });
@@ -336,7 +345,7 @@ describe("InspectionPanelHeader", () => {
         },
       });
 
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       const codeButton = screen.getByTestId("edit-fields-button");
       expect(codeButton).toBeInTheDocument();
@@ -350,7 +359,7 @@ describe("InspectionPanelHeader", () => {
         },
       });
 
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       const codeButton = screen.getByTestId("edit-fields-button");
       expect(codeButton).toBeInTheDocument();
@@ -362,7 +371,7 @@ describe("InspectionPanelHeader", () => {
       const data = createMockData({ template: {} });
 
       expect(() => {
-        render(<InspectionPanelHeader data={data} />);
+        renderHeader(data);
       }).not.toThrow();
     });
 
@@ -371,7 +380,7 @@ describe("InspectionPanelHeader", () => {
       data.id =
         "extremely-long-id-that-should-be-truncated-properly-12345-67890-abcdef-ghijk";
 
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       expect(screen.getByText(/ID:/)).toBeInTheDocument();
     });
@@ -380,7 +389,7 @@ describe("InspectionPanelHeader", () => {
   describe("Layout", () => {
     it("should have correct container structure", () => {
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       const container = screen.getByTestId("panel-description");
       expect(container).toHaveClass("flex");
@@ -389,7 +398,7 @@ describe("InspectionPanelHeader", () => {
 
     it("should render name in panel-name testid", () => {
       const data = createMockData();
-      render(<InspectionPanelHeader data={data} />);
+      renderHeader(data);
 
       expect(screen.getByTestId("panel-name")).toBeInTheDocument();
     });

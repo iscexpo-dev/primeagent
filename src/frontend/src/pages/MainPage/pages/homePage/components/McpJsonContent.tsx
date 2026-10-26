@@ -28,7 +28,7 @@ interface MemoizedCodeTagProps {
   generateApiKey: () => void;
 }
 
-interface McpJsonContentProps {
+export interface McpJsonContentProps {
   selectedPlatform?: string;
   setSelectedPlatform: (platform: string) => void;
   selectedTransport: MCPTransport;

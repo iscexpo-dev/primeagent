@@ -23,7 +23,8 @@ const SIMPLE_VARIABLE_PATTERN = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
 interface CaretPosition {
   offset: number;
 }
-interface DocumentWithCaretPosition extends Document {
+interface DocumentWithCaretPosition
+  extends Omit<Document, "caretPositionFromPoint"> {
   caretPositionFromPoint(x: number, y: number): CaretPosition | null;
 }
 

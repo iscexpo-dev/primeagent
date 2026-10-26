@@ -15,6 +15,7 @@ import {
   useDeleteGlobalVariables,
   useGetGlobalVariables,
 } from "@/controllers/API/queries/variables";
+import type { APIClassType } from "@/types/api";
 import type { GlobalVariable } from "@/types/global_variables";
 import IconComponent, {
   ForwardedIconComponent,
@@ -40,9 +41,29 @@ export default function GlobalVariablesPage() {
     );
   };
 
-  const DropdownEditor = ({ options, value, onValueChange }) => {
+  const DropdownEditor = ({
+    options,
+    value,
+    onValueChange,
+  }: {
+    options: string[];
+    value: string;
+    onValueChange: (value: string) => void;
+  }) => {
     return (
-      <Dropdown options={options} value={value} onSelect={onValueChange}>
+      <Dropdown
+        options={options}
+        value={value}
+        onSelect={(selected) => onValueChange(selected)}
+        id="global-variable-type"
+        editNode={false}
+        disabled={false}
+        handleOnNewValue={() => {}}
+        nodeId=""
+        nodeClass={{} as APIClassType}
+        handleNodeClass={() => {}}
+        name="global-variable-type"
+      >
         <div className="-mt-1.5 w-full"></div>
       </Dropdown>
     );

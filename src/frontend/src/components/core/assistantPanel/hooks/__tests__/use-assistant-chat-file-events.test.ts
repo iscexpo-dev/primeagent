@@ -28,7 +28,8 @@ const mockPostAssistStream = jest.fn(async (_req: unknown, callbacks: any) => {
   capturedCallbacks = callbacks;
 });
 jest.mock("@/controllers/API/queries/agentic", () => ({
-  postAssistStream: (...args: unknown[]) => mockPostAssistStream(...args),
+  postAssistStream: (req: unknown, callbacks: unknown) =>
+    mockPostAssistStream(req, callbacks),
 }));
 
 jest.mock(

@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import type { CustomCellRendererProps } from "ag-grid-react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ExpiryDateCellRender from "../index";
 
@@ -14,9 +15,11 @@ const renderWithProvider = (ui: React.ReactElement) =>
 
 describe("ExpiryDateCellRender", () => {
   it("renders DateReader when a date value is provided", () => {
-    renderWithProvider(
-      <ExpiryDateCellRender value="2025-06-01T00:00:00Z" node={undefined} />,
-    );
+    const props = {
+      value: "2025-06-01T00:00:00Z",
+      node: undefined,
+    } as unknown as CustomCellRendererProps;
+    renderWithProvider(<ExpiryDateCellRender {...props} />);
     expect(screen.getByTestId("date-reader")).toBeInTheDocument();
     expect(screen.getByTestId("date-reader")).toHaveTextContent(
       "2025-06-01T00:00:00Z",
@@ -24,21 +27,22 @@ describe("ExpiryDateCellRender", () => {
   });
 
   it("renders infinity symbol when value is null", () => {
-    renderWithProvider(<ExpiryDateCellRender value={null} node={undefined} />);
+    const props = { value: null, node: undefined } as unknown as CustomCellRendererProps;
+    renderWithProvider(<ExpiryDateCellRender {...props} />);
     expect(screen.getByText("∞")).toBeInTheDocument();
     expect(screen.queryByTestId("date-reader")).not.toBeInTheDocument();
   });
 
   it("renders infinity symbol when value is undefined", () => {
-    renderWithProvider(
-      <ExpiryDateCellRender value={undefined} node={undefined} />,
-    );
+    const props = { value: undefined, node: undefined } as unknown as CustomCellRendererProps;
+    renderWithProvider(<ExpiryDateCellRender {...props} />);
     expect(screen.getByText("∞")).toBeInTheDocument();
     expect(screen.queryByTestId("date-reader")).not.toBeInTheDocument();
   });
 
   it("renders infinity symbol when value is an empty string", () => {
-    renderWithProvider(<ExpiryDateCellRender value="" node={undefined} />);
+    const props = { value: "", node: undefined } as unknown as CustomCellRendererProps;
+    renderWithProvider(<ExpiryDateCellRender {...props} />);
     expect(screen.getByText("∞")).toBeInTheDocument();
   });
 });

@@ -143,7 +143,7 @@ describe("useAssistantChat", () => {
       await act(async () => {
         await result.current.handleSend("second message", TEST_MODEL, {
           internal: true,
-        });
+        } as never);
       });
 
       expect(firstSignal.aborted).toBe(true);

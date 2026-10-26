@@ -1,6 +1,7 @@
 //import PrimeagentLogoColor from "@/assets/PrimeagentLogocolor.svg?react";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Node } from "reactflow";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import ThemeButtons from "@/components/core/appHeaderComponent/components/ThemeButtons";
@@ -468,7 +469,7 @@ export default function IOModal({
                   outputs={filteredOutputs}
                   sessions={sessions}
                   currentFlowId={currentFlowId}
-                  nodes={filteredNodes}
+                  nodes={filteredNodes as Node[]}
                 />
               )}
               <ChatViewWrapper

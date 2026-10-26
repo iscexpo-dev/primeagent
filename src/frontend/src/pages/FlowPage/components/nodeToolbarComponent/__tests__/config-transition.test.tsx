@@ -217,8 +217,16 @@ const getProps = () => ({
     node: {
       display_name: "Prompt",
       description: "Prompt node",
+      documentation: "",
       template: {
-        code: { value: "print('hello')" },
+        code: {
+          type: "str",
+          value: "print('hello')",
+          required: false,
+          list: false,
+          show: true,
+          readonly: false,
+        },
       },
       outputs: [],
       frozen: false,

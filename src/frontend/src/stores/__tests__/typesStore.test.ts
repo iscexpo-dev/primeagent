@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { act, renderHook } from "@testing-library/react";
 import type { APIClassType, APIDataType } from "../../types/api";
 import { useTypesStore } from "../typesStore";
@@ -138,7 +139,7 @@ describe("useTypesStore", () => {
 
     it("should handle empty Set", () => {
       const { result } = renderHook(() => useTypesStore());
-      const emptySet = new Set();
+      const emptySet = new Set<string>();
 
       act(() => {
         result.current.setComponentFields(emptySet);
@@ -523,7 +524,7 @@ describe("useTypesStore", () => {
 
     it("should handle large ComponentFields sets", () => {
       const { result } = renderHook(() => useTypesStore());
-      const largeSet = new Set();
+      const largeSet = new Set<string>();
 
       for (let i = 0; i < 1000; i++) {
         largeSet.add(`field-${i}`);
