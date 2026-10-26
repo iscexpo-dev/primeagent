@@ -826,13 +826,10 @@ class TelemetryWriterService(Service):
 
                 for flow_id in vb_flows:
                     vertex_ids = (
-                        (
-                            await session.exec(
-                                select(VertexBuildTable.id).where(VertexBuildTable.flow_id == flow_id).distinct()
-                            )
+                        await session.exec(
+                            select(VertexBuildTable.id).where(VertexBuildTable.flow_id == flow_id).distinct()
                         )
-                        .all()
-                    )
+                    ).all()
                     for vertex_id in vertex_ids:
                         keep_vertex_subq = (
                             select(VertexBuildTable.build_id)
