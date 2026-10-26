@@ -5,7 +5,10 @@ import re
 from contextlib import suppress
 from typing import Any
 
-from composio import Composio
+try:
+    from composio import Composio
+except ImportError:  # pragma: no cover
+    Composio = None  # type: ignore[assignment,misc]
 from langchain_core.tools import Tool
 
 from wfx.base.composio.safe_provider import SafeLangchainProvider, _sanitize_schema
