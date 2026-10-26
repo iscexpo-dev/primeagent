@@ -18,7 +18,7 @@ jobs:
     name: Run Biome
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout code
