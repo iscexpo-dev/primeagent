@@ -50,4 +50,4 @@ jobs:
       - name: Run Biome
         run: |
           cd src/frontend
-          npx @biomejs/biome check --changed
+          npx @biomejs/biome check --changed --no-errors-on-unmatched
