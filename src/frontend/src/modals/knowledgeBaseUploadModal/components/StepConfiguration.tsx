@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import ForwardedIconComponent from "@/components/common/genericIconComponent";
 import { DBProviderInput } from "@/components/core/parameterRenderComponent/components/dbProviderInputComponent";
 import ModelInputComponent from "@/components/core/parameterRenderComponent/components/modelInputComponent";
-import type { ModelOption } from "@/components/core/parameterRenderComponent/components/modelInputComponent/types";
+import type { ModelOption } from "@/components/core/parameterRenderComponent/components/modelInputComponent/types"; origin/realease/v2
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,

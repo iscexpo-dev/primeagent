@@ -585,7 +585,7 @@ export type ChatInputType = {
     repeat: number;
     files?: string[];
   }) => Promise<void>;
-  playgroundPage?: boolean;
+  playgroundPage?: boolean; origin/realease/v2
 };
 
 export type editNodeToggleType = {

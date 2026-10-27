@@ -78,7 +78,7 @@ export default function ChatMessage({
         if (errorData?.error) {
           setErrorData({
             title: t("errors.errorOnStreaming"),
-            list: [errorData.error],
+            list: [errorData.error], origin/realease/v2
           });
         }
         updateChat?.(chat, chatMessageRef.current);
@@ -300,7 +300,7 @@ export default function ChatMessage({
                 {!chat.isSend && (
                   <MessageMetadata
                     duration={chat.properties?.build_duration ?? undefined}
-                    usage={chat.properties?.usage ?? undefined}
+                    usage={chat.properties?.usage ?? undefined} origin/realease/v2
                     timestamp={chat.timestamp}
                   />
                 )}

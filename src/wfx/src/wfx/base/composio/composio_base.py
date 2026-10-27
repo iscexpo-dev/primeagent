@@ -15,7 +15,7 @@ try:
     from wfx.base.composio.safe_provider import SafeLangchainProvider, _sanitize_schema
 except ImportError:  # pragma: no cover
     SafeLangchainProvider = None  # type: ignore[assignment,misc]
-    _sanitize_schema = None  # type: ignore[assignment]
+    _sanitize_schema = None  # type: ignore[assignment] origin/realease/v2
 from wfx.base.mcp.util import create_input_schema_from_json_schema
 from wfx.custom.custom_component.component import Component
 from wfx.inputs.inputs import (

@@ -323,7 +323,7 @@ export type MutationFunctionType = (
   options?: Omit<
     UseMutationOptions<any, any, any>,
     "mutationFn" | "mutationKey"
-  >,
+  >, origin/realease/v2
   // biome-ignore lint/suspicious/noExplicitAny: legacy
 ) => UseMutationResult<any, any, any, any>;
 

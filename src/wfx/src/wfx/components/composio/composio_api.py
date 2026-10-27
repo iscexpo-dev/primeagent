@@ -12,7 +12,7 @@ from langchain_core.tools import Tool
 try:
     from wfx.base.composio.safe_provider import SafeLangchainProvider
 except ImportError:  # pragma: no cover
-    SafeLangchainProvider = None  # type: ignore[assignment,misc]
+    SafeLangchainProvider = None  # type: ignore[assignment,misc] origin/realease/v2
 # Local imports
 from wfx.base.langchain_utilities.model import LCToolComponent
 from wfx.inputs.inputs import (

@@ -377,7 +377,7 @@ jobs:
 
       - name: Execute Playwright Tests
         uses: nick-fields/retry@v3
-        with:
+        with: origin/realease/v2
           timeout_minutes: 18
           max_attempts: 2
           command: |

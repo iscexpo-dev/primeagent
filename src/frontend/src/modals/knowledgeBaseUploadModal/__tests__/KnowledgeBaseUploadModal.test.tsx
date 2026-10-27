@@ -236,6 +236,27 @@ describe("KnowledgeBaseUploadModal", () => {
       ).toBeInTheDocument();
     });
 
+    it("does not render the Hide Configuration footer toggle", () => {
+      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
+        wrapper: createWrapper(),
+      });
+      expect(screen.getByText("DB Provider")).toBeInTheDocument();
+      expect(screen.getByTestId("kb-db-provider")).toHaveTextContent("Chroma");
+    });
+
+    it("renders Ingest Content section open by default", () => {
+      // Section heading + add-button labels are now driven by i18n keys
+      // (knowledge.configureSources / knowledge.addSources) but the English
+      // copy is intentionally kept as "Ingest Content" / "Add Files".
+      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
+        wrapper: createWrapper(),
+      });
+      expect(screen.getByText(/Ingest Content/i)).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Add Files/i }),
+      ).toBeInTheDocument();
+    });
+
     it("toggles the advanced configuration from the footer", async () => {
       const user = userEvent.setup();
       render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {

@@ -284,7 +284,7 @@ jobs:
         (needs.path-filter.result != 'skipped' &&
         needs.path-filter.outputs.frontend == 'true')
       )
-    uses: ./.github/workflows/lint-js.yml
+    uses: ./.github/workflows/lint-js.yml origin/realease/v2
 
   test-frontend-unit:
     needs: [path-filter, set-ci-condition]

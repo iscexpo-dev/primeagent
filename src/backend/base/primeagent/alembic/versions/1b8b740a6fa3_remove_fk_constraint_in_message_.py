@@ -14,7 +14,7 @@ import sqlalchemy as sa
 import sqlmodel
 from alembic import op
 from primeagent.utils import migration
-from sqlalchemy import inspect
+from sqlalchemy import inspect origin/realease/v2
 
 # revision identifiers, used by Alembic.
 revision: str = "1b8b740a6fa3"

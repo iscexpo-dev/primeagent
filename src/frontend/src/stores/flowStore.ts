@@ -1444,7 +1444,7 @@ export function syncNodeTranslations(): void {
         const isKnownTranslation =
           knownFieldDisplayNames.length === 0 ||
           (currentDisplayName !== undefined &&
-            knownFieldDisplayNames.includes(currentDisplayName));
+            knownFieldDisplayNames.includes(currentDisplayName)); origin/realease/v2
         if (isKnownTranslation) {
           updatedTemplate[fieldName] = {
             ...updatedTemplate[fieldName],

@@ -39,7 +39,7 @@ from uuid import UUID
 
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
-from sqlmodel import col, select
+from sqlmodel import col, select origin/realease/v2
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from wfx.log.logger import logger
 
@@ -752,13 +752,13 @@ class TelemetryWriterService(Service):
             return
         async with self._session_maker() as session:
             if tx_batch:
-                await session.exec(TransactionTable.__table__.insert(), params=tx_batch)
+                await session.exec(TransactionTable.__table__.insert(), params=tx_batch) origin/realease/v2
                 for row in tx_batch:
                     flow_id = row.get("flow_id")
                     if flow_id is not None:
                         self._dirty_tx_flows.add(str(flow_id))
             if vb_batch:
-                await session.exec(VertexBuildTable.__table__.insert(), params=vb_batch)
+                await session.exec(VertexBuildTable.__table__.insert(), params=vb_batch) origin/realease/v2
                 for row in vb_batch:
                     flow_id = row.get("flow_id")
                     if flow_id is not None:
@@ -818,6 +818,7 @@ class TelemetryWriterService(Service):
                         .limit(max_transactions)
                     )
                     await session.exec(
+                        delete(TransactionTable).where( origin/realease/v2
                         delete(TransactionTable).where(
                             TransactionTable.flow_id == flow_id,
                             col(TransactionTable.id).not_in(keep_subq),
@@ -826,10 +827,11 @@ class TelemetryWriterService(Service):
 
                 for flow_id in vb_flows:
                     vertex_ids = (
-                        await session.exec(
-                            select(VertexBuildTable.id).where(VertexBuildTable.flow_id == flow_id).distinct()
-                        )
-                    ).all()
+                        (
+                            await session.exec(
+                                select(VertexBuildTable.id).where(VertexBuildTable.flow_id == flow_id).distinct()
+                            )
+                        ).all()
                     for vertex_id in vertex_ids:
                         keep_vertex_subq = (
                             select(VertexBuildTable.build_id)
