@@ -91,7 +91,7 @@ def upgrade() -> None:
 
         # Copy data - use a window function to ensure build_id uniqueness across SQLite, PostgreSQL and MySQL
         # Filter out rows where the original 'id' (vertex id) is NULL, as the new table requires it.
-        op.execute(f"""  # noqa: S608
+        op.execute(f"""
             INSERT INTO "{temp_table_name}" (timestamp, id, data, artifacts, params, build_id, flow_id, valid)
             SELECT timestamp, id, data, artifacts, params, build_id, flow_id, valid
             FROM (
@@ -137,7 +137,7 @@ def upgrade() -> None:
         )
 
         # Copy data - explicitly list columns and filter out rows where id is NULL
-        op.execute(f"""  # noqa: S608
+        op.execute(f"""
             INSERT INTO "{temp_table_name}" (
                 timestamp, vertex_id, target_id, inputs, outputs, status, id, flow_id, error
             )
@@ -184,7 +184,7 @@ def upgrade() -> None:
         )
 
         # Copy data - explicitly list columns and filter out rows where id is NULL
-        op.execute(f"""  # noqa: S608
+        op.execute(f"""
             INSERT INTO "{temp_table_name}" (
                 timestamp, sender, sender_name, session_id, text, id, flow_id, files, error, edit,
                 properties, category, content_blocks
@@ -244,7 +244,7 @@ def downgrade() -> None:
         # Copy data - use a window function to ensure build_id uniqueness.
         # Filter out rows where build_id is NULL (PK constraint)
         # No need to filter by 'id' here as the target column allows NULLs.
-        op.execute(f"""  # noqa: S608
+        op.execute(f"""
             INSERT INTO "{temp_table_name}" (timestamp, id, data, artifacts, params, build_id, flow_id, valid)
             SELECT timestamp, id, data, artifacts, params, build_id, flow_id, valid
             FROM (
@@ -298,7 +298,7 @@ def downgrade() -> None:
         )
 
         # Copy data - explicitly list columns and filter out rows where id is NULL
-        op.execute(f"""  # noqa: S608
+        op.execute(f"""
             INSERT INTO "{temp_table_name}" (
                 timestamp, vertex_id, target_id, inputs, outputs, status, id, flow_id, error
             )
@@ -353,7 +353,7 @@ def downgrade() -> None:
         )
 
         # Copy data - explicitly list columns and filter out rows where id is NULL
-        op.execute(f"""  # noqa: S608
+        op.execute(f"""
             INSERT INTO "{temp_table_name}" (
                 timestamp, sender, sender_name, session_id, text, id, flow_id, files, error, edit,
                 properties, category, content_blocks
