@@ -18,7 +18,7 @@ jobs:
     name: Run Biome
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout code
@@ -50,4 +50,4 @@ jobs:
       - name: Run Biome
         run: |
           cd src/frontend
-          npx @biomejs/biome check --changed
+          npx @biomejs/biome check --changed --no-errors-on-unmatched

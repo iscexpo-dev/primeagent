@@ -48,7 +48,7 @@ export type PropertiesType = {
   targets?: string[];
   edited?: boolean;
   allow_markdown?: boolean;
-  state?: string;
+  state?: "partial" | "complete";
   positive_feedback?: boolean | null;
   build_duration?: number | null;
   usage?: UsageType | null;

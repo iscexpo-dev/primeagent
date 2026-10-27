@@ -56,7 +56,7 @@ export function AppInitPage() {
   // Update auth state when session data is available
   useEffect(() => {
     if (sessionData?.authenticated && sessionData.user) {
-      setUserData(sessionData.user);
+      setUserData(sessionData.user as Parameters<typeof setUserData>[0]);
       setIsAuthenticated(true);
       setIsAdmin(sessionData.user.is_superuser || false);
       if (sessionData.store_api_key) {

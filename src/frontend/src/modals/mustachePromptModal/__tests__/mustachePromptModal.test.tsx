@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { APIClassType } from "@/types/api";
 import MustachePromptModal from "../index";
 
 // Mock the API hook
@@ -190,7 +191,7 @@ describe("MustachePromptModal", () => {
       template: {
         template: { value: "" },
       },
-    },
+    } as unknown as APIClassType,
     setNodeClass: jest.fn(),
     children: <button data-testid="trigger">Open</button>,
     disabled: false,

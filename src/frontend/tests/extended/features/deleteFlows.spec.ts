@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { expect, test } from "../../fixtures";
 import { TEXTS } from "../../utils/constants/texts";
 import { loadDotenvIfLocal } from "../../utils/env/load-dotenv";

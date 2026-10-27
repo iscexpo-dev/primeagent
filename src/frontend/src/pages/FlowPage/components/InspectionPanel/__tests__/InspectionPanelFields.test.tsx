@@ -76,10 +76,14 @@ describe("InspectionPanelFields", () => {
     node: {
       display_name: "Test Node",
       description: "Test description",
+      documentation: "",
       template: {
         basic_field: {
           type: "str",
           value: "basic value",
+          required: false,
+          list: false,
+          readonly: false,
           advanced: false,
           show: true,
           display_name: "Basic Field",
@@ -87,6 +91,9 @@ describe("InspectionPanelFields", () => {
         advanced_field: {
           type: "str",
           value: "advanced value",
+          required: false,
+          list: false,
+          readonly: false,
           advanced: true,
           show: true,
           display_name: "Advanced Field",
@@ -94,6 +101,9 @@ describe("InspectionPanelFields", () => {
         hidden_field: {
           type: "str",
           value: "hidden",
+          required: false,
+          list: false,
+          readonly: false,
           advanced: false,
           show: false,
           display_name: "Hidden Field",

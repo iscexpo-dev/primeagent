@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { Node } from "reactflow";
 import { useShallow } from "zustand/react/shallow";
 import ThemeButtons from "@/components/core/appHeaderComponent/components/ThemeButtons";
 import { useGetMessagesQuery } from "@/controllers/API/queries/messages";
@@ -468,7 +469,7 @@ export default function IOModal({
                   outputs={filteredOutputs}
                   sessions={sessions}
                   currentFlowId={currentFlowId}
-                  nodes={filteredNodes}
+                  nodes={filteredNodes as Node[]}
                 />
               )}
               <ChatViewWrapper

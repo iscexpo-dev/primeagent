@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { ReactNode } from "react";
+import type { MCPTransport } from "@/controllers/API/queries/mcp/use-patch-install-mcp";
 import { useMcpServer } from "../useMcpServer";
 
 // Mock API
@@ -62,10 +63,17 @@ jest.mock("@/customization/feature-flags", () => ({
   ENABLE_MCP_COMPOSER: false,
 }));
 
-const customGetMCPUrlMock = jest.fn(() => "http://test.com/api");
+const customGetMCPUrlMock = jest.fn(
+  (_projectId: string, _options?: unknown, _transport?: MCPTransport) =>
+    "http://test.com/api",
+);
 
 jest.mock("@/customization/utils/custom-mcp-url", () => ({
-  customGetMCPUrl: (...args: unknown[]) => customGetMCPUrlMock(...args),
+  customGetMCPUrl: (
+    projectId: string,
+    options?: unknown,
+    transport?: MCPTransport,
+  ) => customGetMCPUrlMock(projectId, options, transport),
 }));
 
 const createWrapper = () => {

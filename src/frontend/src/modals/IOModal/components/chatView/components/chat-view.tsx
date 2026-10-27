@@ -100,7 +100,8 @@ export default function ChatView({
           text_color: message.text_color || "",
           content_blocks: message.content_blocks || [],
           category: message.category || "",
-          properties: message.properties || {},
+          properties: (message.properties ||
+            {}) as ChatMessageType["properties"],
         };
       });
 

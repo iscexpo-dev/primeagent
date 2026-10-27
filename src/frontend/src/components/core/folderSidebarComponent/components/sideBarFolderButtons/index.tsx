@@ -141,7 +141,13 @@ const SideBarFoldersButtonsComponent = ({
 
       getObjectsFromFilelist<UploadedFlowFile>(files)
         .then((objects) => {
-          if (objects.every((flow) => flow.data?.nodes)) {
+          if (
+            objects.every((flow) =>
+              "flows" in flow
+                ? flow.flows.every((nestedFlow) => nestedFlow.data?.nodes)
+                : flow.data?.nodes,
+            )
+          ) {
             uploadFlow({ files })
               .then(() => {
                 setSuccessData({

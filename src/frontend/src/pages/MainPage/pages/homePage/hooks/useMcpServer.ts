@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createApiKey } from "@/controllers/API";
 import {
   useGetFlowsMCP,
   usePatchFlowsMCP,
@@ -136,7 +137,6 @@ export const useMcpServer = ({
   const generateApiKey = useCallback(async () => {
     try {
       setS((prev) => ({ ...prev, isGeneratingApiKey: true }));
-      const { createApiKey } = await import("@/controllers/API");
       const res = await createApiKey(`MCP Server ${folderName ?? ""}`);
       if (res?.api_key) {
         setS((prev) => ({ ...prev, apiKey: res.api_key }));

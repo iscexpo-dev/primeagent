@@ -6,7 +6,6 @@ import McpComponent from "../index";
 
 const mockRefetchMCPServers = jest.fn();
 const mockMutateTemplate = jest.fn();
-const mockUpdateBuildStatus = jest.fn();
 const mockSetErrorData = jest.fn();
 const mockPostTemplateValue = { mutateAsync: jest.fn() };
 
@@ -51,12 +50,12 @@ jest.mock("@/stores/alertStore", () => ({
 
 jest.mock("@/stores/flowStore", () => {
   const mockFlowState = {
-    updateBuildStatus: mockUpdateBuildStatus,
+    updateBuildStatus: jest.fn(),
   };
   const useFlowStoreMock = jest.fn(
     (selector?: (state: typeof mockFlowState) => unknown) =>
       selector ? selector(mockFlowState) : mockFlowState,
-  );
+  ) as jest.Mock & { getState: () => typeof mockFlowState };
   useFlowStoreMock.getState = () => mockFlowState;
   return {
     __esModule: true,
@@ -118,7 +117,7 @@ describe("McpComponent", () => {
     const nodeClass = {
       template: { code: { value: "code" } },
       tool_mode: false,
-    } as APIClassType;
+    } as unknown as APIClassType;
 
     render(
       <McpComponent

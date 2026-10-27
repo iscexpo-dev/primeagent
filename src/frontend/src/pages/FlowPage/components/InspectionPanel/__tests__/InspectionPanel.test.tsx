@@ -124,7 +124,7 @@ describe("InspectionPanel", () => {
 
     it("should not render for non-genericNode types", () => {
       const mockNode = createMockNode();
-      mockNode.type = "customNode";
+      (mockNode as { type: string }).type = "customNode";
 
       render(<InspectionPanel selectedNode={mockNode} />);
 
@@ -324,7 +324,7 @@ describe("InspectionPanel", () => {
         type: "genericNode",
         position: { x: 0, y: 0 },
         data: null as any,
-      };
+      } as any;
 
       expect(() => {
         render(<InspectionPanel selectedNode={mockNode} />);

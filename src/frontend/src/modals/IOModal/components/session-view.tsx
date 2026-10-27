@@ -58,7 +58,9 @@ export default function SessionView({
     if (queryData && typeof queryData === "object" && "rows" in queryData) {
       const rowsData = queryData.rows as { data?: unknown[] } | undefined;
       if (rowsData && typeof rowsData === "object" && "data" in rowsData) {
-        const fetchedMessages = rowsData.data || [];
+        const fetchedMessages = (rowsData.data || []) as Parameters<
+          typeof setMessages
+        >[0];
         setMessages(fetchedMessages);
       }
     }
@@ -118,7 +120,7 @@ export default function SessionView({
       { message: data },
       {
         onSuccess: () => {
-          updateMessage(data);
+          updateMessage(data as Parameters<typeof updateMessage>[0]);
           // Set success message
           setSuccessData({
             title: t("success.messagesUpdated"),

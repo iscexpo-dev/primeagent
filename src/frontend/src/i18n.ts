@@ -12,6 +12,18 @@ const SUPPORTED_LANGUAGES = [
   "zh-Hans",
 ] as const;
 
+const localeLoaders: Record<
+  string,
+  () => Promise<{ default: Record<string, unknown> }>
+> = {
+  de: () => import("./locales/de.json"),
+  es: () => import("./locales/es.json"),
+  fr: () => import("./locales/fr.json"),
+  ja: () => import("./locales/ja.json"),
+  pt: () => import("./locales/pt.json"),
+  "zh-Hans": () => import("./locales/zh-Hans.json"),
+};
+
 const normalizeLanguage = (lang?: string | null): string => {
   if (!lang) return "en";
 
@@ -67,8 +79,10 @@ console.info = _consoleInfo;
 export async function loadLanguage(lang: string): Promise<void> {
   if (lang === "en") return;
   if (i18n.hasResourceBundle(lang, "translation")) return;
+  const loader = localeLoaders[lang];
+  if (!loader) return;
   try {
-    const messages = await import(`./locales/${lang}.json`);
+    const messages = await loader();
     i18n.addResourceBundle(lang, "translation", messages.default);
   } catch {
     // Unknown locale — no bundle file exists. i18next's fallbackLng: "en" takes over.

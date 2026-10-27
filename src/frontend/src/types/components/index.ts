@@ -228,7 +228,7 @@ export type FloatComponentType = {
 };
 
 export type SliderComponentType = {
-  value: string;
+  value: string[] | number[];
   disabled?: boolean;
   rangeSpec: RangeSpecType;
   editNode?: boolean;
@@ -585,7 +585,7 @@ export type ChatInputType = {
     repeat: number;
     files?: string[];
   }) => Promise<void>;
-  playgroundPage: boolean;
+  playgroundPage?: boolean;
 };
 
 export type editNodeToggleType = {

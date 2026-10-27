@@ -5,10 +5,17 @@ import re
 from contextlib import suppress
 from typing import Any
 
-from composio import Composio
+try:
+    from composio import Composio
+except ImportError:  # pragma: no cover
+    Composio = None  # type: ignore[assignment,misc]
 from langchain_core.tools import Tool
 
-from wfx.base.composio.safe_provider import SafeLangchainProvider, _sanitize_schema
+try:
+    from wfx.base.composio.safe_provider import SafeLangchainProvider, _sanitize_schema
+except ImportError:  # pragma: no cover
+    SafeLangchainProvider = None  # type: ignore[assignment,misc]
+    _sanitize_schema = None  # type: ignore[assignment]
 from wfx.base.mcp.util import create_input_schema_from_json_schema
 from wfx.custom.custom_component.component import Component
 from wfx.inputs.inputs import (

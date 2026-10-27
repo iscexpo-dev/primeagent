@@ -15,7 +15,7 @@ const makeProps = (overrides = {}) => ({
   },
   apiKeyName: "",
   // Cast avoids the tsx-generic-vs-JSX ambiguity when used outside a function.
-  inputRef: { current: null } as React.RefObject<HTMLInputElement>,
+  inputRef: { current: null } as React.RefObject<HTMLInputElement | null>,
   setApiKeyName: jest.fn(),
   expiresAt: "",
   setExpiresAt: jest.fn(),

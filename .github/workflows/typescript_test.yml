@@ -378,21 +378,11 @@ jobs:
       - name: Execute Playwright Tests
         uses: nick-fields/retry@v3
         with:
-          # Bumped from 12 → 18 minutes. Shard 38 carries all four
-          # starter-projects-shardN tests + the sentiment streaming test;
-          # iterating 8 templates per test under Linux nightly load
-          # consistently runs past 12 minutes once a single iteration
-          # triggers a per-test Playwright retry.
           timeout_minutes: 18
           max_attempts: 2
           command: |
             cd src/frontend
-            echo 'Running tests with pattern: ${{ needs.determine-test-suite.outputs.test_grep }}'
-            npx playwright test ${{ inputs.tests_folder }} ${{ needs.determine-test-suite.outputs.test_grep }} --shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --list --retries=3
-            # echo command before running
-            echo "npx playwright test ${{ inputs.tests_folder }} ${{ needs.determine-test-suite.outputs.test_grep }} --trace on --shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --workers 2 --retries=3"
-
-            npx playwright test ${{ inputs.tests_folder }} ${{ needs.determine-test-suite.outputs.test_grep }} --trace on --shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --workers 2 --retries=3
+            npx playwright test ${{ inputs.tests_folder }} ${{ needs.determine-test-suite.outputs.test_grep }} --shard ${{ matrix.shardIndex }}/${{ matrix.shardTotal }} --workers 2 --retries=3
 
       - name: Upload Test Results
         if: always()

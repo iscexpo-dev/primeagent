@@ -25,7 +25,7 @@ interface NodeDialogProps {
   open: boolean;
   onClose: () => void;
   onCreated?: (value: string) => void;
-  dialogInputs: {
+  dialogInputs?: {
     fields: { data: { node: APIClassType } };
     functionality: string;
   };
@@ -306,9 +306,10 @@ export const NodeDialog: React.FC<NodeDialogProps> = ({
                 templateValue={(fieldValue as { value: string })?.value ?? ""}
                 editNode={false}
                 handleNodeClass={() => {}}
-                nodeClass={dialogNodeData}
+                nodeClass={dialogNodeData as APIClassType}
                 disabled={
-                  (fieldValue as { disabled: boolean })?.disabled ?? false
+                  (fieldValue as unknown as { disabled: boolean })?.disabled ??
+                  false
                 }
                 placeholder={
                   (fieldValue as { placeholder: string })?.placeholder ?? ""

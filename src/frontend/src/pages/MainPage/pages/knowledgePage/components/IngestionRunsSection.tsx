@@ -136,7 +136,7 @@ const IngestionRunsSection = ({ kbName }: IngestionRunsSectionProps) => {
                 </span>
               </div>
               <span className="truncate text-sm font-medium">
-                {sourceLabel}
+                {sourceLabel as string}
               </span>
               <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                 <span className="flex items-center gap-1">

@@ -21,6 +21,9 @@ const config: StorybookConfig = {
           "@": path.resolve(__dirname, "../src"),
         },
       },
+      optimizeDeps: {
+        include: [],
+      },
     });
   },
   typescript: {

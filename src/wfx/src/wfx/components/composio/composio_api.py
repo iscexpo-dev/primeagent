@@ -2,13 +2,17 @@
 from collections.abc import Sequence
 from typing import Any
 
-from composio import Composio
-
+try:
+    from composio import Composio
+except ImportError:  # pragma: no cover
+    Composio = None  # type: ignore[assignment,misc]
 # Third-party imports
 from langchain_core.tools import Tool
 
-from wfx.base.composio.safe_provider import SafeLangchainProvider
-
+try:
+    from wfx.base.composio.safe_provider import SafeLangchainProvider
+except ImportError:  # pragma: no cover
+    SafeLangchainProvider = None  # type: ignore[assignment,misc]
 # Local imports
 from wfx.base.langchain_utilities.model import LCToolComponent
 from wfx.inputs.inputs import (

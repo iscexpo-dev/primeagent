@@ -6,6 +6,7 @@ import Page from "../FlowPage/components/PageComponent";
 
 export default function ViewPage() {
   const setCurrentFlow = useFlowsManagerStore((state) => state.setCurrentFlow);
+  const setIsLoading = useFlowsManagerStore((state) => state.setIsLoading);
 
   const { id } = useParams();
   const navigate = useCustomNavigate();
@@ -32,7 +33,7 @@ export default function ViewPage() {
 
   return (
     <div className="flow-page-positioning">
-      <Page view />
+      <Page view setIsLoading={setIsLoading} />
     </div>
   );
 }

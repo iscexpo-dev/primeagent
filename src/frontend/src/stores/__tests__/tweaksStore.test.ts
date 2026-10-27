@@ -55,7 +55,7 @@ const mockNode: AllNodeType = {
       frozen: false,
     },
     type: "TestNode",
-  } as NodeDataType,
+  } as unknown as NodeDataType,
 };
 
 const mockNode2: AllNodeType = {
@@ -73,7 +73,7 @@ const mockNode2: AllNodeType = {
       frozen: false,
     },
     type: "AnotherNode",
-  } as NodeDataType,
+  } as unknown as NodeDataType,
 };
 
 const mockFrozenNode: AllNodeType = {
@@ -91,7 +91,7 @@ const mockFrozenNode: AllNodeType = {
       frozen: true,
     },
     type: "FrozenNode",
-  } as NodeDataType,
+  } as unknown as NodeDataType,
 };
 
 describe("useTweaksStore", () => {
@@ -229,9 +229,9 @@ describe("useTweaksStore", () => {
         result.current.setNode("node-frozen", updatedNode);
       });
 
-      expect((result.current.nodes[0].data as NodeDataType).node?.frozen).toBe(
-        false,
-      );
+      expect(
+        (result.current.nodes[0].data as unknown as NodeDataType).node?.frozen,
+      ).toBe(false);
     });
 
     it("should handle updating non-existent node", () => {
@@ -383,7 +383,7 @@ describe("useTweaksStore", () => {
       act(() => {
         useTweaksStore.setState({
           currentFlowId: "test-flow",
-          nodes: [nonGenericNode],
+          nodes: [nonGenericNode] as unknown as AllNodeType[],
         });
         result.current.updateTweaks();
       });
@@ -404,7 +404,7 @@ describe("useTweaksStore", () => {
       act(() => {
         useTweaksStore.setState({
           currentFlowId: "test-flow",
-          nodes: [nodeWithoutTemplate],
+          nodes: [nodeWithoutTemplate] as unknown as AllNodeType[],
         });
         result.current.updateTweaks();
       });
@@ -468,7 +468,7 @@ describe("useTweaksStore", () => {
                 },
               },
             },
-          } as NodeDataType,
+          } as unknown as NodeDataType,
         }));
       });
 
@@ -519,7 +519,7 @@ describe("useTweaksStore", () => {
             ...mockNode.data.node,
             template: {},
           },
-        } as NodeDataType,
+        } as unknown as NodeDataType,
       };
 
       const { result } = renderHook(() => useTweaksStore());
@@ -554,7 +554,7 @@ describe("useTweaksStore", () => {
         });
       }).toThrow();
 
-      JSON.parse.mockRestore();
+      (JSON.parse as unknown).mockRestore();
     });
 
     it("should handle multiple node updates with same ID", () => {
