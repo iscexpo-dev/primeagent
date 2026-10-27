@@ -60,7 +60,7 @@ export default function SessionView({
       if (rowsData && typeof rowsData === "object" && "data" in rowsData) {
         const fetchedMessages = (rowsData.data || []) as Parameters<
           typeof setMessages
-        >[0]; origin/realease/v2
+        >[0];
         setMessages(fetchedMessages);
       }
     }

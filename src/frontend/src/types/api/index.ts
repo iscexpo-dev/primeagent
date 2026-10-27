@@ -319,11 +319,11 @@ export type MutationFunctionType = (
   mutationKey: UseMutationOptions["mutationKey"],
   // biome-ignore lint/suspicious/noExplicitAny: legacy
   mutationFn: UseMutationOptions<any, any, any>["mutationFn"],
-  // biome-ignore lint/suspicious/noExplicitAny: legacy
   options?: Omit<
+    // biome-ignore lint/suspicious/noExplicitAny: legacy
     UseMutationOptions<any, any, any>,
     "mutationFn" | "mutationKey"
-  >, origin/realease/v2
+  >,
   // biome-ignore lint/suspicious/noExplicitAny: legacy
 ) => UseMutationResult<any, any, any, any>;
 

@@ -1,7 +1,7 @@
 import { type AxiosError } from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ModelOption } from "@/components/core/parameterRenderComponent/components/modelInputComponent/types"; origin/realease/v2
+import type { ModelOption } from "@/components/core/parameterRenderComponent/components/modelInputComponent/types";
 import {
   type AvailableDBProviderId,
   type DBProviderConfigValue,
@@ -243,7 +243,7 @@ export function useKnowledgeBaseForm({
       }
       // Always enable advanced mode in add-sources mode so the file
       // upload section is visible.
-      if (!hideAdvanced) { origin/realease/v2
+      if (!hideAdvanced) {
         setShowAdvanced(true);
       }
       if (

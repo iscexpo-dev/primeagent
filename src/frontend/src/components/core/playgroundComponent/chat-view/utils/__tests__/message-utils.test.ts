@@ -266,8 +266,7 @@ describe("updateMessage — streaming token preservation (UI-014)", () => {
       timestamp: existing.timestamp,
       files: [],
       properties: { state: "partial" } as Message["properties"],
-<<<<<<< HEAD
-    } as unknown as Message); origin/realease/v2
+    } as unknown as Message);
 
     // Assert — the tool-step content_blocks must survive the token update.
     const updated = queryClient.getQueryData<Message[]>(QUERY_KEY);
@@ -307,8 +306,7 @@ describe("updateMessage — streaming token preservation (UI-014)", () => {
       timestamp: existing.timestamp,
       files: [],
       properties: { state: "partial" } as Message["properties"],
-<<<<<<< HEAD
-    } as unknown as Message); origin/realease/v2
+    } as unknown as Message);
 
     const updated = queryClient.getQueryData<Message[]>(QUERY_KEY);
     expect(updated![0].text).toBe("Hello world");

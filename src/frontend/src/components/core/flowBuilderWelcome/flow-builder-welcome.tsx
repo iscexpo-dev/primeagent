@@ -112,7 +112,7 @@ export function FlowBuilderWelcome({
         onClick={(e) => e.stopPropagation()}
       >
         {NAV_ITEMS.map((item) => {
-          const tooltip = t(item.tooltip) as string; origin/realease/v2
+          const tooltip = t(item.tooltip) as string;
           return (
             <ShadTooltip key={item.id} content={tooltip} side="right">
               <button

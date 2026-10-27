@@ -82,7 +82,7 @@ export async function loadLanguage(lang: string): Promise<void> {
   const loader = localeLoaders[lang];
   if (!loader) return;
   try {
-    const messages = await loader(); origin/realease/v2
+    const messages = await loader();
     i18n.addResourceBundle(lang, "translation", messages.default);
   } catch {
     // Unknown locale — no bundle file exists. i18next's fallbackLng: "en" takes over.

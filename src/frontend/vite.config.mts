@@ -110,7 +110,7 @@ export default defineConfig(({ mode }) => {
               return "vendor-icons";
           },
         },
-      }, origin/realease/v2
+      },
     },
     define: {
       "import.meta.env.BACKEND_URL": JSON.stringify(

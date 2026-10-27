@@ -146,7 +146,7 @@ export function IngestionHistoryPanel({ kbName }: IngestionHistoryPanelProps) {
                   </span>
                   {showTypeSubtitle && (
                     <span className="truncate text-xs text-muted-foreground">
-                      {typeLabel as string} origin/realease/v2
+                      {typeLabel as string}
                     </span>
                   )}
                 </div>
