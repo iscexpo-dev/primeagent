@@ -3,23 +3,35 @@ import { MemoryRouter, useNavigate } from "react-router-dom";
 import { HelpDropdownView } from "../HelpDropdownView";
 
 jest.mock("@/components/ui/button", () => ({
-  Button: ({ children, ...props }: React.ComponentPropsWithoutRef<'button'>) => (
+  Button: ({
+    children,
+    ...props
+  }: React.ComponentPropsWithoutRef<"button">) => (
     <button {...props}>{children}</button>
   ),
 }));
 
 jest.mock("@/components/ui/dropdown-menu", () => ({
-  DropdownMenu: ({ children, ...props }: React.ComponentPropsWithoutRef<'div'>) => (
+  DropdownMenu: ({
+    children,
+    ...props
+  }: React.ComponentPropsWithoutRef<"div">) => (
     <div data-testid="dropdown-menu" {...props}>
       {children}
     </div>
   ),
-  DropdownMenuTrigger: ({ children, ...props }: React.ComponentPropsWithoutRef<'div'>) => (
+  DropdownMenuTrigger: ({
+    children,
+    ...props
+  }: React.ComponentPropsWithoutRef<"div">) => (
     <div data-testid="dropdown-trigger" {...props}>
       {children}
     </div>
   ),
-  DropdownMenuContent: ({ children, ...props }: React.ComponentPropsWithoutRef<'div'>) => (
+  DropdownMenuContent: ({
+    children,
+    ...props
+  }: React.ComponentPropsWithoutRef<"div">) => (
     <div data-testid="dropdown-content" {...props}>
       {children}
     </div>
