@@ -21,55 +21,63 @@ import { openStarterProject } from "../../utils/flow/open-starter-project";
  * computes it, so it fails the moment an `aria-hidden` ancestor is introduced.
  */
 
-test("decorative canvas SVGs are not exposed as unnamed graphics", {
-  tag: ["@release", "@workspace"],
-}, async ({ page }) => {
-  await openStarterProject(page, "Basic Prompting");
+test(
+  "decorative canvas SVGs are not exposed as unnamed graphics",
+  {
+    tag: ["@release", "@workspace"],
+  },
+  async ({ page }) => {
+    await openStarterProject(page, "Basic Prompting");
 
-  const edgeWrappers = page.locator(".react-flow__edges > svg");
-  await expect(edgeWrappers.first()).toBeAttached();
+    const edgeWrappers = page.locator(".react-flow__edges > svg");
+    await expect(edgeWrappers.first()).toBeAttached();
 
-  // Presentational, never hidden — hiding would take the edge names with it.
-  const wrappers = await edgeWrappers.evaluateAll((svgs) =>
-    svgs.map((svg) => ({
-      role: svg.getAttribute("role"),
-      ariaHidden: svg.getAttribute("aria-hidden"),
-    })),
-  );
-  expect(wrappers.length).toBeGreaterThan(0);
-  for (const wrapper of wrappers) {
-    expect(wrapper.role).toBe("presentation");
-    expect(wrapper.ariaHidden).toBeNull();
-  }
+    // Presentational, never hidden — hiding would take the edge names with it.
+    const wrappers = await edgeWrappers.evaluateAll((svgs) =>
+      svgs.map((svg) => ({
+        role: svg.getAttribute("role"),
+        ariaHidden: svg.getAttribute("aria-hidden"),
+      })),
+    );
+    expect(wrappers.length).toBeGreaterThan(0);
+    for (const wrapper of wrappers) {
+      expect(wrapper.role).toBe("presentation");
+      expect(wrapper.ariaHidden).toBeNull();
+    }
 
-  const backgroundHidden = await page
-    .getByTestId("rf__background")
-    .evaluate((svg) => svg.closest('[aria-hidden="true"]') !== null);
-  expect(backgroundHidden).toBe(true);
-});
+    const backgroundHidden = await page
+      .getByTestId("rf__background")
+      .evaluate((svg) => svg.closest('[aria-hidden="true"]') !== null);
+    expect(backgroundHidden).toBe(true);
+  },
+);
 
-test("every edge keeps its accessible name and tab stop", {
-  tag: ["@release", "@workspace"],
-}, async ({ page }) => {
-  await openStarterProject(page, "Basic Prompting");
+test(
+  "every edge keeps its accessible name and tab stop",
+  {
+    tag: ["@release", "@workspace"],
+  },
+  async ({ page }) => {
+    await openStarterProject(page, "Basic Prompting");
 
-  const edges = page.locator(".react-flow__edge");
-  await expect(edges.first()).toBeAttached();
+    const edges = page.locator(".react-flow__edge");
+    await expect(edges.first()).toBeAttached();
 
-  const names = await edges.evaluateAll((groups) =>
-    groups.map((group) => group.getAttribute("aria-label")),
-  );
-  expect(names.length).toBeGreaterThan(0);
-  expect(names).not.toContain(null);
+    const names = await edges.evaluateAll((groups) =>
+      groups.map((group) => group.getAttribute("aria-label")),
+    );
+    expect(names.length).toBeGreaterThan(0);
+    expect(names).not.toContain(null);
 
-  for (const name of names) {
-    // `getByRole` uses the computed accessible name, so an `aria-hidden`
-    // ancestor anywhere above the edge makes this resolve to nothing.
-    const edge = page.getByRole("button", { name: name!, exact: true });
-    await expect(edge).toHaveCount(1);
-    await expect(edge).toHaveAttribute("tabindex", "0");
+    for (const name of names) {
+      // `getByRole` uses the computed accessible name, so an `aria-hidden`
+      // ancestor anywhere above the edge makes this resolve to nothing.
+      const edge = page.getByRole("button", { name: name!, exact: true });
+      await expect(edge).toHaveCount(1);
+      await expect(edge).toHaveAttribute("tabindex", "0");
 
-    await edge.focus();
-    await expect(edge).toBeFocused();
-  }
-});
+      await edge.focus();
+      await expect(edge).toBeFocused();
+    }
+  },
+);

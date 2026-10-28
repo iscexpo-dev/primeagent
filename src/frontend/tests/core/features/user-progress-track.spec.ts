@@ -9,19 +9,27 @@ import { openTemplatesModal } from "../../utils/flow/new-project-flow";
 import { selectStarterTemplate } from "../../utils/flow/select-starter-template";
 import { waitForFlowEditorReady } from "../../utils/flow/wait-for-flow-editor-ready";
 
-test("admin user must be able to track their progress in getting started", {
-  tag: ["@release", "@api"],
-}, async ({ page, context }) => {
-  await page.goto("/");
-  await progressTrackTestFn(page, context);
-});
+test(
+  "admin user must be able to track their progress in getting started",
+  {
+    tag: ["@release", "@api"],
+  },
+  async ({ page, context }) => {
+    await page.goto("/");
+    await progressTrackTestFn(page, context);
+  },
+);
 
-test("normal user must be able to track their progress in getting started", {
-  tag: ["@release", "@api"],
-}, async ({ page, context }) => {
-  await addNewUserAndLogin(page);
-  await progressTrackTestFn(page, context, true);
-});
+test(
+  "normal user must be able to track their progress in getting started",
+  {
+    tag: ["@release", "@api"],
+  },
+  async ({ page, context }) => {
+    await addNewUserAndLogin(page);
+    await progressTrackTestFn(page, context, true);
+  },
+);
 
 async function progressTrackTestFn(
   page: Page,

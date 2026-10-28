@@ -53,43 +53,47 @@ const openFlowForNotifications = async (page: Page) => {
   await waitForNotificationFlowEditor(page);
 };
 
-test("User should be able to interact notifications tab", {
-  tag: ["@release"],
-}, async ({ page }) => {
-  await openFlowForNotifications(page);
+test(
+  "User should be able to interact notifications tab",
+  {
+    tag: ["@release"],
+  },
+  async ({ page }) => {
+    await openFlowForNotifications(page);
 
-  await addLegacyComponents(page);
+    await addLegacyComponents(page);
 
-  await addComponentFromSidebar(page, {
-    search: TEXTS.searchTextInput,
-    testId: "input_outputText Input",
-    hoverAdd: true,
-    addButtonSlug: "text-input",
-  });
-  await page.getByTestId("button_run_text input").click();
+    await addComponentFromSidebar(page, {
+      search: TEXTS.searchTextInput,
+      testId: "input_outputText Input",
+      hoverAdd: true,
+      addButtonSlug: "text-input",
+    });
+    await page.getByTestId("button_run_text input").click();
 
-  await page.waitForSelector(`text=${TEXTS.toastBuiltSuccessfully}`, {
-    timeout: 30000,
-  });
-  await page.getByTestId("notification_button").click();
+    await page.waitForSelector(`text=${TEXTS.toastBuiltSuccessfully}`, {
+      timeout: 30000,
+    });
+    await page.getByTestId("notification_button").click();
 
-  // Add explicit waits before checking visibility
-  await page.waitForSelector('[data-testid="icon-Trash2"]', {
-    timeout: 30000,
-    state: "visible",
-  });
+    // Add explicit waits before checking visibility
+    await page.waitForSelector('[data-testid="icon-Trash2"]', {
+      timeout: 30000,
+      state: "visible",
+    });
 
-  // Then check visibility
-  const notificationsText = page
-    .getByText("Notifications", { exact: true })
-    .last();
-  await expect(notificationsText).toBeVisible();
+    // Then check visibility
+    const notificationsText = page
+      .getByText("Notifications", { exact: true })
+      .last();
+    await expect(notificationsText).toBeVisible();
 
-  const trashIcon = page.getByTestId("icon-Trash2").last();
-  await expect(trashIcon).toBeVisible();
+    const trashIcon = page.getByTestId("icon-Trash2").last();
+    await expect(trashIcon).toBeVisible();
 
-  const builtSuccessfullyText = page
-    .getByText("Flow built successfully", { exact: true })
-    .last();
-  await expect(builtSuccessfullyText).toBeVisible();
-});
+    const builtSuccessfullyText = page
+      .getByText("Flow built successfully", { exact: true })
+      .last();
+    await expect(builtSuccessfullyText).toBeVisible();
+  },
+);

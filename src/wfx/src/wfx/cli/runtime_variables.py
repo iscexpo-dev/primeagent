@@ -44,7 +44,8 @@ def build_request_variables_from_global_vars(global_vars: dict[str, str] | None)
             merged.update(normalize_parsed_variables(parsed))
         elif parsed is not None:
             logger.warning(
-                f"{_PRIMEAGENT_REQUEST_VARIABLES_KEY} must be a JSON object, got {type(parsed).__name__}; ignoring blob."
+                f"{_PRIMEAGENT_REQUEST_VARIABLES_KEY} must be a JSON object (dict), "
+                f"got {type(parsed).__name__}; ignoring blob."
             )
 
     for key, value in global_vars.items():

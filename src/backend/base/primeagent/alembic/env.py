@@ -6,10 +6,10 @@ from logging.config import fileConfig
 from typing import Any
 
 from alembic import context
-from wfx.log.logger import logger
 from sqlalchemy import pool, text
 from sqlalchemy.event import listen
 from sqlalchemy.ext.asyncio import async_engine_from_config
+from wfx.log.logger import logger
 
 from primeagent.alembic.expand_compat import filter_expand_revision_directives
 from primeagent.alembic.warning_filters import filter_known_sqlite_reflection_warnings

@@ -490,7 +490,8 @@ class MCPToolsComponent(ComponentWithCache):
                     if not is_primeagent_standalone:
                         raise
                     await logger.ainfo(
-                        "Primeagent package not available; using MCP server config from flow value (WFX standalone mode)."
+                        "Primeagent package not available; using MCP server config from flow value "
+                        "(WFX standalone mode)."
                     )
                 else:
                     async with session_scope() as db:

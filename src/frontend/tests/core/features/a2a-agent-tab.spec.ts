@@ -85,116 +85,132 @@ async function sendMessage(page: Page, text: string) {
 }
 
 test.describe("A2A Agent tab", () => {
-  test("shows the tab for every flow and gates serving on chat I/O", {
-    tag: ["@release", "@api"],
-  }, async ({ page }) => {
-    await awaitBootstrapTest(page, { skipModal: true });
+  test(
+    "shows the tab for every flow and gates serving on chat I/O",
+    {
+      tag: ["@release", "@api"],
+    },
+    async ({ page }) => {
+      await awaitBootstrapTest(page, { skipModal: true });
 
-    // Ineligible flow (chat input, no chat output): tab is there, but serving
-    // is blocked with guidance to add the missing half.
-    const ineligibleId = await seedFlow(page, INELIGIBLE_FLOW, {
-      flowType: "workflow",
-    });
-    await openAgentTab(page, ineligibleId);
-    await expect(page.getByTestId("agent-status")).toHaveText("Unavailable");
-    await expect(page.getByTestId("agent-publish-switch")).toBeDisabled();
-    await expect(
-      page.getByText("Add a chat output", { exact: false }),
-    ).toBeVisible();
+      // Ineligible flow (chat input, no chat output): tab is there, but serving
+      // is blocked with guidance to add the missing half.
+      const ineligibleId = await seedFlow(page, INELIGIBLE_FLOW, {
+        flowType: "workflow",
+      });
+      await openAgentTab(page, ineligibleId);
+      await expect(page.getByTestId("agent-status")).toHaveText("Unavailable");
+      await expect(page.getByTestId("agent-publish-switch")).toBeDisabled();
+      await expect(
+        page.getByText("Add a chat output", { exact: false }),
+      ).toBeVisible();
 
-    // Eligible flow (chat in + out): the serve toggle is live.
-    const eligibleId = await seedFlow(page, ECHO_FLOW, {
-      flowType: "workflow",
-    });
-    await openAgentTab(page, eligibleId);
-    await expect(page.getByTestId("agent-status")).toHaveText("Draft");
-    await expect(page.getByTestId("agent-publish-switch")).toBeEnabled();
-  });
+      // Eligible flow (chat in + out): the serve toggle is live.
+      const eligibleId = await seedFlow(page, ECHO_FLOW, {
+        flowType: "workflow",
+      });
+      await openAgentTab(page, eligibleId);
+      await expect(page.getByTestId("agent-status")).toHaveText("Draft");
+      await expect(page.getByTestId("agent-publish-switch")).toBeEnabled();
+    },
+  );
 
-  test("previews and publishes the agent card", {
-    tag: ["@release", "@api"],
-  }, async ({ page }) => {
-    await awaitBootstrapTest(page, { skipModal: true });
-    const flowId = await seedFlow(page, ECHO_FLOW, {
-      flowType: "agent",
-      published: false,
-    });
-    await openAgentTab(page, flowId);
+  test(
+    "previews and publishes the agent card",
+    {
+      tag: ["@release", "@api"],
+    },
+    async ({ page }) => {
+      await awaitBootstrapTest(page, { skipModal: true });
+      const flowId = await seedFlow(page, ECHO_FLOW, {
+        flowType: "agent",
+        published: false,
+      });
+      await openAgentTab(page, flowId);
 
-    // Draft: no live card, honest "publish to preview" note.
-    await expect(page.getByTestId("agent-status")).toHaveText("Draft");
-    await expect(
-      page.getByText("Publish to preview the input contract", {
-        exact: false,
-      }),
-    ).toBeVisible();
+      // Draft: no live card, honest "publish to preview" note.
+      await expect(page.getByTestId("agent-status")).toHaveText("Draft");
+      await expect(
+        page.getByText("Publish to preview the input contract", {
+          exact: false,
+        }),
+      ).toBeVisible();
 
-    // Publish + save.
-    await page.getByTestId("agent-publish-switch").click();
-    await page.getByTestId("agent-save").click();
+      // Publish + save.
+      await page.getByTestId("agent-publish-switch").click();
+      await page.getByTestId("agent-save").click();
 
-    // Live: the resolved card is fetched, so the input contract appears.
-    await expect(page.getByTestId("agent-status")).toHaveText("Live", {
-      timeout: 30000,
-    });
-    await expect(page.getByText("Input contract")).toBeVisible();
-    await expect(page.getByText("input_value")).toBeVisible();
-    await expect(page.getByText("session_id")).toBeVisible();
-    await expect(page.getByTestId("agent-card-url")).toHaveValue(
-      /\/api\/v1\/a2a\/.+\/\.well-known\/agent-card\.json$/,
-    );
-  });
+      // Live: the resolved card is fetched, so the input contract appears.
+      await expect(page.getByTestId("agent-status")).toHaveText("Live", {
+        timeout: 30000,
+      });
+      await expect(page.getByText("Input contract")).toBeVisible();
+      await expect(page.getByText("input_value")).toBeVisible();
+      await expect(page.getByText("session_id")).toBeVisible();
+      await expect(page.getByTestId("agent-card-url")).toHaveValue(
+        /\/api\/v1\/a2a\/.+\/\.well-known\/agent-card\.json$/,
+      );
+    },
+  );
 
-  test("runs a multi-turn conversation over the live endpoint", {
-    tag: ["@release", "@api"],
-  }, async ({ page }) => {
-    await awaitBootstrapTest(page, { skipModal: true });
-    const flowId = await seedFlow(page, ECHO_FLOW, {
-      flowType: "agent",
-      published: true,
-    });
-    await openAgentTab(page, flowId);
-    await fillTestKeyIfNeeded(page);
+  test(
+    "runs a multi-turn conversation over the live endpoint",
+    {
+      tag: ["@release", "@api"],
+    },
+    async ({ page }) => {
+      await awaitBootstrapTest(page, { skipModal: true });
+      const flowId = await seedFlow(page, ECHO_FLOW, {
+        flowType: "agent",
+        published: true,
+      });
+      await openAgentTab(page, flowId);
+      await fillTestKeyIfNeeded(page);
 
-    const transcript = page.getByTestId("agent-transcript");
+      const transcript = page.getByTestId("agent-transcript");
 
-    await sendMessage(page, "hello a2a");
-    // The echo agent completes and returns the message verbatim.
-    await expect(transcript.getByText("completed")).toBeVisible({
-      timeout: 60000,
-    });
-    await expect(transcript.getByText("hello a2a").last()).toBeVisible();
+      await sendMessage(page, "hello a2a");
+      // The echo agent completes and returns the message verbatim.
+      await expect(transcript.getByText("completed")).toBeVisible({
+        timeout: 60000,
+      });
+      await expect(transcript.getByText("hello a2a").last()).toBeVisible();
 
-    // A second turn threads onto the same conversation (contextId).
-    await sendMessage(page, "second turn");
-    await expect(page.getByText("2 turns")).toBeVisible({ timeout: 60000 });
-    await expect(transcript.getByText("second turn").last()).toBeVisible();
-  });
+      // A second turn threads onto the same conversation (contextId).
+      await sendMessage(page, "second turn");
+      await expect(page.getByText("2 turns")).toBeVisible({ timeout: 60000 });
+      await expect(transcript.getByText("second turn").last()).toBeVisible();
+    },
+  );
 
-  test("pauses on input-required and resumes to completed", {
-    tag: ["@release", "@api"],
-  }, async ({ page }) => {
-    await awaitBootstrapTest(page, { skipModal: true });
-    const flowId = await seedFlow(page, HUMAN_INPUT_FLOW, {
-      flowType: "agent",
-      published: true,
-    });
-    await openAgentTab(page, flowId);
-    await fillTestKeyIfNeeded(page);
+  test(
+    "pauses on input-required and resumes to completed",
+    {
+      tag: ["@release", "@api"],
+    },
+    async ({ page }) => {
+      await awaitBootstrapTest(page, { skipModal: true });
+      const flowId = await seedFlow(page, HUMAN_INPUT_FLOW, {
+        flowType: "agent",
+        published: true,
+      });
+      await openAgentTab(page, flowId);
+      await fillTestKeyIfNeeded(page);
 
-    const transcript = page.getByTestId("agent-transcript");
+      const transcript = page.getByTestId("agent-transcript");
 
-    // The flow pauses for a decision and surfaces the prompt.
-    await sendMessage(page, "start");
-    await expect(transcript.getByText("needs input")).toBeVisible({
-      timeout: 60000,
-    });
-    await expect(transcript.getByText("Approve this?").first()).toBeVisible();
+      // The flow pauses for a decision and surfaces the prompt.
+      await sendMessage(page, "start");
+      await expect(transcript.getByText("needs input")).toBeVisible({
+        timeout: 60000,
+      });
+      await expect(transcript.getByText("Approve this?").first()).toBeVisible();
 
-    // Approving resumes the same task through to completion.
-    await sendMessage(page, "Approve");
-    await expect(transcript.getByText("completed")).toBeVisible({
-      timeout: 60000,
-    });
-  });
+      // Approving resumes the same task through to completion.
+      await sendMessage(page, "Approve");
+      await expect(transcript.getByText("completed")).toBeVisible({
+        timeout: 60000,
+      });
+    },
+  );
 });

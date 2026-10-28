@@ -34,8 +34,8 @@ import getFieldTitle from "../CustomNodes/utils/get-field-title";
 import {
   INPUT_TYPES,
   IS_MAC,
-  PRIMEAGENT_SUPPORTED_TYPES,
   OUTPUT_TYPES,
+  PRIMEAGENT_SUPPORTED_TYPES,
   specialCharsRegex,
 } from "../constants/constants";
 import { DESCRIPTIONS } from "../flow_constants";

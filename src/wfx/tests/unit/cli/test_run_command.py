@@ -19,7 +19,8 @@ class TestRunCommand:
         """Create a simple chat script for testing."""
         script_content = '''"""A simple chat flow example for Primeagent.
 
-This script demonstrates how to set up a basic conversational flow using Primeagent's ChatInput and ChatOutput components.
+This script demonstrates how to set up a basic conversational flow using
+Primeagent's ChatInput and ChatOutput components.
 
 Features:
 - Configures logging to 'primeagent.log' at INFO level

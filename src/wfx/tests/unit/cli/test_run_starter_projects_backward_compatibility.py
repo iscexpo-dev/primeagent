@@ -221,7 +221,9 @@ class TestRunStarterProjectsBackwardCompatibility:
             )
 
     @pytest.mark.xfail(
-        reason="1.6.0 basic templates have primeagent import issues - components expect primeagent package to be available"
+        reason=(
+            "1.6.0 basic templates have primeagent import issues - components expect primeagent package to be available"
+        )
     )
     def test_run_basic_1_6_0_starter_projects_detailed(self):
         """Test basic 1.6.0 starter projects that should have minimal dependencies."""

@@ -104,105 +104,121 @@ async function measureBurst(page: Page, interval: number): Promise<number> {
   return writes.total();
 }
 
-test("a longer debounce turns a burst of edits into fewer writes", {
-  tag: ["@release", "@workspace"],
-}, async ({ page }) => {
-  const atTwo = await measureBurst(page, 2_000);
-  const atTen = await measureBurst(page, 10_000);
+test(
+  "a longer debounce turns a burst of edits into fewer writes",
+  {
+    tag: ["@release", "@workspace"],
+  },
+  async ({ page }) => {
+    const atTwo = await measureBurst(page, 2_000);
+    const atTen = await measureBurst(page, 10_000);
 
-  // eslint-disable-next-line no-console
-  console.log(`writes for ${NUDGE_COUNT} edits: 2s=${atTwo}, 10s=${atTen}`);
+    // eslint-disable-next-line no-console
+    console.log(`writes for ${NUDGE_COUNT} edits: 2s=${atTwo}, 10s=${atTen}`);
 
-  expect(
-    atTwo,
-    "edits spaced above the interval each cost a write",
-  ).toBeGreaterThan(1);
-  expect(
-    atTen,
-    "the same edits spaced below the interval must collapse into fewer writes",
-  ).toBeLessThan(atTwo);
-});
+    expect(
+      atTwo,
+      "edits spaced above the interval each cost a write",
+    ).toBeGreaterThan(1);
+    expect(
+      atTen,
+      "the same edits spaced below the interval must collapse into fewer writes",
+    ).toBeLessThan(atTwo);
+  },
+);
 
-test("a continuous burst cannot defer its save past the ceiling", {
-  tag: ["@release", "@workspace"],
-}, async ({ page }) => {
-  // The shipping configuration: a 5s debounce with a 15s ceiling. Without the
-  // ceiling this same burst produced no write at all until the editing stopped.
-  await forceInterval(page, 5_000);
-  await openStarterProject(page, "Basic Prompting");
-  await adjustScreenView(page);
-  await page.waitForTimeout(SETTLE_MS);
+test(
+  "a continuous burst cannot defer its save past the ceiling",
+  {
+    tag: ["@release", "@workspace"],
+  },
+  async ({ page }) => {
+    // The shipping configuration: a 5s debounce with a 15s ceiling. Without the
+    // ceiling this same burst produced no write at all until the editing stopped.
+    await forceInterval(page, 5_000);
+    await openStarterProject(page, "Basic Prompting");
+    await adjustScreenView(page);
+    await page.waitForTimeout(SETTLE_MS);
 
-  const writes = trackFlowWrites(page);
-  const start = Date.now();
-  // Gaps below the debounce, so nothing here would ever trail out on its own.
-  for (let i = 0; i < 9; i++) {
-    await nudgeNode(page, i % 2 === 0 ? 50 : -50);
-    await page.waitForTimeout(3_000);
-  }
+    const writes = trackFlowWrites(page);
+    const start = Date.now();
+    // Gaps below the debounce, so nothing here would ever trail out on its own.
+    for (let i = 0; i < 9; i++) {
+      await nudgeNode(page, i % 2 === 0 ? 50 : -50);
+      await page.waitForTimeout(3_000);
+    }
 
-  expect(
-    writes.total(),
-    "the ceiling must persist the burst while it is still going",
-  ).toBeGreaterThan(0);
+    expect(
+      writes.total(),
+      "the ceiling must persist the burst while it is still going",
+    ).toBeGreaterThan(0);
 
-  const unsavedFor = writes.stamps()[0] - start;
-  // eslint-disable-next-line no-console
-  console.log(
-    `first write landed ${Math.round(unsavedFor / 1000)}s into the burst`,
-  );
-  expect(
-    unsavedFor,
-    "work may not sit unsaved past the ceiling plus one interval",
-  ).toBeLessThan(25_000);
-});
+    const unsavedFor = writes.stamps()[0] - start;
+    // eslint-disable-next-line no-console
+    console.log(
+      `first write landed ${Math.round(unsavedFor / 1000)}s into the burst`,
+    );
+    expect(
+      unsavedFor,
+      "work may not sit unsaved past the ceiling plus one interval",
+    ).toBeLessThan(25_000);
+  },
+);
 
-test("the conflict is still caught at ten seconds, only later", {
-  tag: ["@release", "@workspace"],
-}, async ({ page }) => {
-  await forceInterval(page, 10_000);
-  await openStarterProject(page, "Basic Prompting");
-  await adjustScreenView(page);
-  await page.waitForTimeout(SETTLE_MS);
+test(
+  "the conflict is still caught at ten seconds, only later",
+  {
+    tag: ["@release", "@workspace"],
+  },
+  async ({ page }) => {
+    await forceInterval(page, 10_000);
+    await openStarterProject(page, "Basic Prompting");
+    await adjustScreenView(page);
+    await page.waitForTimeout(SETTLE_MS);
 
-  const flowId = flowIdFrom(page);
-  await editFromAnotherSession(page, flowId);
+    const flowId = flowIdFrom(page);
+    await editFromAnotherSession(page, flowId);
 
-  const edited = Date.now();
-  await nudgeNode(page, 80);
+    const edited = Date.now();
+    await nudgeNode(page, 80);
 
-  await expect(page.getByTestId("flow-conflict-banner")).toBeVisible({
-    timeout: CONFLICT_WINDOW_MS,
-  });
-  const detected = Date.now() - edited;
-  // eslint-disable-next-line no-console
-  console.log(
-    `conflict surfaced ${Math.round(detected / 1000)}s after the edit`,
-  );
+    await expect(page.getByTestId("flow-conflict-banner")).toBeVisible({
+      timeout: CONFLICT_WINDOW_MS,
+    });
+    const detected = Date.now() - edited;
+    // eslint-disable-next-line no-console
+    console.log(
+      `conflict surfaced ${Math.round(detected / 1000)}s after the edit`,
+    );
 
-  expect(
-    detected,
-    "detection cannot beat the debounce: the save is what discovers the conflict",
-  ).toBeGreaterThan(9_000);
-});
+    expect(
+      detected,
+      "detection cannot beat the debounce: the save is what discovers the conflict",
+    ).toBeGreaterThan(9_000);
+  },
+);
 
-test("leaving with a debounce still pending is guarded, not silently lost", {
-  tag: ["@release", "@workspace"],
-}, async ({ page }) => {
-  await forceInterval(page, 10_000);
-  await openStarterProject(page, "Basic Prompting");
-  await adjustScreenView(page);
-  await page.waitForTimeout(SETTLE_MS);
+test(
+  "leaving with a debounce still pending is guarded, not silently lost",
+  {
+    tag: ["@release", "@workspace"],
+  },
+  async ({ page }) => {
+    await forceInterval(page, 10_000);
+    await openStarterProject(page, "Basic Prompting");
+    await adjustScreenView(page);
+    await page.waitForTimeout(SETTLE_MS);
 
-  await nudgeNode(page, 70);
-  // Navigate while the save is still owed, the moment a longer interval makes
-  // more likely. The unsaved-changes guard is what stands between the person
-  // and losing the whole burst.
-  await page.waitForTimeout(1_000);
-  await page.getByTestId("icon-ChevronLeft").first().click();
+    await nudgeNode(page, 70);
+    // Navigate while the save is still owed, the moment a longer interval makes
+    // more likely. The unsaved-changes guard is what stands between the person
+    // and losing the whole burst.
+    await page.waitForTimeout(1_000);
+    await page.getByTestId("icon-ChevronLeft").first().click();
 
-  await expect(
-    page.getByText(/unsaved changes/i).first(),
-    "an owed save must not be dropped without telling the person",
-  ).toBeVisible({ timeout: 15_000 });
-});
+    await expect(
+      page.getByText(/unsaved changes/i).first(),
+      "an owed save must not be dropped without telling the person",
+    ).toBeVisible({ timeout: 15_000 });
+  },
+);

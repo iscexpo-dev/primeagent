@@ -36,94 +36,101 @@ class CustomComponent(Component):
         sleep(60)
         return data`;
 
-test("User must be able to stop building from inside Playground", {
-  tag: ["@release", "@api"],
-}, async ({ page }) => {
-  await openBlankFlow(page);
+test(
+  "User must be able to stop building from inside Playground",
+  {
+    tag: ["@release", "@api"],
+  },
+  async ({ page }) => {
+    await openBlankFlow(page);
 
-  await page.waitForSelector(
-    `[data-testid="${TID.sidebarCustomComponentButton}"]`,
-    { timeout: TIMEOUTS.short },
-  );
+    await page.waitForSelector(
+      `[data-testid="${TID.sidebarCustomComponentButton}"]`,
+      { timeout: TIMEOUTS.short },
+    );
 
-  await page.waitForSelector(`[data-testid="${TID.canvasControlsDropdown}"]`, {
-    timeout: TIMEOUTS.short,
-  });
+    await page.waitForSelector(
+      `[data-testid="${TID.canvasControlsDropdown}"]`,
+      {
+        timeout: TIMEOUTS.short,
+      },
+    );
 
-  const canvasNodes = page.locator(".react-flow__node");
-  const previousNodeCount = await canvasNodes.count();
-  await expect(
-    page.getByTestId(TID.sidebarCustomComponentButton),
-  ).toBeEnabled();
-  await page.getByTestId(TID.sidebarCustomComponentButton).click();
-  await expect(canvasNodes).toHaveCount(previousNodeCount + 1);
-  await adjustScreenView(page);
+    const canvasNodes = page.locator(".react-flow__node");
+    const previousNodeCount = await canvasNodes.count();
+    await expect(
+      page.getByTestId(TID.sidebarCustomComponentButton),
+    ).toBeEnabled();
+    await page.getByTestId(TID.sidebarCustomComponentButton).click();
+    await expect(canvasNodes).toHaveCount(previousNodeCount + 1);
+    await adjustScreenView(page);
 
-  await addComponentFromSidebar(page, {
-    search: "chat output",
-    testId: "input_outputChat Output",
-    hoverAdd: true,
-  });
+    await addComponentFromSidebar(page, {
+      search: "chat output",
+      testId: "input_outputChat Output",
+      hoverAdd: true,
+    });
 
-  await adjustScreenView(page);
+    await adjustScreenView(page);
 
-  const chatOutputNode = page.locator(".react-flow__node").filter({
-    has: page.getByText("Chat Output", { exact: true }),
-  });
-  await expect(chatOutputNode).toHaveCount(1);
+    const chatOutputNode = page.locator(".react-flow__node").filter({
+      has: page.getByText("Chat Output", { exact: true }),
+    });
+    await expect(chatOutputNode).toHaveCount(1);
 
-  const customComponentNode = page.locator(".react-flow__node").filter({
-    has: page.getByText("Custom Component", { exact: true }),
-  });
-  await expect(customComponentNode).toHaveCount(1);
-  await customComponentNode.getByTestId(TID.divGenericNode).click();
+    const customComponentNode = page.locator(".react-flow__node").filter({
+      has: page.getByText("Custom Component", { exact: true }),
+    });
+    await expect(customComponentNode).toHaveCount(1);
+    await customComponentNode.getByTestId(TID.divGenericNode).click();
 
-  await replaceComponentCode(page, SLEEP_60_CUSTOM_COMPONENT);
-  await adjustScreenView(page, { numberOfZoomOut: 2 });
+    await replaceComponentCode(page, SLEEP_60_CUSTOM_COMPONENT);
+    await adjustScreenView(page, { numberOfZoomOut: 2 });
 
-  await chatOutputNode.getByTestId(TID.divGenericNode).click();
-  await page.getByTestId("more-options-modal").click();
-  await page.getByTestId("expand-button-modal").click();
-  await adjustScreenView(page, { numberOfZoomOut: 2 });
+    await chatOutputNode.getByTestId(TID.divGenericNode).click();
+    await page.getByTestId("more-options-modal").click();
+    await page.getByTestId("expand-button-modal").click();
+    await adjustScreenView(page, { numberOfZoomOut: 2 });
 
-  // Connect Custom Component output → Chat Output input
-  const elementCustomComponentOutput = await page
-    .getByTestId("handle-customcomponent-shownode-output-right")
-    .first();
+    // Connect Custom Component output → Chat Output input
+    const elementCustomComponentOutput = await page
+      .getByTestId("handle-customcomponent-shownode-output-right")
+      .first();
 
-  await elementCustomComponentOutput.hover();
-  await page.mouse.down();
-  const elementChatOutput = await page
-    .getByTestId("handle-chatoutput-shownode-inputs-left")
-    .first();
-  await elementChatOutput.hover();
-  await page.mouse.up();
+    await elementCustomComponentOutput.hover();
+    await page.mouse.down();
+    const elementChatOutput = await page
+      .getByTestId("handle-chatoutput-shownode-inputs-left")
+      .first();
+    await elementChatOutput.hover();
+    await page.mouse.up();
 
-  await page.waitForSelector(`[data-testid="${TID.buttonRunChatOutput}"]`, {
-    timeout: TIMEOUTS.short,
-  });
+    await page.waitForSelector(`[data-testid="${TID.buttonRunChatOutput}"]`, {
+      timeout: TIMEOUTS.short,
+    });
 
-  await page.getByTestId(TID.buttonRunChatOutput).click();
+    await page.getByTestId(TID.buttonRunChatOutput).click();
 
-  await page
-    .getByRole("button", { name: TEXTS.playground, exact: true })
-    .click();
+    await page
+      .getByRole("button", { name: TEXTS.playground, exact: true })
+      .click();
 
-  await page.waitForSelector(`[data-testid="${TID.buttonStop}"]`, {
-    timeout: TIMEOUTS.standard,
-  });
+    await page.waitForSelector(`[data-testid="${TID.buttonStop}"]`, {
+      timeout: TIMEOUTS.standard,
+    });
 
-  const elements = await page.$$(`[data-testid="${TID.buttonStop}"]`);
-  if (elements.length > 0) {
-    const lastElement = elements[elements.length - 1];
-    await lastElement.waitForElementState("visible");
-  }
+    const elements = await page.$$(`[data-testid="${TID.buttonStop}"]`);
+    if (elements.length > 0) {
+      const lastElement = elements[elements.length - 1];
+      await lastElement.waitForElementState("visible");
+    }
 
-  await expect(page.getByTestId(TID.buttonStop).last()).toBeVisible();
-  await page.getByTestId(TID.buttonStop).last().click();
+    await expect(page.getByTestId(TID.buttonStop).last()).toBeVisible();
+    await page.getByTestId(TID.buttonStop).last().click();
 
-  await page.waitForSelector("text=build stopped", {
-    timeout: TIMEOUTS.standard,
-  });
-  await expect(page.getByText("build stopped")).toBeVisible();
-});
+    await page.waitForSelector("text=build stopped", {
+      timeout: TIMEOUTS.standard,
+    });
+    await expect(page.getByText("build stopped")).toBeVisible();
+  },
+);
