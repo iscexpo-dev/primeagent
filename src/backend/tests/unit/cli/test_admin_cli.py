@@ -225,7 +225,8 @@ def test_manifest_rejects_plaintext_passwords_and_invalid_domains() -> None:
 def test_invalid_manifest_does_not_echo_plaintext_password(tmp_path: Path) -> None:
     manifest = tmp_path / "unsafe.yaml"
     manifest.write_text(
-        "apiVersion: prime.khulnasoft.com/v1\nkind: AdminState\nusers:\n  - username: alice\n    password: never-echo\n",
+        "apiVersion: prime.khulnasoft.com/v1\nkind: AdminState\n"
+        "users:\n  - username: alice\n    password: never-echo\n",
         encoding="utf-8",
     )
 
@@ -539,7 +540,8 @@ def test_pruning_preview_maps_api_errors_to_stable_cli_output(monkeypatch, tmp_p
 def test_noninteractive_prune_requires_yes_before_api_calls(monkeypatch, tmp_path: Path) -> None:
     manifest = tmp_path / "admin-state.yaml"
     manifest.write_text(
-        "apiVersion: prime.khulnasoft.com/v1\nkind: AdminState\nteams:\n  - adom_name: ops\n    display_name: Operators\n",
+        "apiVersion: prime.khulnasoft.com/v1\nkind: AdminState\n"
+        "teams:\n  - adom_name: ops\n    display_name: Operators\n",
         encoding="utf-8",
     )
 

@@ -120,7 +120,10 @@ def verify_primeagent_owned(tool: dict[str, Any], *, tool_id: str) -> None:
     """
     binding = tool.get("binding")
     if not isinstance(binding, dict) or "primeagent" not in binding:
-        msg = f"Cannot modify tool '{tool_id}': it does not have a Primeagent binding and may not be managed by Primeagent."
+        msg = (
+            f"Cannot modify tool '{tool_id}': it does not have a Primeagent "
+            "binding and may not be managed by Primeagent."
+        )
         raise InvalidContentError(message=msg)
 
 
