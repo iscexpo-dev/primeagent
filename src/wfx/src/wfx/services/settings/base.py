@@ -113,7 +113,11 @@ class Settings(
     # value as ``input_value=...`` in ValidationError text, which validators cannot
     # otherwise suppress; their messages still name the field and the problem.
     model_config = SettingsConfigDict(
-        validate_assignment=True, extra="ignore", env_prefix="PRIMEAGENT_", hide_input_in_errors=True
+        validate_assignment=True,
+        extra="ignore",
+        env_prefix="PRIMEAGENT_",
+        env_ignore_empty=True,
+        hide_input_in_errors=True,
     )
 
     async def update_from_yaml(self, file_path: str, *, dev: bool = False) -> None:

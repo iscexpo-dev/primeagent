@@ -13,8 +13,8 @@ from primeagent.services.database.models.flow_version.model import FlowVersion
 from primeagent.services.database.models.flow_version_deployment_attachment.crud import create_deployment_attachment
 from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.database.models.user.model import User
-from wfx.services.adapters.deployment.schema import DeploymentType
 from sqlalchemy.ext.asyncio import AsyncSession
+from wfx.services.adapters.deployment.schema import DeploymentType
 
 
 async def _seed_user_provider_and_projects(async_session: AsyncSession):

@@ -17,8 +17,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import wfx_slack
 import pytest
+import wfx_slack
 from wfx.custom.custom_component.component import Component
 from wfx.inputs.inputs import ConnectionRefInput
 

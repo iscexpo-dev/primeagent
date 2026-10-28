@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from conftest import FakeResolver, SlackTransport, load_fixture
+from slack_sdk.errors import SlackApiError
 from wfx.integrations.errors import (
     ActionUnsupportedError,
     AuthExpiredError,
@@ -32,7 +33,6 @@ from wfx.integrations.models import (
 from wfx.services.authorization.base import ExecutionPrincipal
 from wfx_slack import _client as slack_client
 from wfx_slack._client import SLACK_API_BASE_URL, SlackClient, next_cursor, normalize_slack_error
-from slack_sdk.errors import SlackApiError
 
 PRINCIPAL = ExecutionPrincipal(kind="actor", user_id="user-1", interactive=True)
 

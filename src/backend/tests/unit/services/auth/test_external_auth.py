@@ -22,8 +22,8 @@ from primeagent.services.auth.external import (
     resolve_external_identity,
     set_current_external_access_context,
 )
-from wfx.services.settings.auth import AuthSettings
 from pydantic import ValidationError
+from wfx.services.settings.auth import AuthSettings
 
 _TEST_JWT_SECRET = "external-test-secret-with-enough-length"  # noqa: S105 # pragma: allowlist secret
 _EXTERNAL_AUTH_HEADER = "X-External-Auth"

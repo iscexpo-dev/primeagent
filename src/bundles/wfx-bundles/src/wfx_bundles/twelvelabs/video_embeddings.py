@@ -1,11 +1,11 @@
 import time
 from typing import Any, cast
 
+from twelvelabs import TwelveLabs
 from wfx.base.embeddings.model import LCEmbeddingsModel
 from wfx.field_typing import Embeddings
 from wfx.io import DropdownInput, IntInput, SecretStrInput
 from wfx.utils.file_path_security import component_file_access_scopes
-from twelvelabs import TwelveLabs
 
 from wfx_bundles.twelvelabs.file_access import resolve_video_file
 

@@ -134,8 +134,8 @@ def _agent_matches_environment(agent: dict[str, Any], environment: str) -> bool:
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from wfx.services.settings.service import SettingsService
     from sqlalchemy.ext.asyncio import AsyncSession
+    from wfx.services.settings.service import SettingsService
 
 
 class WatsonxOrchestrateDeploymentService(BaseDeploymentService):

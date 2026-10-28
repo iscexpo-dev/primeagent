@@ -3,13 +3,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from tenacity import retry, stop_after_attempt, wait_exponential
+from twelvelabs import TwelveLabs
 from wfx.custom import Component
 from wfx.inputs import DataInput, DropdownInput, SecretStrInput, StrInput
 from wfx.io import Output
 from wfx.schema import Data
 from wfx.utils.file_path_security import component_file_access_scopes
-from tenacity import retry, stop_after_attempt, wait_exponential
-from twelvelabs import TwelveLabs
 
 from wfx_bundles.twelvelabs.file_access import resolve_video_file
 

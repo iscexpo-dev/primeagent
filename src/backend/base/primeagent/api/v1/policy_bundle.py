@@ -7,6 +7,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 from wfx.base.models.provider_registry import resolve_provider_id
 from wfx.services.deps import (
     get_catalog_policy_service,
@@ -16,7 +17,6 @@ from wfx.services.deps import (
 from wfx.services.integration_policy import integration_policy_key_provider, normalize_integration_policy_key
 from wfx.services.model_provider_policy import normalize_blocked_model_key
 from wfx.services.policy_bundle import PolicyBundleSnapshot
-from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from primeagent.api.utils import DbSession, DbSessionReadOnly
 from primeagent.api.v1.integrations import loaded_integrations

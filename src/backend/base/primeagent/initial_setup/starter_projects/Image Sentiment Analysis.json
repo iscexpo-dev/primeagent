@@ -93,7 +93,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "45974e6b1909",
+              "code_hash": "e1a6adcd2554",
               "component_class_name": "ChatInput",
               "dependencies": {
                 "dependencies": [
@@ -366,7 +366,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "0aab1c78e1dc",
+              "code_hash": "76d4a69dd1da",
               "component_class_name": "ChatOutput",
               "dependencies": {
                 "dependencies": [
@@ -652,7 +652,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "1bfa98a19c39",
+              "code_hash": "c5ac6f2c67a7",
               "component_class_name": "LanguageModelComponent",
               "dependencies": {
                 "dependencies": [

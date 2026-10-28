@@ -68,7 +68,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
 OUTPUT_PATH = Path(__file__).parent.parent.parent / "src/backend/base/primeagent/locales/en.json"
-STARTER_PROJECTS_DIR = Path(__file__).parent.parent.parent / "src/backend/base/primeagent/initial_setup/starter_projects"
+STARTER_PROJECTS_DIR = (
+    Path(__file__).parent.parent.parent / "src/backend/base/primeagent/initial_setup/starter_projects"
+)
 
 
 def emit_component_strings(

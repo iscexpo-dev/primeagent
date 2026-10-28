@@ -13,14 +13,14 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
 from wfx.log.logger import logger
 from wfx.services.authorization import (
     AuthorizationMutation,
     AuthorizationMutationKind,
     AuthorizationMutationRejected,
 )
-from sqlalchemy.exc import IntegrityError
-from sqlmodel import select
 
 from primeagent.api.utils import CurrentActiveUser, DbSession
 from primeagent.api.v1.schemas.authz_role_assignments import (

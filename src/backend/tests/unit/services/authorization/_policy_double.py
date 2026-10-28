@@ -29,14 +29,14 @@ from primeagent.services.database.models.auth import (
     AuthzTeam,
     AuthzTeamMember,
 )
-from wfx.services.authorization.base import BaseAuthorizationService, ResourceVisibilityScope
 from sqlmodel import col, select
+from wfx.services.authorization.base import BaseAuthorizationService, ResourceVisibilityScope
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
-    from wfx.services.settings.service import SettingsService
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.settings.service import SettingsService
 
 # Actions granted by each AuthzShare.permission_level, ordered weakest to
 # strongest. This is the canonical share contract enforced by the enterprise

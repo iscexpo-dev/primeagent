@@ -1,10 +1,10 @@
 """MCP arguments use configured values even when their names collide with Component members."""
 
 import pytest
+from pydantic import BaseModel, create_model
 from wfx.components.models_and_agents.mcp_component import MCPToolsComponent
 from wfx.io import IntInput
 from wfx.schema.message import Message
-from pydantic import BaseModel, create_model
 
 
 class TabsArgs(BaseModel):

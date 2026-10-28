@@ -21,8 +21,8 @@ from primeagent.services.database.models.flow_version_deployment_attachment.mode
 )
 from primeagent.services.database.models.folder.model import Folder, FolderCreate
 from primeagent.services.deps import session_scope
-from wfx.services.adapters.deployment.schema import DeploymentType
 from sqlmodel import select
+from wfx.services.adapters.deployment.schema import DeploymentType
 
 CYRILLIC_NAME = "Новый проект"
 CYRILLIC_DESC = "Описание проекта с кириллицей"  # noqa: RUF001

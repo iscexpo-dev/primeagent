@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from wfx.services.deps import get_model_provider_policy_service
-from wfx.services.model_provider_policy import ModelProviderPolicyService
 from sqlalchemy import update
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import select
+from wfx.services.deps import get_model_provider_policy_service
+from wfx.services.model_provider_policy import ModelProviderPolicyService
 
 from primeagent.services.database.models.model_provider_policy import (
     MODEL_PROVIDER_POLICY_SINGLETON_ID,
@@ -27,8 +27,8 @@ if TYPE_CHECKING:
     from collections.abc import Collection
     from uuid import UUID
 
-    from wfx.services.policy_bundle import PolicyBundleSnapshot
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.policy_bundle import PolicyBundleSnapshot
 
 
 @dataclass(frozen=True)

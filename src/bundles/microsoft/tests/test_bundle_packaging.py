@@ -6,8 +6,8 @@ import json
 import sys
 from pathlib import Path
 
-import wfx_microsoft
 import pytest
+import wfx_microsoft
 from wfx.extension import load_extension, validate_extension
 from wfx.extension.migration import MIGRATION_TABLE_PATH
 

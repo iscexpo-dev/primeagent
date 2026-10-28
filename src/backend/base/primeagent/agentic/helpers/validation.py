@@ -9,8 +9,8 @@ component is loaded into a flow via the standard create_class() path.
 import ast
 import re
 
-from wfx.custom.validate import extract_class_name
 from pydantic import ValidationError
+from wfx.custom.validate import extract_class_name
 
 from primeagent.agentic.api.schemas import ValidationResult
 

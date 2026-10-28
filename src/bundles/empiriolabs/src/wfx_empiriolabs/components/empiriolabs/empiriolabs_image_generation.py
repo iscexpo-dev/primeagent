@@ -1,8 +1,8 @@
 import requests
+from pydantic.v1 import SecretStr
 from wfx.custom.custom_component.component import Component
 from wfx.io import DropdownInput, IntInput, MessageTextInput, Output, SecretStrInput
 from wfx.schema.data import Data
-from pydantic.v1 import SecretStr
 
 EMPIRIOLABS_BASE_URL = "https://api.empiriolabs.ai/v1"
 

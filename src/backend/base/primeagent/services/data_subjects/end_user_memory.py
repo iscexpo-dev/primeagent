@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from sqlmodel import col, select
 from wfx.base.knowledge_bases.backends import is_local_chroma
 from wfx.base.knowledge_bases.backends.chroma import ChromaMigrationRequiredError
-from sqlmodel import col, select
 
 from primeagent.api.utils.kb_helpers import _coerce_backend_config_value, resolve_local_store_path
 from primeagent.services.database.models.knowledge_base.model import KnowledgeBaseRecord

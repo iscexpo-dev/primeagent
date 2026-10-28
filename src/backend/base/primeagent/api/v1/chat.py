@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from sqlmodel import select
 from wfx.exceptions.tweaks import TweakRefusedError
 from wfx.graph.graph.base import Graph
 from wfx.graph.utils import log_vertex_build
@@ -25,7 +26,6 @@ from wfx.utils.flow_validation import (
     validate_flow_for_current_settings,
     validate_public_flow_no_code_execution,
 )
-from sqlmodel import select
 
 from primeagent.api.build import cancel_flow_build, get_flow_events_response, start_flow_build
 from primeagent.api.limited_background_tasks import LimitVertexBuildBackgroundTasks

@@ -14,9 +14,9 @@ from .handlers import (
     BaseModelOutputHandler,
     DataFrameOutputHandler,
     InputHandler,
+    OutputHandler,
     PrimeagentTypeInputHandler,
     PrimeagentTypeOutputHandler,
-    OutputHandler,
     ToolWrapperInputHandler,
 )
 

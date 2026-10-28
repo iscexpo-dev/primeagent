@@ -9,8 +9,8 @@ from uuid import uuid4
 import pytest
 from primeagent.api.utils.knowledge_base_relocation import KBRelocationResult, _describe
 from primeagent.cli import relocate_kb_events
-from wfx.base.knowledge_bases.backends.opensearch import _refused_documents_left_out
 from sqlalchemy.exc import DataError
+from wfx.base.knowledge_bases.backends.opensearch import _refused_documents_left_out
 
 
 def _assert_events_contain_only_safe_diagnostics(reason: str, capsys: pytest.CaptureFixture[str]) -> None:

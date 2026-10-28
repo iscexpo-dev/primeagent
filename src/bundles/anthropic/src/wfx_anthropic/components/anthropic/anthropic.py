@@ -1,6 +1,7 @@
 from typing import Any, cast
 
 import requests
+from pydantic import ValidationError
 from wfx.base.models.anthropic_constants import (
     ANTHROPIC_MODELS,
     DEFAULT_ANTHROPIC_API_URL,
@@ -18,7 +19,6 @@ from wfx.field_typing.range_spec import RangeSpec
 from wfx.io import BoolInput, DropdownInput, IntInput, MessageTextInput, SecretStrInput, SliderInput
 from wfx.log.logger import logger
 from wfx.schema.dotdict import dotdict
-from pydantic import ValidationError
 
 
 class AnthropicModelComponent(LCModelComponent):

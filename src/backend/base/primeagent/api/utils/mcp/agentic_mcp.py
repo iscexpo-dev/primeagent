@@ -8,11 +8,11 @@ key instead of a per-user auto-registered stdio entry.
 from uuid import UUID
 
 from fastapi import HTTPException
-from wfx.log.logger import logger
-from wfx.services.deps import get_settings_service
 from sqlalchemy import exc as sqlalchemy_exc
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.log.logger import logger
+from wfx.services.deps import get_settings_service
 
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import get_variable_service

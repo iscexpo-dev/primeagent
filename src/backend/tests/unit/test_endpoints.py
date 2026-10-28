@@ -1387,8 +1387,8 @@ async def test_user_cannot_run_other_users_flow_session_endpoint(
     from primeagent.services.auth.utils import get_password_hash
     from primeagent.services.database.models.user.model import User
     from primeagent.services.deps import get_settings_service
-    from wfx.services.deps import session_scope
     from sqlmodel import select
+    from wfx.services.deps import session_scope
 
     settings_service = get_settings_service()
     monkeypatch.setattr(settings_service.settings, "agentic_experience", True)
@@ -1636,8 +1636,8 @@ async def test_openai_responses_rejects_cross_user_flow_access(
     from primeagent.services.auth.utils import get_password_hash
     from primeagent.services.database.models.api_key.model import ApiKey
     from primeagent.services.database.models.user.model import User
-    from wfx.services.deps import session_scope
     from sqlmodel import select
+    from wfx.services.deps import session_scope
 
     attacker_api_key = "attacker_random_key"  # pragma: allowlist secret
     attacker_username = "idor_attacker_user"

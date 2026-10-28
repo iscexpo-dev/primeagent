@@ -4,6 +4,7 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
+from sqlalchemy.exc import NoResultFound
 from wfx.base.models.unified_models import (
     get_all_variables_for_provider,
     get_model_provider_variable_mapping,
@@ -12,7 +13,6 @@ from wfx.base.models.unified_models import (
     validate_model_provider_key,
 )
 from wfx.services.model_provider_policy import ModelProviderPolicyPurpose
-from sqlalchemy.exc import NoResultFound
 
 from primeagent.api.utils import CurrentActiveUser, DbSession
 from primeagent.api.v1.model_provider_policy_scope import ProviderPolicyAttributesDependency

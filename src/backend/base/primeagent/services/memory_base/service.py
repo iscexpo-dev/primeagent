@@ -17,6 +17,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
+from sqlmodel import col, select
 from wfx.base.knowledge_bases.backends import is_local_chroma
 from wfx.base.knowledge_bases.backends.naming import ensure_storage_routing_allowed
 from wfx.base.knowledge_bases.backends.postgres import resolve_default_kb_backend
@@ -29,7 +30,6 @@ from wfx.services.model_provider_policy import (
     aresolve_model_provider_policy,
     require_model_provider,
 )
-from sqlmodel import col, select
 
 from primeagent.api.utils.kb_helpers import local_chroma_rejection_reason, resolve_embedding_selection
 from primeagent.services.base import Service
@@ -75,8 +75,8 @@ from primeagent.services.memory_base.provider_scope import (
 from primeagent.services.model_provider_policy_scope import scoped_model_provider_policy_for_flow
 
 if TYPE_CHECKING:
-    from wfx.services.authorization.base import ResourceVisibilityScope
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.authorization.base import ResourceVisibilityScope
 
 
 class PreprocessingValidationError(ValueError):

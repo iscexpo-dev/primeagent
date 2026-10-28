@@ -51,8 +51,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Path, Request, Response, status
 from fastapi.responses import JSONResponse, PlainTextResponse
-from wfx.log.logger import logger
 from slowapi.errors import RateLimitExceeded
+from wfx.log.logger import logger
 
 from primeagent.api.utils import DbSession
 from primeagent.services.deps import get_settings_service

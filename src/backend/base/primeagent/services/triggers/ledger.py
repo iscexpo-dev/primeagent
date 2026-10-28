@@ -15,10 +15,10 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from wfx.log.logger import logger
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, delete, select
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.trigger.model import TriggerEvent
 from primeagent.services.database.models.trigger.schemas import TERMINAL_EVENT_STATES, TriggerEventState

@@ -3,8 +3,8 @@
 import json
 
 import pytest
-from wfx.base.data.cloud_storage_utils import parse_google_service_account_key
 from pydantic import SecretStr
+from wfx.base.data.cloud_storage_utils import parse_google_service_account_key
 
 CREDENTIALS = {"type": "service_account", "project_id": "test-project"}
 

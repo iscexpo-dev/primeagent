@@ -317,7 +317,10 @@ class TestSourceChecks:
 
     def test_urls_are_read_from_the_environment(self, sqlite_source, run_cli):
         # How a parent process passes them, so the target's password is never in argv.
-        env = {"PRIMEAGENT_MIGRATION_SOURCE_URL": sqlite_source, "PRIMEAGENT_MIGRATION_TARGET_URL": self.UNREACHABLE_TARGET}
+        env = {
+            "PRIMEAGENT_MIGRATION_SOURCE_URL": sqlite_source,
+            "PRIMEAGENT_MIGRATION_TARGET_URL": self.UNREACHABLE_TARGET,
+        }
 
         result = run_cli("--json", env=env)
 
@@ -326,7 +329,10 @@ class TestSourceChecks:
 
     def test_flags_win_over_the_environment(self, sqlite_source, tmp_path, run_cli):
         missing = f"sqlite:///{tmp_path / 'typo.db'}"
-        env = {"PRIMEAGENT_MIGRATION_SOURCE_URL": sqlite_source, "PRIMEAGENT_MIGRATION_TARGET_URL": "postgresql://unused"}
+        env = {
+            "PRIMEAGENT_MIGRATION_SOURCE_URL": sqlite_source,
+            "PRIMEAGENT_MIGRATION_TARGET_URL": "postgresql://unused",
+        }
 
         result = run_cli("--json", "--source", missing, "--target", self.UNREACHABLE_TARGET, env=env)
 

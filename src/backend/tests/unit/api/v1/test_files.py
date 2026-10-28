@@ -17,9 +17,9 @@ from primeagent.services.auth.utils import get_password_hash
 from primeagent.services.database.models.api_key.model import ApiKey
 from primeagent.services.database.models.flow.model import Flow, FlowCreate
 from primeagent.services.database.models.user.model import User, UserRead
-from wfx.services.deps import session_scope
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
+from wfx.services.deps import session_scope
 
 from tests.conftest import _delete_transactions_and_vertex_builds
 

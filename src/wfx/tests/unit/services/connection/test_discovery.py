@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Literal
 
 import pytest
+from pydantic import SecretStr
 from wfx.integrations import (
     ConnectionNotAuthorizedError,
     ConnectionRef,
@@ -18,7 +19,6 @@ from wfx.services.deps import get_connection_resolver
 from wfx.services.factory import ServiceFactory
 from wfx.services.manager import ServiceManager
 from wfx.services.schema import ServiceType
-from pydantic import SecretStr
 
 if TYPE_CHECKING:
     from pathlib import Path

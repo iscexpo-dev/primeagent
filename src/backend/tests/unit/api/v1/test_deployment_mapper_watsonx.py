@@ -49,6 +49,7 @@ from primeagent.services.adapters.deployment.watsonx_orchestrate.constants impor
 from primeagent.services.adapters.deployment.watsonx_orchestrate.payloads import (
     WatsonxDeploymentUpdateResultData,
 )
+from pydantic import BaseModel, ValidationError
 from wfx.services.adapters.deployment.schema import (
     ConfigListItem,
     ConfigListResult,
@@ -64,7 +65,6 @@ from wfx.services.adapters.deployment.schema import (
 )
 from wfx.services.adapters.payload import AdapterPayloadValidationError, PayloadSlot
 from wfx.services.adapters.schema import AdapterType
-from pydantic import BaseModel, ValidationError
 
 TEST_WXO_LLM = "ibm/granite-3.3-8b"
 

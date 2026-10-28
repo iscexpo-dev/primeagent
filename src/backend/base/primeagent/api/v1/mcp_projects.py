@@ -18,6 +18,12 @@ from anyio import BrokenResourceError
 from anyio.abc import TaskGroup, TaskStatus
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse
+from mcp import types
+from mcp.server import NotificationOptions, Server
+from mcp.server.sse import SseServerTransport
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from sqlalchemy.orm import selectinload
+from sqlmodel import select
 from wfx.base.mcp.util import project_mcp_server_name, sanitize_mcp_name
 from wfx.base.mcp.uvx import mcp_sdk_constraint_args
 from wfx.log import logger
@@ -28,12 +34,6 @@ from wfx.services.mcp_composer.service import (
     MCPComposerService,
 )
 from wfx.services.schema import ServiceType
-from mcp import types
-from mcp.server import NotificationOptions, Server
-from mcp.server.sse import SseServerTransport
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from sqlalchemy.orm import selectinload
-from sqlmodel import select
 
 from primeagent.api.utils import (
     CurrentActiveMCPUser,

@@ -16,8 +16,8 @@ import hashlib
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
-from wfx.log.logger import logger
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.knowledge_base import KnowledgeBaseRecord
 from primeagent.services.database.service import get_sqlite_database_file_path

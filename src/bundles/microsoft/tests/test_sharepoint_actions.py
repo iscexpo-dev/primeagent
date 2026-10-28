@@ -6,9 +6,9 @@ import base64
 
 import httpx
 import pytest
+from microsoft_testkit import TransportRecorder, build_component, credential, graph_fixture, json_response
 from wfx.integrations.errors import ScopeMissingError
 from wfx_microsoft import SharePointFetchComponent, SharePointListComponent
-from microsoft_testkit import TransportRecorder, build_component, credential, graph_fixture, json_response
 
 DOWNLOAD_URL = "https://contoso-my.sharepoint.com/personal/_layouts/15/download.aspx?SECRET=preauth"
 

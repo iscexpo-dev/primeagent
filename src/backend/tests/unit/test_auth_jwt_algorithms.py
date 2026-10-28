@@ -148,8 +148,8 @@ class TestAuthSettingsAlgorithms:
 
     def test_invalid_algorithm_rejected(self):
         """Invalid algorithm should be rejected by pydantic."""
-        from wfx.services.settings.auth import AuthSettings
         from pydantic import ValidationError
+        from wfx.services.settings.auth import AuthSettings
 
         with tempfile.TemporaryDirectory() as tmpdir, pytest.raises(ValidationError):
             AuthSettings(CONFIG_DIR=tmpdir, ALGORITHM="INVALID")

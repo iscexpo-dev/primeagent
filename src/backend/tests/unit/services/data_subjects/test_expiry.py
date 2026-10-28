@@ -13,8 +13,8 @@ from primeagent.services.database.models.data_subject_request import (
 )
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import get_settings_service, session_scope
-from wfx.services.settings.feature_flags import FEATURE_FLAGS
 from sqlmodel import col, select
+from wfx.services.settings.feature_flags import FEATURE_FLAGS
 
 from tests.unit.services.data_subjects._seed import create_user
 

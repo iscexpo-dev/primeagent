@@ -122,7 +122,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "0aab1c78e1dc",
+              "code_hash": "76d4a69dd1da",
               "component_class_name": "ChatOutput",
               "dependencies": {
                 "dependencies": [
@@ -421,7 +421,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "9fcfe75813e7",
+              "code_hash": "d429ce481de6",
               "component_class_name": "AgentComponent",
               "dependencies": {
                 "dependencies": [
@@ -1037,7 +1037,7 @@
             "icon": "database",
             "legacy": false,
             "metadata": {
-              "code_hash": "f26e89c1d1ca",
+              "code_hash": "73e28dad0b4b",
               "component_class_name": "SQLComponent",
               "dependencies": {
                 "dependencies": [
@@ -1339,7 +1339,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "45974e6b1909",
+              "code_hash": "e1a6adcd2554",
               "component_class_name": "ChatInput",
               "dependencies": {
                 "dependencies": [

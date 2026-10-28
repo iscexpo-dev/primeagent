@@ -7,8 +7,8 @@ import pytest
 from primeagent.services.auth import utils as auth_utils
 from primeagent.services.base import Service
 from primeagent.services.schema import ServiceType
-from wfx.services.manager import get_service_manager
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.services.manager import get_service_manager
 
 
 class DummyAuthService(Service):

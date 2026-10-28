@@ -11,9 +11,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from primeagent.services.connection.oauth import providers
 from primeagent.services.connection.oauth.config import OAuthError, OAuthRegistration, OAuthSettings
+from pydantic import SecretStr, ValidationError
 from wfx.log.logger import _build_redact_processor
 from wfx.utils.env_var_security import safe_getenv
-from pydantic import SecretStr, ValidationError
 
 _INVALID_AUTH_ORIGIN = "https://user:password@localhost"  # pragma: allowlist secret - invalid URL test
 

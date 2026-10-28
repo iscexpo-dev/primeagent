@@ -12,8 +12,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from wfx.log.logger import logger
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.api.schemas import UploadFileResponse
 from primeagent.api.utils import CurrentActiveUser, DbSession, build_content_disposition

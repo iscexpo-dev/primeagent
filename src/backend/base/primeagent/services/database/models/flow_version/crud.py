@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from wfx.log import logger
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import col, delete, func, select, update
+from wfx.log import logger
 
 from primeagent.services.database.models.deployment.model import Deployment
 from primeagent.services.database.models.flow_version.exceptions import (

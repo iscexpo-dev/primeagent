@@ -13,11 +13,11 @@ from primeagent.services.connection import service as connection_service
 from primeagent.services.database.models.connection import Connection, ConnectionCreate
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import get_connection_resolver_service, session_scope
+from sqlalchemy import event
 from wfx.integrations.errors import ConnectionNotAuthorizedError, ConnectionUnresolvedError
 from wfx.integrations.models import ConnectionRef, ConnectionResolutionRequest
 from wfx.services.authorization.base import ExecutionPrincipal, ResourceVisibilityScope
 from wfx.services.deps import get_connection_resolver
-from sqlalchemy import event
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

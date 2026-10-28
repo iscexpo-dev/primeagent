@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 from uuid import UUID
 
-from wfx.services.adapters.deployment.schema import DeploymentType
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -17,6 +16,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from wfx.services.adapters.deployment.schema import DeploymentType
 
 from primeagent.api.v1.schemas.deployments import ValidatedUrl
 from primeagent.services.database.models.deployment_provider_account.utils import validate_provider_url

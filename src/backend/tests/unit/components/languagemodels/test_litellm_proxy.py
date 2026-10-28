@@ -5,9 +5,9 @@ import pytest
 
 pytest.importorskip("wfx_bundles")
 
+from pydantic.v1 import SecretStr
 from wfx.components.litellm.litellm_proxy import LiteLLMProxyComponent
 from wfx.inputs.inputs import IntInput, SecretStrInput, SliderInput, StrInput
-from pydantic.v1 import SecretStr
 
 from tests.base import ComponentTestBaseWithoutClient
 

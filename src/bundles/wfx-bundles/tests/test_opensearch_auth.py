@@ -6,9 +6,9 @@ import pytest
 
 pytest.importorskip("wfx_bundles")
 
+from pydantic import SecretStr
 from wfx_bundles.elastic.opensearch import OpenSearchVectorStoreComponent
 from wfx_bundles.elastic.opensearch_multimodal import OpenSearchVectorStoreComponentMultimodalMultiEmbedding
-from pydantic import SecretStr
 
 _TEST_JWT = "header.payload.signature"  # pragma: allowlist secret
 _COMPONENT_CLASSES = (

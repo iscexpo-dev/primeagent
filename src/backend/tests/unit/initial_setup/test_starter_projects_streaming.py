@@ -20,7 +20,9 @@ from pathlib import Path
 
 import pytest
 
-STARTER_PROJECTS_DIR = Path(__file__).resolve().parents[3] / "base" / "primeagent" / "initial_setup" / "starter_projects"
+STARTER_PROJECTS_DIR = (
+    Path(__file__).resolve().parents[3] / "base" / "primeagent" / "initial_setup" / "starter_projects"
+)
 BUNDLE_STARTER_PROJECTS_DIR = Path(__file__).resolve().parents[4] / "bundles"
 
 

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 from wfx.extension.migration.schema import (
     MIGRATION_SCHEMA_VERSION,
     AmbiguousBareName,
     MigrationEntry,
     MigrationTable,
 )
-from pydantic import ValidationError
 
 
 @pytest.mark.unit

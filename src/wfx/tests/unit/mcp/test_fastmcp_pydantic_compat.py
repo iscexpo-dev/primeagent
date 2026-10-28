@@ -1,11 +1,11 @@
 from unittest.mock import MagicMock
 
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import Settings
 from wfx.base.mcp.pydantic_compat import (
     _ensure_fastmcp_settings_model_ready,
     ensure_fastmcp_settings_ready,
 )
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.server import Settings
 
 
 def test_complete_fastmcp_settings_model_is_not_rebuilt() -> None:

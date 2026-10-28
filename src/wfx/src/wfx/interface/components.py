@@ -24,8 +24,8 @@ from wfx.extension import (
     format_extension_error,
     load_dev_extensions,
     load_installed_extensions,
-    load_wfx_bundles_extensions,
     load_seed_extensions,
+    load_wfx_bundles_extensions,
 )
 from wfx.extension.bundle_registry import BundleRecord, get_default_registry
 from wfx.extension.integration_conflicts import IntegrationConflictError

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from microsoft_testkit import RecordingResolver, TransportRecorder, credential
+from test_graph_client import lease_for
 from wfx.integrations.errors import (
     ActionUnsupportedError,
     AuthExpiredError,
@@ -12,8 +14,6 @@ from wfx.integrations.errors import (
     RateLimitedError,
 )
 from wfx_microsoft.graph import GraphClient, integration_error_for_response
-from microsoft_testkit import RecordingResolver, TransportRecorder, credential
-from test_graph_client import lease_for
 
 SPO_LICENSE_BODY = {"error": {"code": "BadRequest", "message": "Tenant does not have a SPO license."}}
 

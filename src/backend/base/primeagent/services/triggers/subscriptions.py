@@ -32,8 +32,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
-from wfx.log.logger import logger
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.connection.model import Connection
 from primeagent.services.database.models.connection.schemas import PersistedConnectionStatus

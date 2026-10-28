@@ -2214,7 +2214,9 @@ class MCPStdioClient(_PooledSessionClient):
         safe_env = _validate_mcp_stdio_env(env)
         if AGENTIC_MCP_MODULE in command or any(AGENTIC_MCP_MODULE in arg for arg in args):
             if not current_user_id:
-                msg = "The Primeagent agentic MCP server requires an authenticated user context and cannot be used here."
+                msg = (
+                    "The Primeagent agentic MCP server requires an authenticated user context and cannot be used here."
+                )
                 raise ValueError(msg)
             # Bind the trusted identity only after validating the tenant-controlled
             # environment. Supplying this key in the config is rejected above.

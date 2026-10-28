@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 from wfx.schema.content_block import ContentBlock
 from wfx.schema.content_types import (
     AudioContent,
@@ -16,7 +17,6 @@ from wfx.schema.content_types import (
     UsageContent,
     VideoContent,
 )
-from pydantic import ValidationError
 
 
 class TestBaseContent:

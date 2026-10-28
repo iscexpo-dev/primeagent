@@ -1,5 +1,5 @@
-from wfx.schema.data import JSON
 from pydantic import Field
+from wfx.schema.data import JSON
 
 
 class TestDataSetAttrPropertyDescriptor:

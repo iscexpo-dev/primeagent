@@ -10,9 +10,9 @@ from __future__ import annotations
 import uuid
 from uuid import UUID
 
+from sqlalchemy.orm.attributes import flag_modified
 from wfx.log import logger
 from wfx.run.hitl import reroute_decision_on_timeout
-from sqlalchemy.orm.attributes import flag_modified
 
 from primeagent.services.deps import get_job_service
 

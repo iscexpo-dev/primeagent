@@ -12,8 +12,8 @@ pytest.importorskip("wfx_google")
 
 from google.auth.exceptions import RefreshError
 from google.oauth2.service_account import Credentials
-from wfx_google.components.google.google_bq_sql_executor import BigQueryExecutorComponent
 from pandas import DataFrame
+from wfx_google.components.google.google_bq_sql_executor import BigQueryExecutorComponent
 
 from tests.base import ComponentTestBaseWithoutClient
 

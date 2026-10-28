@@ -1559,8 +1559,8 @@ class TestFieldNameConversion:
 
     def test_json_schema_alias_functionality(self):
         """Test that JSON schema creation includes aliases for camelCase field names."""
-        from wfx.schema.json_schema import create_input_schema_from_json_schema
         from pydantic import ValidationError
+        from wfx.schema.json_schema import create_input_schema_from_json_schema
 
         # Create a JSON schema with snake_case field names
         test_schema = {
@@ -2847,9 +2847,9 @@ class TestMCPStructuredTool:
 
     def test_convert_parameters_flattened_input_produces_nested(self):
         """Test flattened keys (params.search, params.per_page) become nested structure."""
+        from pydantic import Field, create_model
         from wfx.base.agents.utils import maybe_unflatten_dict
         from wfx.base.mcp.util import _camel_to_snake
-        from pydantic import Field, create_model
 
         schema = create_model(
             "ForemanSchema",

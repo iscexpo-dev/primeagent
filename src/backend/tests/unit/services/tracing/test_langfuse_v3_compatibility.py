@@ -699,8 +699,8 @@ class TestLangfuseIsolatedTracerProvider:
 
     def test_shared_client_uses_isolated_tracer_provider(self):
         """``Langfuse(...)`` must receive an explicit, non-global ``TracerProvider``."""
-        from primeagent.services.tracing.langfuse import _get_langfuse_client
         from opentelemetry.sdk.trace import TracerProvider
+        from primeagent.services.tracing.langfuse import _get_langfuse_client
 
         with patch("langfuse.Langfuse") as mock_langfuse_class:
             mock_langfuse_class.return_value = MagicMock()
@@ -722,8 +722,8 @@ class TestLangfuseIsolatedTracerProvider:
         emit HTTP request spans into Langfuse, which is the symptom reported
         in #13319.
         """
-        from primeagent.services.tracing.langfuse import _get_langfuse_client
         from opentelemetry import trace as otel_trace_api
+        from primeagent.services.tracing.langfuse import _get_langfuse_client
 
         before = otel_trace_api.get_tracer_provider()
 

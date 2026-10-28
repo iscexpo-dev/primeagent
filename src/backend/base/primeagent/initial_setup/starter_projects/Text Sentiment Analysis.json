@@ -207,7 +207,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "e3714ffe5d15",
+              "code_hash": "8cde8f057646",
               "component_class_name": "PromptComponent",
               "dependencies": {
                 "dependencies": [
@@ -394,7 +394,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "0aab1c78e1dc",
+              "code_hash": "76d4a69dd1da",
               "component_class_name": "ChatOutput",
               "dependencies": {
                 "dependencies": [
@@ -679,7 +679,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "0aab1c78e1dc",
+              "code_hash": "76d4a69dd1da",
               "component_class_name": "ChatOutput",
               "dependencies": {
                 "dependencies": [
@@ -983,7 +983,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "196bbc1a65f8",
+              "code_hash": "6f6f3d8790e1",
               "component_class_name": "FileComponent",
               "dependencies": {
                 "dependencies": [
@@ -1693,7 +1693,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "9fcfe75813e7",
+              "code_hash": "d429ce481de6",
               "component_class_name": "AgentComponent",
               "dependencies": {
                 "dependencies": [
@@ -2449,7 +2449,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "9fcfe75813e7",
+              "code_hash": "d429ce481de6",
               "component_class_name": "AgentComponent",
               "dependencies": {
                 "dependencies": [
@@ -3205,7 +3205,7 @@
             "legacy": false,
             "lf_version": "1.10.0",
             "metadata": {
-              "code_hash": "9fcfe75813e7",
+              "code_hash": "d429ce481de6",
               "component_class_name": "AgentComponent",
               "dependencies": {
                 "dependencies": [

@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 
 import pytest
-from wfx.__main__ import app
 from typer.testing import CliRunner
+from wfx.__main__ import app
 
 runner = CliRunner()
 

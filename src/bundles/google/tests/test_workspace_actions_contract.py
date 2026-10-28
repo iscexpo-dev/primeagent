@@ -19,8 +19,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
-import wfx_google.components.google as google_bundle
 import pytest
+import wfx_google.components.google as google_bundle
 from conftest import (
     FAKE_ACCESS_TOKEN,
     FAKE_REFRESHED_TOKEN,

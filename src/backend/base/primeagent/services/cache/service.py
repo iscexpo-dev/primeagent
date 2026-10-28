@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import Generic, Union
 
 import dill
+from typing_extensions import override
 from wfx.log.logger import logger
 from wfx.services.cache.utils import CACHE_MISS
 from wfx.services.settings.utils import read_secret_from_file, set_secure_permissions
-from typing_extensions import override
 
 from primeagent.services.cache.base import (
     AsyncBaseCacheService,

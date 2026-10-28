@@ -268,7 +268,9 @@ class TestWfxReexportModules:
                         attr = getattr(lf_module, item)
                         assert attr is not None, f"Attribute {item} is None in {primeagent_module}"
                     except AttributeError:
-                        pytest.fail(f"Complex module {primeagent_module} missing expected attribute {item} from __all__")
+                        pytest.fail(
+                            f"Complex module {primeagent_module} missing expected attribute {item} from __all__"
+                        )
 
                 successful_imports += 1
 

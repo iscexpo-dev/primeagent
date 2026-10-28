@@ -3,10 +3,10 @@ from typing import Any
 from uuid import UUID
 
 from langchain_core.messages import BaseMessage
-from wfx.base.data.utils import IMG_FILE_TYPES, TEXT_FILE_TYPES
-from wfx.utils.constants import MESSAGE_SENDER_AI, MESSAGE_SENDER_NAME_AI
 from pydantic import BaseModel, field_validator, model_validator
 from typing_extensions import TypedDict
+from wfx.base.data.utils import IMG_FILE_TYPES, TEXT_FILE_TYPES
+from wfx.utils.constants import MESSAGE_SENDER_AI, MESSAGE_SENDER_NAME_AI
 
 
 class File(TypedDict):

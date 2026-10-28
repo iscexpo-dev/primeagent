@@ -8,8 +8,8 @@ from functools import cache
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from wfx.log.logger import logger
 from typing_extensions import override
+from wfx.log.logger import logger
 
 from primeagent.serialization.serialization import serialize
 from primeagent.services.tracing.base import BaseTracer

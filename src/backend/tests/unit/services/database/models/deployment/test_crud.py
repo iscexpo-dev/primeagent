@@ -29,12 +29,12 @@ from primeagent.services.database.models.flow_version_deployment_attachment.mode
 )
 from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.database.models.user.model import User
-from wfx.services.adapters.deployment.schema import DeploymentType
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.services.adapters.deployment.schema import DeploymentType
 
 _TEST_PASSWORD = "hashed"  # noqa: S105  # pragma: allowlist secret
 

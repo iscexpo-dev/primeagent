@@ -23,6 +23,7 @@ from primeagent.api.v1.schemas.deployments import (
     DeploymentUpdateRequest,
     RunCreateRequest,
 )
+from pydantic import BaseModel
 from wfx.services.adapters.deployment.payloads import DeploymentPayloadSchemas
 from wfx.services.adapters.deployment.schema import (
     DeploymentCreateResult,
@@ -38,7 +39,6 @@ from wfx.services.adapters.deployment.schema import (
 )
 from wfx.services.adapters.payload import AdapterPayloadValidationError, PayloadSlot, PayloadSlotPolicy
 from wfx.services.adapters.schema import AdapterType
-from pydantic import BaseModel
 
 
 class _ApiSpec(BaseModel):

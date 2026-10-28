@@ -5,6 +5,8 @@ from urllib.parse import parse_qsl, urlsplit
 
 import certifi
 from langchain_mongodb import MongoDBAtlasVectorSearch
+from pymongo.collection import Collection
+from pymongo.operations import SearchIndexModel
 from wfx.base.vectorstores.model import LCVectorStoreComponent, check_cached_vector_store
 from wfx.helpers.data import docs_to_data
 from wfx.io import BoolInput, DropdownInput, HandleInput, IntInput, SecretStrInput, StrInput
@@ -17,8 +19,6 @@ from wfx.utils.ssrf_protection import (
     is_ssrf_protection_enabled,
     validate_connector_hostname_for_ssrf,
 )
-from pymongo.collection import Collection
-from pymongo.operations import SearchIndexModel
 
 
 class MongoVectorStoreComponent(LCVectorStoreComponent):

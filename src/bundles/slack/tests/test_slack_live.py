@@ -27,6 +27,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 from wfx.integrations.models import ConnectionAccount, ResolvedCredential
 from wfx.services.authorization.base import ExecutionPrincipal
 from wfx_slack import (
@@ -38,7 +39,6 @@ from wfx_slack import (
     SlackSearchComponent,
     SlackSendAsUserComponent,
 )
-from pydantic import SecretStr
 
 pytestmark = pytest.mark.api_key_required
 

@@ -1,3 +1,4 @@
+from pydantic.v1 import SecretStr
 from wfx.base.models.groq_constants import GROQ_MODELS
 from wfx.base.models.groq_model_discovery import get_groq_models
 from wfx.base.models.model import LCModelComponent
@@ -6,7 +7,6 @@ from wfx.field_typing import LanguageModel
 from wfx.field_typing.range_spec import RangeSpec
 from wfx.io import BoolInput, DropdownInput, IntInput, MessageTextInput, SecretStrInput, SliderInput
 from wfx.log.logger import logger
-from pydantic.v1 import SecretStr
 
 DEFAULT_GROQ_API_BASE = "https://api.groq.com"
 

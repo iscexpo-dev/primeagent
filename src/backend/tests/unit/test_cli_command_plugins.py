@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import typer
-from wfx.cli import command_plugins
 from typer.testing import CliRunner
+from wfx.cli import command_plugins
 
 
 @dataclass

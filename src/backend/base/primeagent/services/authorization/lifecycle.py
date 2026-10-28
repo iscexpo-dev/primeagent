@@ -9,12 +9,12 @@ from wfx.log.logger import logger
 if TYPE_CHECKING:
     from uuid import UUID
 
+    from sqlmodel.ext.asyncio.session import AsyncSession
     from wfx.services.authorization.base import (
         AuthorizationMutation,
         AuthorizationMutationKind,
         BaseAuthorizationService,
     )
-    from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 async def acquire_identity_mutation_lock(

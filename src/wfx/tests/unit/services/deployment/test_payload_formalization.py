@@ -8,6 +8,7 @@ from enum import Enum
 from uuid import UUID
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 from wfx.services.adapters.deployment.payloads import DeploymentPayloadSchemas
 from wfx.services.adapters.deployment.schema import (
     ConfigListParams,
@@ -32,7 +33,6 @@ from wfx.services.adapters.payload import (
     PayloadSlot,
     PayloadSlotPolicy,
 )
-from pydantic import BaseModel, ConfigDict
 
 
 class _SpecModel(BaseModel):

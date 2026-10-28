@@ -19,6 +19,9 @@ import websockets
 from cryptography.fernet import InvalidToken
 from elevenlabs import ElevenLabs
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from sqlmodel import select
+from starlette.websockets import WebSocket, WebSocketDisconnect
+from websockets.asyncio.client import ClientConnection
 from wfx.log import logger
 from wfx.observability import execution_protocol
 from wfx.schema.schema import InputValueRequest
@@ -29,9 +32,6 @@ from wfx.services.model_provider_policy import (
     aresolve_model_provider_policy,
 )
 from wfx.utils.secrets import secret_value_to_str
-from sqlmodel import select
-from starlette.websockets import WebSocket, WebSocketDisconnect
-from websockets.asyncio.client import ClientConnection
 
 from primeagent.api.utils import CurrentActiveUser, DbSession, release_db_transaction
 from primeagent.api.v1.chat import build_flow_and_stream

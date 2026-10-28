@@ -6,8 +6,8 @@ from typing import Any
 
 from gunicorn import glogging
 from gunicorn.app.base import BaseApplication
-from wfx.log.logger import InterceptHandler, get_file_handler, structlog_routes_to_stdlib
 from uvicorn.workers import UvicornWorker
+from wfx.log.logger import InterceptHandler, get_file_handler, structlog_routes_to_stdlib
 
 
 class PrimeagentUvicornWorker(UvicornWorker):

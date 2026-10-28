@@ -29,7 +29,11 @@ from primeagent.services.database.models.trigger.schemas import TriggerCatchupPo
 from primeagent.services.deps import get_settings_service, session_scope
 from primeagent.services.triggers import leases, ledger
 from primeagent.services.triggers.constants import SCHEDULER_LEASE_NAME, TICK_DEDUPE_PREFIX
-from primeagent.services.triggers.schedule_config import DEFAULT_TIMEZONE, InvalidScheduleError, validate_schedule_config
+from primeagent.services.triggers.schedule_config import (
+    DEFAULT_TIMEZONE,
+    InvalidScheduleError,
+    validate_schedule_config,
+)
 
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession

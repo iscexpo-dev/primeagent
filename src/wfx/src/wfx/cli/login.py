@@ -168,7 +168,9 @@ def login_command(
             err_console.print("[bold]How to fix:[/bold]")
             err_console.print("  • Make sure your Primeagent instance is running")
             err_console.print("  • Check the URL in your .wfx/environments.yaml")
-            err_console.print("  • If running locally: [bold]primeagent run[/bold] or [bold]wfx serve <flow.json>[/bold]")
+            err_console.print(
+                "  • If running locally: [bold]primeagent run[/bold] or [bold]wfx serve <flow.json>[/bold]"
+            )
             raise typer.Exit(1)
 
         # Generic HTTP or other error

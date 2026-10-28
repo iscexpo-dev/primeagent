@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from cryptography.fernet import InvalidToken
-from wfx.log.logger import logger
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.services.auth import utils as auth_utils
 from primeagent.services.database.models.deployment.orm_guards import ensure_provider_account_identity_immutable

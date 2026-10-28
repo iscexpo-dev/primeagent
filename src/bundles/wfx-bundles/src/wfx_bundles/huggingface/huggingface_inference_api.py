@@ -2,14 +2,14 @@ from urllib.parse import urlparse
 
 import httpx
 from langchain_community.embeddings.huggingface import HuggingFaceInferenceAPIEmbeddings
-from wfx.base.embeddings.model import LCEmbeddingsModel
-from wfx.field_typing import Embeddings
-from wfx.io import MessageTextInput, Output, SecretStrInput
-from wfx.utils.ssrf_httpx import ssrf_safe_httpx_get, validate_url_for_ssrf_or_raise
 
 # Next update: use langchain_huggingface
 from pydantic import SecretStr
 from tenacity import retry, stop_after_attempt, wait_fixed
+from wfx.base.embeddings.model import LCEmbeddingsModel
+from wfx.field_typing import Embeddings
+from wfx.io import MessageTextInput, Output, SecretStrInput
+from wfx.utils.ssrf_httpx import ssrf_safe_httpx_get, validate_url_for_ssrf_or_raise
 
 
 class HuggingFaceInferenceAPIEmbeddingsComponent(LCEmbeddingsModel):

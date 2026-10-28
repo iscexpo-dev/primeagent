@@ -11,9 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from wfx.log.logger import logger
 from sqlalchemy import delete, update
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.api.utils.kb_helpers import _coerce_backend_config_value
 from primeagent.services.database.models.knowledge_base.model import KnowledgeBaseRecord

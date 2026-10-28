@@ -8,6 +8,8 @@ from uuid import UUID
 
 from fastapi import HTTPException, Query, status
 from fastapi_pagination import Params
+from sqlalchemy import and_, literal, union_all
+from sqlmodel import col, func, select
 from wfx.log.logger import logger
 from wfx.services.adapters.deployment.exceptions import (
     DeploymentNotFoundError,
@@ -28,8 +30,6 @@ from wfx.services.adapters.deployment.schema import (
 )
 from wfx.services.deps import get_deployment_adapter
 from wfx.services.interfaces import DeploymentServiceProtocol
-from sqlalchemy import and_, literal, union_all
-from sqlmodel import col, func, select
 
 from primeagent.api.v1.mappers.deployments.contracts import ProviderSnapshotBinding
 from primeagent.api.v1.mappers.deployments.sync import (

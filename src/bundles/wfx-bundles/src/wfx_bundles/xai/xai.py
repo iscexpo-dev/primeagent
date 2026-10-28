@@ -1,5 +1,7 @@
 import httpx
 from langchain_openai import ChatOpenAI
+from pydantic.v1 import SecretStr
+from typing_extensions import override
 from wfx.base.models.model import LCModelComponent
 from wfx.base.models.provider_ssrf import ensure_credential_endpoint_allowed
 from wfx.field_typing import LanguageModel
@@ -15,8 +17,6 @@ from wfx.inputs.inputs import (
 )
 from wfx.utils.ssrf_httpx import ssrf_protected_openai_clients_for_url, ssrf_safe_httpx_get
 from wfx.utils.ssrf_protection import SSRFProtectionError
-from pydantic.v1 import SecretStr
-from typing_extensions import override
 
 XAI_DEFAULT_MODELS = ["grok-2-latest"]
 XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1"

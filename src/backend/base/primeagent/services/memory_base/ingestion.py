@@ -10,8 +10,8 @@ import uuid
 from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
 from typing import TYPE_CHECKING
 
-from wfx.log.logger import logger
 from sqlmodel import col, func, select
+from wfx.log.logger import logger
 
 from primeagent.api.utils.kb_helpers import (
     backend_for_name,
@@ -38,8 +38,8 @@ from primeagent.services.memory_base.provider_scope import (
 from primeagent.services.memory_base.task import IngestionRequest, ingest_memory_task
 
 if TYPE_CHECKING:
-    from wfx.base.knowledge_bases.backends.base import BaseVectorStoreBackend
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.base.knowledge_bases.backends.base import BaseVectorStoreBackend
 
 
 async def trigger_ingestion(

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import SecretStr
 from wfx.cli.validation import validate_connection_refs_for_env
 from wfx.custom.custom_component.component import Component
 from wfx.graph.graph.base import Graph
@@ -21,7 +22,6 @@ from wfx.io import BoolInput
 from wfx.run._defaults import apply_run_defaults
 from wfx.services.authorization.base import ExecutionPrincipal
 from wfx.services.schema import ServiceType
-from pydantic import SecretStr
 
 if TYPE_CHECKING:
     from pathlib import Path

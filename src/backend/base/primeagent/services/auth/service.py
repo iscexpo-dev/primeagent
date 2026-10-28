@@ -14,11 +14,11 @@ from uuid import UUID
 import jwt
 from fastapi import HTTPException, Request, WebSocketException, status
 from jwt import InvalidTokenError
+from sqlalchemy.exc import IntegrityError
 from wfx.log.logger import logger
 from wfx.services.auth.base import BaseAuthService
 from wfx.services.model_provider_policy import set_current_model_provider_policy_context
 from wfx.services.settings.constants import DEFAULT_SUPERUSER, LEGACY_DEFAULT_SUPERUSER_PASSWORD
-from sqlalchemy.exc import IntegrityError
 
 from primeagent.helpers.user import get_user_by_flow_id_or_endpoint_name
 from primeagent.services.auth.constants import AUTO_LOGIN_ERROR, AUTO_LOGIN_SESSION_WARNING, AUTO_LOGIN_WARNING
@@ -294,8 +294,8 @@ async def _safe_audit_directory_reconciliation(
 
 if TYPE_CHECKING:
     from cryptography.fernet import Fernet, MultiFernet
-    from wfx.services.settings.service import SettingsService
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.settings.service import SettingsService
 
 
 class AuthService(BaseAuthService):

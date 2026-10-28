@@ -28,11 +28,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlmodel import apaginate
+from pydantic import BaseModel
+from sqlmodel import col, select
 from wfx.base.knowledge_bases.backends.naming import StorageRoutingNotAllowedError
 from wfx.schema.legacy_render import render_v1_content_blocks
 from wfx.services.model_provider_policy import ModelProviderPolicyError
-from pydantic import BaseModel
-from sqlmodel import col, select
 
 from primeagent.api.utils import CurrentActiveUser, knowledge_base_service
 from primeagent.services.authorization import KnowledgeBaseAction, ensure_knowledge_base_permission

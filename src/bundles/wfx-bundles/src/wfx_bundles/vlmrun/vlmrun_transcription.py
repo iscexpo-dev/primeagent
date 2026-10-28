@@ -1,6 +1,7 @@
 from pathlib import Path
 from urllib.parse import urlparse
 
+from loguru import logger
 from wfx.custom.custom_component.component import Component
 from wfx.io import (
     DropdownInput,
@@ -11,7 +12,6 @@ from wfx.io import (
     SecretStrInput,
 )
 from wfx.schema.data import Data
-from loguru import logger
 
 
 class VLMRunTranscription(Component):

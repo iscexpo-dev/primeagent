@@ -15,10 +15,10 @@ from primeagent.services.auth.utils import get_current_active_superuser
 from primeagent.services.database.models.api_key.model import ApiKey
 from primeagent.services.database.models.catalog_policy import CatalogPolicyRule
 from primeagent.services.policy_bundle import PolicyBundleRevisionConflictError
+from sqlmodel import select
 from wfx.services.catalog_policy import CatalogPolicySnapshot, CatalogPolicyUpdate
 from wfx.services.deps import session_scope_readonly
 from wfx.utils.component_aliases import ComponentIdentityIndex
-from sqlmodel import select
 
 
 class _StubCatalogPolicy:

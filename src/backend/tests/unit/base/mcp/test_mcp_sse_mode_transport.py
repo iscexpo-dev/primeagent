@@ -12,6 +12,12 @@ from contextlib import asynccontextmanager, suppress
 import httpx
 import pytest
 import uvicorn
+from mcp import types
+from mcp.server import Server
+from mcp.server.sse import SseServerTransport
+from sse_starlette.sse import AppStatus
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 from wfx.base.mcp.util import (
     MCPStdioClient,
     MCPStreamableHttpClient,
@@ -19,12 +25,6 @@ from wfx.base.mcp.util import (
     _should_attempt_sse_after_streamable_failure,
     update_tools,
 )
-from mcp import types
-from mcp.server import Server
-from mcp.server.sse import SseServerTransport
-from sse_starlette.sse import AppStatus
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
 
 
 class LegacySseServer:

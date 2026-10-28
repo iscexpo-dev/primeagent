@@ -22,6 +22,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 import structlog
+from loguru import logger as loguru_logger
 from wfx.log.logger import (
     LOG_LEVEL_MAP,
     VALID_LOG_LEVELS,
@@ -35,7 +36,6 @@ from wfx.log.logger import (
     setup_uvicorn_logger,
     structlog_routes_to_stdlib,
 )
-from loguru import logger as loguru_logger
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 

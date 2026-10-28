@@ -128,7 +128,9 @@ def test_warm_graph_has_a_clean_import_path() -> None:
         [
             sys.executable,
             "-c",
-            ("import sys; import primeagent.api.warm_graph; assert 'primeagent.api.v1' not in sys.modules; print('clean')"),
+            (
+                "import sys; import primeagent.api.warm_graph; assert 'primeagent.api.v1' not in sys.modules; print('clean')"
+            ),
         ],
         cwd=repo_root,
         env=env,

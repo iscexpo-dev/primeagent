@@ -6,8 +6,8 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
-from wfx.__main__ import app
 from typer.testing import CliRunner
+from wfx.__main__ import app
 
 if TYPE_CHECKING:
     from pathlib import Path

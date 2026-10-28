@@ -18,9 +18,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 from langchain_oracledb.vectorstores.oraclevs import drop_table_purge
-from wfx.schema.data import Data
-from wfx_oracle.components.oracle import OracleVectorStoreComponent
-from wfx_oracle.components.oracle.connection import build_connection_params, split_credentialized_dsn
 from oracle_test_utils import (
     get_oracle_connection_inputs,
     get_oracle_connection_params,
@@ -28,6 +25,9 @@ from oracle_test_utils import (
     get_oracle_test_connection_inputs,
 )
 from pydantic import BaseModel
+from wfx.schema.data import Data
+from wfx_oracle.components.oracle import OracleVectorStoreComponent
+from wfx_oracle.components.oracle.connection import build_connection_params, split_credentialized_dsn
 
 
 def _expected_connection_params(kwargs: dict[str, Any]) -> dict[str, Any]:

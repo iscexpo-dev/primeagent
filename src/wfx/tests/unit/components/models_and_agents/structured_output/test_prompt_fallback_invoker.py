@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 from wfx.components.models_and_agents.structured_output.prompt_fallback_invoker import (
     parse_and_validate_fallback_content,
 )
-from pydantic import BaseModel
 
 
 class _Person(BaseModel):

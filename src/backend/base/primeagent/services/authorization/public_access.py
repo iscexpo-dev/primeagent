@@ -15,6 +15,8 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, status
+from pydantic import BaseModel, Field
+from sqlmodel import select
 from wfx.log.logger import logger
 from wfx.services.authorization import (
     PUBLIC_ANONYMOUS_ACTOR_ID,
@@ -23,8 +25,6 @@ from wfx.services.authorization import (
     PublicResourceAction,
 )
 from wfx.services.deps import session_scope_readonly
-from pydantic import BaseModel, Field
-from sqlmodel import select
 
 from primeagent.services.authorization.audit import AUDIT_ALLOW, AUDIT_DENY, audit_decision
 from primeagent.services.authorization.guards import _resolve_authz_domain

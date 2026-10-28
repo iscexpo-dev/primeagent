@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from sqlmodel import select
 from wfx.components.files_and_knowledge._filesystem_isolation import load_isolation_config
 from wfx.components.files_and_knowledge._filesystem_namespace import compute_user_namespace
 from wfx.log.logger import logger
@@ -24,7 +25,6 @@ from wfx.utils.end_user_storage import (
     end_user_folder_segment,
     forget_end_user_folder,
 )
-from sqlmodel import select
 
 from primeagent.services.data_subjects.knowledge_base_steps import builder_directories, builder_upgrade_runs
 from primeagent.services.data_subjects.memory_base_storage import KIND_MEMORY_BASE, drop_memory_base

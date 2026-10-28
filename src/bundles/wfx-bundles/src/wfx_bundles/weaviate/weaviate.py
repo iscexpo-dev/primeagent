@@ -2,12 +2,12 @@ from urllib.parse import urlparse
 
 import weaviate
 from langchain_weaviate import WeaviateVectorStore
+from weaviate.auth import AuthApiKey
 from wfx.base.vectorstores.model import LCVectorStoreComponent, check_cached_vector_store
 from wfx.helpers.data import docs_to_data
 from wfx.io import BoolInput, HandleInput, IntInput, SecretStrInput, StrInput
 from wfx.schema.data import Data
 from wfx.utils.ssrf_protection import validate_connector_url_for_ssrf
-from weaviate.auth import AuthApiKey
 
 # Weaviate Cloud hostnames end with these suffixes. For those the v4 client
 # resolves the gRPC endpoint internally, so we avoid guessing a gRPC host/port.

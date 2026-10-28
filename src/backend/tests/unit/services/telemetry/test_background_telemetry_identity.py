@@ -19,11 +19,11 @@ from primeagent.services.telemetry.context import (
     reset_current_telemetry_user,
     set_current_telemetry_user,
 )
-from wfx.services.telemetry.identity import get_hashed_user_id, get_installation_user_id
-from wfx.workflow.adapters import StreamAdapterContext, get_stream_adapter
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.services.telemetry.identity import get_hashed_user_id, get_installation_user_id
+from wfx.workflow.adapters import StreamAdapterContext, get_stream_adapter
 
 pytestmark = pytest.mark.no_blockbuster
 

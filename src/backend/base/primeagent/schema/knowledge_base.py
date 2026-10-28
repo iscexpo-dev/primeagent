@@ -1,8 +1,8 @@
 from datetime import datetime
 from typing import Any
 
-from wfx.base.knowledge_bases.backends import BackendType
 from pydantic import BaseModel, Field, field_validator, model_validator
+from wfx.base.knowledge_bases.backends import BackendType
 
 from primeagent.utils.kb_constants import MAX_CHUNK_OVERLAP, MAX_CHUNK_SIZE, MIN_CHUNK_OVERLAP, MIN_CHUNK_SIZE
 

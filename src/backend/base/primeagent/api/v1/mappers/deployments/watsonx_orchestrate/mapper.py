@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 from wfx.services.adapters.deployment.schema import (
     BaseDeploymentData,
     BaseDeploymentDataUpdate,
@@ -37,7 +38,6 @@ from wfx.services.adapters.payload import (
     PayloadSlotPolicy,
 )
 from wfx.services.adapters.schema import AdapterType
-from pydantic import ValidationError
 
 from primeagent.api.v1.mappers.deployments.base import (
     BaseDeploymentMapper,

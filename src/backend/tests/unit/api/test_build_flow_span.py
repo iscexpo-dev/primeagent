@@ -187,7 +187,9 @@ async def test_an_unknown_client_is_dropped_rather_than_recorded(
     """A caller must not be able to mint span attribute values."""
     span_exporter.clear()
     flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
-    build_response = await build_flow(client, flow_id, {**logged_in_headers, "x-primeagent-client": "not-a-real-client"})
+    build_response = await build_flow(
+        client, flow_id, {**logged_in_headers, "x-primeagent-client": "not-a-real-client"}
+    )
     events = await get_build_events(client, build_response["job_id"], logged_in_headers)
     await consume_and_assert_stream(events, build_response["job_id"])
 

@@ -248,10 +248,10 @@ class TestRootGenerationNestsUnderFlowTrace:
         import primeagent.services.tracing.langfuse as langfuse_module
         from langchain_core.messages import AIMessage, HumanMessage
         from langchain_core.outputs import ChatGeneration, LLMResult
-        from primeagent.services.tracing.langfuse import LangFuseTracer
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
         from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from primeagent.services.tracing.langfuse import LangFuseTracer
 
         exporter = InMemorySpanExporter()
         provider = TracerProvider()
@@ -402,14 +402,14 @@ class TestGraphRunNamesTraceAfterFlow:
         from unittest.mock import MagicMock
 
         import primeagent.services.tracing.langfuse as langfuse_module
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
         from primeagent.services.tracing.base import BaseTracer
         from primeagent.services.tracing.langfuse import LangFuseTracer
         from primeagent.services.tracing.service import TracingService
         from wfx.services.settings.base import Settings
         from wfx.services.settings.service import SettingsService
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
         class _InertTracer(BaseTracer):
             """Stands in for every non-Langfuse provider so only Langfuse is exercised."""

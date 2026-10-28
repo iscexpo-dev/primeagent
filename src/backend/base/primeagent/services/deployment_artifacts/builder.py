@@ -14,12 +14,12 @@ from functools import partial
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from sqlmodel import col, select
 from wfx.base.knowledge_bases.backends import is_local_backend
 from wfx.base.mcp.constants import GLOBAL_VARIABLE_PLACEHOLDER_PATTERN
 from wfx.base.models.provider_registry import model_component_provider_id, resolve_provider_id
 from wfx.helpers.base_model import coalesce_bool
 from wfx.integrations.models import ConnectionRef
-from sqlmodel import col, select
 
 from primeagent.services.auth.mcp_encryption import decrypt_mcp_config
 from primeagent.services.authorization import (

@@ -41,10 +41,10 @@ from primeagent.services.database.models.knowledge_base import KnowledgeBaseReco
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import get_settings_service, session_scope
 from primeagent.services.knowledge_base_storage.runtime import backend_for_record, operation, unfenced_backend
-from wfx.base.knowledge_bases.backends import BackendType, IngestedDocument, PostgresBackend, create_backend
-from wfx.base.knowledge_bases.backends.base import BackendConfigurationError
 from pydantic import SecretStr
 from typer.testing import CliRunner
+from wfx.base.knowledge_bases.backends import BackendType, IngestedDocument, PostgresBackend, create_backend
+from wfx.base.knowledge_bases.backends.base import BackendConfigurationError
 
 if TYPE_CHECKING:
     from pathlib import Path

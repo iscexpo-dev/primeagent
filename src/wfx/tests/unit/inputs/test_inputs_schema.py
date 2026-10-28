@@ -3,6 +3,7 @@ from types import NoneType
 from typing import Union
 
 import pytest
+from pydantic import BaseModel, Field, ValidationError
 from wfx.inputs.inputs import (
     BoolInput,
     DictInput,
@@ -20,7 +21,6 @@ from wfx.schema.json_schema import create_input_schema_from_json_schema
 from wfx.template import Input, Output
 from wfx.template.field.base import UNDEFINED
 from wfx.type_extraction.type_extraction import post_process_type
-from pydantic import BaseModel, Field, ValidationError
 
 
 @pytest.mark.parametrize("by_alias", [True, False])

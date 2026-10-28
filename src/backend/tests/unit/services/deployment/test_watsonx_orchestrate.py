@@ -9,6 +9,7 @@ from uuid import UUID
 
 import pytest
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 from wfx.services.adapters.deployment.exceptions import (
     AuthorizationError,
     CredentialResolutionError,
@@ -41,7 +42,6 @@ from wfx.services.adapters.deployment.schema import (
     SnapshotListParams,
     SnapshotListResult,
 )
-from pydantic import ValidationError
 
 try:
     from primeagent.services.adapters.deployment.watsonx_orchestrate import WatsonxOrchestrateDeploymentService
@@ -2924,7 +2924,9 @@ async def test_update_provider_data_rolls_back_mutated_tools_with_writable_paylo
 
 @pytest.mark.anyio
 async def test_update_provider_data_rolls_back_partially_created_raw_tools(monkeypatch):
-    core_tools_module = importlib.import_module("primeagent.services.adapters.deployment.watsonx_orchestrate.core.tools")
+    core_tools_module = importlib.import_module(
+        "primeagent.services.adapters.deployment.watsonx_orchestrate.core.tools"
+    )
 
     service = WatsonxOrchestrateDeploymentService(DummySettingsService())
     fake_connections = FakeConnectionsClient()
@@ -3011,7 +3013,9 @@ async def test_update_provider_data_rolls_back_partially_created_raw_tools(monke
 
 @pytest.mark.anyio
 async def test_create_provider_data_rolls_back_partially_created_raw_tools(monkeypatch):
-    core_tools_module = importlib.import_module("primeagent.services.adapters.deployment.watsonx_orchestrate.core.tools")
+    core_tools_module = importlib.import_module(
+        "primeagent.services.adapters.deployment.watsonx_orchestrate.core.tools"
+    )
 
     service = WatsonxOrchestrateDeploymentService(DummySettingsService())
     fake_connections = FakeConnectionsClient()
@@ -6978,10 +6982,10 @@ def test_build_primeagent_artifact_requirements_pin_wfx_first_line():
     Locks the bundle-split contract that the wxO runner installs a pinned wfx
     plus only the third-party packages dependency detection emits.
     """
+    from packaging.requirements import Requirement
     from primeagent.services.adapters.deployment.watsonx_orchestrate.core.tools import (
         build_primeagent_artifact_bytes,
     )
-    from packaging.requirements import Requirement
 
     tool = SimpleNamespace(__tool_spec__=SimpleNamespace(name="empty_tool"))
     artifact_bytes = build_primeagent_artifact_bytes(tool=tool, flow_definition={"data": {"nodes": [], "edges": []}})
@@ -8175,9 +8179,9 @@ async def test_verify_credentials_invalid_key_raises(monkeypatch):
 async def test_verify_credentials_instance_probe_forbidden(monkeypatch):
     """403 from wxO models probe maps to AuthorizationError (wrong instance for key)."""
     from ibm_watsonx_orchestrate_clients.tools.tool_client import ClientAPIException
+    from requests import Response
     from wfx.services.adapters.deployment.exceptions import AuthorizationError
     from wfx.services.adapters.deployment.schema import VerifyCredentials
-    from requests import Response
 
     class FakeTokenManager:
         def get_token(self):

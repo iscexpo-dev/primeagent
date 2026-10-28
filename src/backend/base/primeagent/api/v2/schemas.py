@@ -6,6 +6,7 @@
 # env/docker checks are byte-for-byte identical and can never drift. The allowlist/blocklist
 # constants are re-exported here for backwards compatibility with code that imported them from
 # this module before they were moved to wfx.
+from pydantic import BaseModel, ConfigDict, model_validator
 from wfx.base.mcp.security import (  # noqa: F401 - re-exported for backwards compatibility
     ALLOWED_MCP_COMMANDS,
     DANGEROUS_ENV_VARS,
@@ -17,7 +18,6 @@ from wfx.base.mcp.security import (  # noqa: F401 - re-exported for backwards co
     SHELL_WRAPPERS,
     validate_mcp_stdio_config,
 )
-from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class MCPServerConfig(BaseModel):

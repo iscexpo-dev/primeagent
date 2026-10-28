@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from functools import wraps
 
 from fastapi import BackgroundTasks, HTTPException, Response
+from sqlmodel import select
 from wfx.exceptions.tweaks import TweakRefusedError
 from wfx.graph.exceptions import GraphPausedException
 from wfx.graph.graph.base import Graph
@@ -16,7 +17,6 @@ from wfx.processing.process import process_tweaks_on_graph, validate_targeted_in
 from wfx.schema.legacy_render import project_payload_to_v1
 from wfx.schema.schema import InputValueRequest
 from wfx.utils.file_path_security import LocalFileAccessError
-from sqlmodel import select
 
 from primeagent.api.disconnect import DisconnectHandlerStreamingResponse
 from primeagent.api.utils import (

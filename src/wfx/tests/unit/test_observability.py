@@ -115,10 +115,10 @@ def test_shutdown_flushes_buffered_spans():
     uvicorn and gunicorn die by signal and never run the SDK's atexit flush, so an explicit
     shutdown is the only thing that gets the in-flight batch out on restart and pod eviction.
     """
-    from wfx.observability import ApplicationTelemetry
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from wfx.observability import ApplicationTelemetry
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -193,9 +193,9 @@ def test_span_filter_drops_llm_scopes():
     In-process because it wires its own provider with an in-memory exporter rather than
     installing the global one.
     """
-    from wfx.observability import APPLICATION_TRACER_NAME, ApplicationOnlySpanProcessor
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from wfx.observability import APPLICATION_TRACER_NAME, ApplicationOnlySpanProcessor
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -211,9 +211,9 @@ def test_span_filter_drops_llm_scopes():
 
 
 def _export_application_span(attributes, *, span_limits=None):
-    from wfx.observability import APPLICATION_TRACER_NAME, ApplicationOnlySpanProcessor
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from wfx.observability import APPLICATION_TRACER_NAME, ApplicationOnlySpanProcessor
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider(span_limits=span_limits)
@@ -361,8 +361,8 @@ def test_shutdown_leaves_an_adopted_meter_provider_alone():
     Shutting it down here would tear down the host's metrics pipeline in an embedded or
     in-process-restart scenario.
     """
-    from wfx.observability import ApplicationTelemetry
     from opentelemetry.sdk.metrics import MeterProvider
+    from wfx.observability import ApplicationTelemetry
 
     foreign = MeterProvider()
     # owns_meter_provider defaults False -> adopted.
@@ -373,8 +373,8 @@ def test_shutdown_leaves_an_adopted_meter_provider_alone():
 @requires_otel
 def test_shutdown_shuts_down_a_meter_provider_we_own():
     """A provider this bootstrap installed is flushed and shut down on exit."""
-    from wfx.observability import ApplicationTelemetry
     from opentelemetry.sdk.metrics import MeterProvider
+    from wfx.observability import ApplicationTelemetry
 
     owned = MeterProvider()
     ApplicationTelemetry(meter_provider=owned, owns_meter_provider=True).shutdown()
@@ -424,9 +424,9 @@ async def test_event_loop_lag_monitor_records_a_blocked_loop():
     import asyncio
     import time as _time
 
-    from wfx.observability import EVENT_LOOP_LAG_METRIC, start_event_loop_lag_monitor, stop_event_loop_lag_monitor
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from wfx.observability import EVENT_LOOP_LAG_METRIC, start_event_loop_lag_monitor, stop_event_loop_lag_monitor
 
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader], shutdown_on_exit=False)

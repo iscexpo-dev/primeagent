@@ -1,7 +1,7 @@
+from twelvelabs import TwelveLabs
 from wfx.base.embeddings.model import LCEmbeddingsModel
 from wfx.field_typing import Embeddings
 from wfx.io import DropdownInput, FloatInput, IntInput, SecretStrInput
-from twelvelabs import TwelveLabs
 
 
 class TwelveLabsTextEmbeddings(Embeddings):

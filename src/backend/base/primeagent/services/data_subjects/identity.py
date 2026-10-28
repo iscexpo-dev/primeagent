@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from sqlmodel import select
 from wfx.memory.flow_context import derive_message_owner_uuid
 from wfx.services.authorization.base import PUBLIC_ANONYMOUS_ACTOR_ID
 from wfx.utils.util_strings import escape_like_pattern
 from wfx.workflow.end_user_identity import ANONYMOUS_SESSION_PREFIX, SCOPE_SEPARATOR
-from sqlmodel import select
 
 from primeagent.services.data_subjects.errors import InvalidEndUserIdError
 from primeagent.services.database.models.user.model import User

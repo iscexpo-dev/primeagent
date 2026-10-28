@@ -4,13 +4,13 @@ from enum import Enum
 
 import yfinance as yf
 from langchain_core.tools import ToolException
+from pydantic import BaseModel, Field
 from wfx.custom.custom_component.component import Component
 from wfx.inputs.inputs import DropdownInput, IntInput, MessageTextInput
 from wfx.io import Output
 from wfx.log.logger import logger
 from wfx.schema.data import Data
 from wfx.schema.dataframe import DataFrame
-from pydantic import BaseModel, Field
 
 
 class YahooFinanceMethod(Enum):

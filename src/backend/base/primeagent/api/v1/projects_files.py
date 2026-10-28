@@ -12,9 +12,9 @@ from uuid import UUID
 import orjson
 from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from wfx.log.logger import logger
 from pydantic import ValidationError
 from sqlmodel import select
+from wfx.log.logger import logger
 
 from primeagent.api.utils import (
     CurrentActiveUser,

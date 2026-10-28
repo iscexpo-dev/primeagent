@@ -3,11 +3,11 @@ from typing import Any
 
 import requests
 from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
 from wfx.base.langchain_utilities.model import LCToolComponent
 from wfx.field_typing import Tool
 from wfx.inputs.inputs import MultilineInput, SecretStrInput, StrInput
 from wfx.schema.data import Data
-from pydantic import BaseModel, Field
 
 
 class NotionPageCreator(LCToolComponent):

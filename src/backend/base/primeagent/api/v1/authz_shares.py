@@ -9,9 +9,9 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
+from sqlmodel import select
 from wfx.log.logger import logger
 from wfx.services.authorization.base import BaseAuthorizationService, ShareRuleSnapshot
-from sqlmodel import select
 
 from primeagent.api.utils import CurrentActiveUser, DbSession
 from primeagent.api.v1.schemas.authz_shares import ShareCreate, ShareRead, ShareUpdate

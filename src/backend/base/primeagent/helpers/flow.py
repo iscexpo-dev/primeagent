@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from wfx.log.logger import logger
 from pydantic.v1 import BaseModel, Field, create_model
 from sqlalchemy.orm import aliased
 from sqlmodel import asc, desc, select
+from wfx.log.logger import logger
 
 from primeagent.schema.schema import INPUT_FIELD_NAME
 from primeagent.services.database.models.flow.model import Flow, FlowRead, FlowType

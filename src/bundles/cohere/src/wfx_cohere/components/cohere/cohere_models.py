@@ -1,9 +1,9 @@
 from langchain_cohere import ChatCohere
+from pydantic.v1 import SecretStr
 from wfx.base.models.model import LCModelComponent
 from wfx.field_typing import LanguageModel
 from wfx.field_typing.range_spec import RangeSpec
 from wfx.io import SecretStrInput, SliderInput
-from pydantic.v1 import SecretStr
 
 
 class CohereComponent(LCModelComponent):

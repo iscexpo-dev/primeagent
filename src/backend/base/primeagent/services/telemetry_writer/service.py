@@ -37,10 +37,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from wfx.log.logger import logger
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import col
+from wfx.log.logger import logger
 
 from primeagent.api.utils.migration_pause import is_paused, writing
 from primeagent.services.base import Service

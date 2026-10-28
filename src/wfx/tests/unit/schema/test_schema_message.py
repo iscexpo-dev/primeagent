@@ -8,12 +8,12 @@ from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from platformdirs import user_cache_dir
 from wfx.log.logger import logger
 from wfx.schema.message import Message
 from wfx.services.deps import get_settings_service
 from wfx.utils.constants import MESSAGE_SENDER_AI, MESSAGE_SENDER_USER
 from wfx.utils.image import create_image_content_dict
-from platformdirs import user_cache_dir
 
 
 @pytest.fixture(autouse=True)

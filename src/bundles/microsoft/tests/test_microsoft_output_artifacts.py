@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from wfx_microsoft import OutlookCalendarListComponent, OutlookSearchComponent, SharePointListComponent
 from microsoft_testkit import TransportRecorder, build_component, credential, graph_fixture, json_response
+from wfx_microsoft import OutlookCalendarListComponent, OutlookSearchComponent, SharePointListComponent
 
 
 @pytest.mark.parametrize("next_link_first", [False, True])

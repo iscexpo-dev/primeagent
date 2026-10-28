@@ -149,7 +149,9 @@ class TestLoadGraphFromPython:
             patch("importlib.util.spec_from_file_location") as mock_spec_from_file,
             patch("importlib.util.module_from_spec") as mock_module_from_spec,
             patch("primeagent.agentic.services.helpers.flow_loader._temporary_sys_path"),
-            patch("primeagent.agentic.services.helpers.flow_loader.validate_flow_for_current_settings") as mock_validate,
+            patch(
+                "primeagent.agentic.services.helpers.flow_loader.validate_flow_for_current_settings"
+            ) as mock_validate,
         ):
             mock_spec = MagicMock()
             mock_spec.loader = MagicMock()
@@ -237,7 +239,9 @@ class TestLoadGraphFromPython:
             patch("importlib.util.spec_from_file_location") as mock_spec_from_file,
             patch("importlib.util.module_from_spec") as mock_module_from_spec,
             patch("primeagent.agentic.services.helpers.flow_loader._temporary_sys_path"),
-            patch("primeagent.agentic.services.helpers.flow_loader.validate_flow_for_current_settings") as mock_validate,
+            patch(
+                "primeagent.agentic.services.helpers.flow_loader.validate_flow_for_current_settings"
+            ) as mock_validate,
         ):
             mock_spec = MagicMock()
             mock_spec.loader = MagicMock()

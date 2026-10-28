@@ -90,7 +90,9 @@ class TestRateLimitService:
         mock_settings_service = MagicMock()
         mock_settings_service.settings = mock_settings
 
-        monkeypatch.setattr("primeagent.services.rate_limit.service.get_settings_service", lambda: mock_settings_service)
+        monkeypatch.setattr(
+            "primeagent.services.rate_limit.service.get_settings_service", lambda: mock_settings_service
+        )
 
         from primeagent.services.rate_limit import get_rate_limiter
 

@@ -28,9 +28,9 @@ from primeagent.services.auth.utils import create_super_user
 from primeagent.services.database.models import Flow
 from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.deps import get_settings_service, session_scope
-from wfx.extension.bundle_registry import BundleRecord, BundleRegistry
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
+from wfx.extension.bundle_registry import BundleRecord, BundleRegistry
 
 
 async def test_load_starter_projects():

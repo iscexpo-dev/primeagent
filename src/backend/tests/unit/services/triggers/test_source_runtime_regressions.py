@@ -31,10 +31,10 @@ from primeagent.services.triggers.cleanup import delete_triggers
 from primeagent.services.triggers.lease_guard import LeaseLostError, run_guarded
 from primeagent.services.triggers.source_arming import public_ingress_origin
 from primeagent.services.triggers.source_delivery import append_and_advance
-from wfx.integrations.errors import ConnectionUnresolvedError
-from wfx.integrations.models import ResolvedCredential
 from pydantic import SecretStr
 from sqlmodel import select, update
+from wfx.integrations.errors import ConnectionUnresolvedError
+from wfx.integrations.models import ResolvedCredential
 
 pytestmark = pytest.mark.no_blockbuster
 

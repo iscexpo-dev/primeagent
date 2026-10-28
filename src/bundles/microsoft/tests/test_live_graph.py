@@ -24,11 +24,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from microsoft_testkit import stub_graph
 from wfx.integrations.models import ConnectionRef
 from wfx.schema.data import Data
 from wfx.services.authorization.base import ExecutionPrincipal
 from wfx_microsoft import OutlookCalendarListComponent, OutlookSearchComponent, SharePointListComponent
-from microsoft_testkit import stub_graph
 
 LIVE_ENV_KEY = ConnectionRef(provider="microsoft", name="live").env_key()
 

@@ -16,9 +16,9 @@ from primeagent.services.policy_bundle import (
     PolicyBundleApplicationNotSupportedError,
     PolicyBundleRevisionConflictError,
 )
+from pydantic import ValidationError
 from wfx.services.deps import injectable_session_scope, injectable_session_scope_readonly
 from wfx.services.model_provider_policy import BaseModelProviderPolicyService, ModelProviderPolicyService
-from pydantic import ValidationError
 
 
 class _Result:

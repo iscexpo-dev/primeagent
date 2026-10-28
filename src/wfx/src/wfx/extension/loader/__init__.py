@@ -84,10 +84,10 @@ from wfx.extension.loader._types import (
 
 __all__ = [
     "DEFAULT_MODULE_NAMESPACE",
-    "WFX_BUNDLES_ENTRY_POINT_GROUP",
     "SLOT_EXTRA",
     "SLOT_OFFICIAL",
     "SLOT_VALUES",
+    "WFX_BUNDLES_ENTRY_POINT_GROUP",
     "LoadResult",
     "LoadedComponent",
     "LoadedIntegration",
@@ -99,7 +99,7 @@ __all__ = [
     "load_extension_bundles",
     "load_inline_bundle",
     "load_installed_extensions",
-    "load_wfx_bundles_extensions",
     "load_seed_extensions",
+    "load_wfx_bundles_extensions",
     "manifest_owning_distributions",
 ]

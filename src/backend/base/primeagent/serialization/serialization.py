@@ -9,9 +9,9 @@ from uuid import UUID
 import numpy as np
 import pandas as pd
 from langchain_core.documents import Document
-from wfx.log.logger import logger
 from pydantic import BaseModel
 from pydantic.v1 import BaseModel as BaseModelV1
+from wfx.log.logger import logger
 
 from primeagent.serialization.constants import MAX_ITEMS_LENGTH, MAX_TEXT_LENGTH
 from primeagent.services.deps import get_settings_service

@@ -4,11 +4,11 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
-from wfx.log import logger
-from wfx.services.settings.feature_flags import FEATURE_FLAGS
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.log import logger
+from wfx.services.settings.feature_flags import FEATURE_FLAGS
 
 from primeagent.api.utils import CurrentActiveUser, DbSession
 from primeagent.api.utils.author_names import attach_usernames

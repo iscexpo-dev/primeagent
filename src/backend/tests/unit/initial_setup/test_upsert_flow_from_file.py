@@ -20,8 +20,8 @@ from primeagent.initial_setup.setup import (
 )
 from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.database.models.user.model import User
-from wfx.services.deps import get_settings_service
 from sqlmodel import select
+from wfx.services.deps import get_settings_service
 
 
 @contextmanager

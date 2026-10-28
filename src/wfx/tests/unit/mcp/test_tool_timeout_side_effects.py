@@ -13,8 +13,8 @@ import pytest
 
 pytest.importorskip("mcp")
 
-from wfx.base.mcp.util import MCPSessionManager, MCPStdioClient
 from mcp import StdioServerParameters
+from wfx.base.mcp.util import MCPSessionManager, MCPStdioClient
 
 SERVER = """
 import asyncio

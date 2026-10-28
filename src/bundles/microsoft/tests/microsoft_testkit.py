@@ -14,10 +14,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+from pydantic import SecretStr
 from wfx.integrations.models import ResolvedCredential
 from wfx.services.authorization.base import ExecutionPrincipal
 from wfx.services.connection.base import BaseConnectionResolverService, ConnectionAccessPolicy
-from pydantic import SecretStr
 
 FIXTURES = Path(__file__).parent / "fixtures" / "graph"
 

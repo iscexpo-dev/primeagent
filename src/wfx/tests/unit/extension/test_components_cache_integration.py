@@ -83,7 +83,9 @@ async def test_component_cache_initialization_is_single_flight_and_atomic() -> N
 
     with (
         patch.object(components_module, "component_cache", cache),
-        patch.object(components_module, "import_primeagent_components", new=AsyncMock(side_effect=load_builtins)) as load,
+        patch.object(
+            components_module, "import_primeagent_components", new=AsyncMock(side_effect=load_builtins)
+        ) as load,
         patch.object(components_module, "_determine_loading_strategy", new=AsyncMock(return_value={})),
         patch.object(components_module, "import_extension_components", new=AsyncMock(return_value={})),
     ):
@@ -142,7 +144,9 @@ async def test_cancelled_initiating_caller_does_not_cancel_shared_initialization
 
     with (
         patch.object(components_module, "component_cache", cache),
-        patch.object(components_module, "import_primeagent_components", new=AsyncMock(side_effect=load_builtins)) as load,
+        patch.object(
+            components_module, "import_primeagent_components", new=AsyncMock(side_effect=load_builtins)
+        ) as load,
         patch.object(components_module, "_determine_loading_strategy", new=AsyncMock(return_value={})),
         patch.object(components_module, "import_extension_components", new=AsyncMock(return_value={})),
     ):

@@ -41,8 +41,8 @@ async def create_restore_point(flow_id: str | None, user_id: str | None) -> str 
     try:
         # Lazy imports mirror _get_current_flow_summary — the agentic layer
         # must not hard-depend on the DB models at import time.
-        from wfx.services.deps import session_scope
         from sqlmodel import col, select
+        from wfx.services.deps import session_scope
 
         from primeagent.services.database.models.flow import Flow
         from primeagent.services.database.models.flow_version.crud import create_flow_version_entry

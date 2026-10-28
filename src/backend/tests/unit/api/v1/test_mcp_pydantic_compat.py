@@ -2,8 +2,8 @@ from unittest.mock import MagicMock
 
 import pydantic
 import pytest
-from primeagent.api.v1.mcp import _ensure_mcp_root_model_ready, _ensure_mcp_root_models_ready
 from mcp import types
+from primeagent.api.v1.mcp import _ensure_mcp_root_model_ready, _ensure_mcp_root_models_ready
 from pydantic_core import PydanticUndefined
 
 

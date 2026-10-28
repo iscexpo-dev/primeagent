@@ -15,9 +15,6 @@ import anyio
 import sqlalchemy as sa
 from alembic import command, util
 from alembic.config import Config
-from wfx.log.logger import logger
-from wfx.observability import instrument_database
-from wfx.services.deps import session_scope
 from sqlalchemy import event, inspect
 from sqlalchemy.dialects import sqlite as dialect_sqlite
 from sqlalchemy.engine import Engine, make_url
@@ -26,6 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from tenacity import retry, stop_after_attempt, wait_fixed
+from wfx.log.logger import logger
+from wfx.observability import instrument_database
+from wfx.services.deps import session_scope
 
 from primeagent.helpers.windows_postgres_helper import configure_windows_postgres_event_loop
 from primeagent.initial_setup.constants import STARTER_FOLDER_NAME

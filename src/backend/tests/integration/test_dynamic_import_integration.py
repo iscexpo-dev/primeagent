@@ -66,8 +66,8 @@ class TestDynamicImportIntegration:
                 assert hasattr(input_field, "display_name"), f"Input {input_field} missing 'display_name' attribute"
 
     def test_multiple_import_styles_same_result(self):
-        from primeagent import components
         from prime.khulnasoft.components.data import APIRequestComponent as DirectImport
+        from primeagent import components
 
         dynamic_import = components.data.APIRequestComponent
 
@@ -172,8 +172,8 @@ class TestDynamicImportIntegration:
             assert result is first_result
 
     def test_circular_import_prevention(self):
-        from primeagent import components
         from prime.khulnasoft.components import data
+        from primeagent import components
 
         component1 = components.data.APIRequestComponent
         component2 = data.APIRequestComponent

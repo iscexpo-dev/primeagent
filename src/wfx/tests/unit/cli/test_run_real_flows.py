@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from typer.testing import CliRunner
 from wfx.__main__ import app
 from wfx.interface.components import component_cache
-from typer.testing import CliRunner
 
 runner = CliRunner()
 

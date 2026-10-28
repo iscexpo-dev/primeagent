@@ -23,8 +23,8 @@ from uuid import uuid4
 import pytest
 from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.deps import get_db_service, get_queue_service, get_task_service
-from wfx.services.deps import session_scope
 from sqlalchemy import event, text
+from wfx.services.deps import session_scope
 
 if TYPE_CHECKING:
     from httpx import AsyncClient

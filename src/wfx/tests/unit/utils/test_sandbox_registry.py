@@ -59,8 +59,8 @@ class TestSettingsValidation:
 
     def test_resource_bounds_enforced(self):
         """Documented ranges are enforced at startup, not deep inside exec-sandbox."""
-        from wfx.services.settings.groups.security import SecuritySettings
         from pydantic import ValidationError
+        from wfx.services.settings.groups.security import SecuritySettings
 
         with pytest.raises(ValidationError):
             SecuritySettings(sandbox_timeout_seconds=0)

@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from alembic.util.exc import CommandError
-from wfx.log.logger import logger
 from sqlmodel import text
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.log.logger import logger
 
 if TYPE_CHECKING:
     from primeagent.services.database.service import DatabaseService

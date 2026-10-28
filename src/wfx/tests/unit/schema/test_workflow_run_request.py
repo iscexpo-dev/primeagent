@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from wfx.schema.workflow import WorkflowMode, WorkflowRunRequest
 from pydantic import ValidationError
+from wfx.schema.workflow import WorkflowMode, WorkflowRunRequest
 
 _VALID_UUID = "67ccd2be-17f0-8190-81ff-3bb2cf6508e6"
 

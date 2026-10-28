@@ -4,10 +4,10 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from wfx.log.logger import logger
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.api.utils import CurrentActiveUser, DbSession
 from primeagent.services.auth.utils import get_current_active_superuser

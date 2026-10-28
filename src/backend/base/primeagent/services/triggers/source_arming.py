@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from wfx.integrations.models import ConnectionRef
 from sqlmodel import select
+from wfx.integrations.models import ConnectionRef
 
 from primeagent.services.connection.oauth.config import deployment_context, get_oauth_settings
 from primeagent.services.database.models.connection.model import Connection

@@ -94,7 +94,9 @@ def mock_db_crud(mock_mapper, active_user):
         mock_create_dep = stack.enter_context(patch("primeagent.api.v1.deployments.create_deployment_db"))
         _mock_attach = stack.enter_context(patch("primeagent.api.v1.deployments.attach_flow_versions"))
         mock_res_am = stack.enter_context(patch("primeagent.api.v1.deployments.resolve_adapter_mapper_from_deployment"))
-        mock_res_patch = stack.enter_context(patch("primeagent.api.v1.deployments.resolve_flow_version_patch_for_update"))
+        mock_res_patch = stack.enter_context(
+            patch("primeagent.api.v1.deployments.resolve_flow_version_patch_for_update")
+        )
         _mock_val_proj = stack.enter_context(
             patch("primeagent.api.v1.deployments.validate_project_scoped_flow_version_ids")
         )

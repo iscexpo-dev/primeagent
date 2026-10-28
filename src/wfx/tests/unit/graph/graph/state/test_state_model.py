@@ -1,11 +1,11 @@
 import pytest
+from pydantic import Field
 from wfx.components.input_output import ChatInput, ChatOutput
 from wfx.custom.eval import eval_custom_component_code
 from wfx.graph import Graph
 from wfx.graph.graph.constants import Finish
 from wfx.graph.state.model import build_output_getter, create_state_model
 from wfx.template.field.base import UNDEFINED
-from pydantic import Field
 
 
 @pytest.fixture

@@ -30,8 +30,8 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from wfx.__main__ import app as wfx_app
 from typer.testing import CliRunner
+from wfx.__main__ import app as wfx_app
 
 runner = CliRunner()
 

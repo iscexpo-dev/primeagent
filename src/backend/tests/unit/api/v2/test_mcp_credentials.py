@@ -13,14 +13,14 @@ from primeagent.services.auth.mcp_encryption import encrypt_mcp_config
 from primeagent.services.auth.service import AuthService
 from primeagent.services.database.models import MCPServer
 from primeagent.services.deps import get_settings_service, get_storage_service
-from wfx.base.mcp.uvx import mcp_sdk_constraint_args
-from wfx.services.deps import injectable_session_scope
-from wfx.services.settings.auth import AuthSettings
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel.pool import StaticPool
+from wfx.base.mcp.uvx import mcp_sdk_constraint_args
+from wfx.services.deps import injectable_session_scope
+from wfx.services.settings.auth import AuthSettings
 
 MASK = "********"
 CANARY_CONFIG = {

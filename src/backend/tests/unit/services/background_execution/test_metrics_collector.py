@@ -696,7 +696,8 @@ async def test_input_deadline_expiry_has_its_own_failure_reason():
     assert counts["failed_input_timeout"] == 1
     assert counts["failed_error"] == counts["timed_out"] == 0
     assert (
-        _counter_value("primeagent_bg_jobs_failed_total", {"reason": "input_timeout", "backend": current_backend()}) == 1
+        _counter_value("primeagent_bg_jobs_failed_total", {"reason": "input_timeout", "backend": current_backend()})
+        == 1
     )
 
 
@@ -833,8 +834,8 @@ def _exported_terminal_counts() -> dict[str, float]:
 @pytest.fixture
 def fresh_background_counters(monkeypatch, client):  # noqa: ARG001
     """Install real empty wrappers so a process-local high-water mark cannot hide a reset."""
-    from primeagent.services.telemetry.opentelemetry import ObservableCounterWrapper
     from opentelemetry.metrics import NoOpMeterProvider
+    from primeagent.services.telemetry.opentelemetry import ObservableCounterWrapper
 
     meter = NoOpMeterProvider().get_meter("background-retention-test")
 

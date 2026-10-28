@@ -5,9 +5,9 @@ from __future__ import annotations
 import dataclasses
 from typing import get_args, get_type_hints
 
+from pydantic import SecretStr
 from wfx.integrations.capabilities import IntegrationIdentity
 from wfx.integrations.models import ResolvedCredential
-from pydantic import SecretStr
 
 
 def test_identity_literal_mirrors_the_capability_identity_vocabulary() -> None:

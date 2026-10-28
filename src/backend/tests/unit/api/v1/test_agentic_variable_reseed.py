@@ -11,8 +11,8 @@ import pytest
 from primeagent.api.utils.mcp.agentic_mcp import initialize_agentic_user_variables
 from primeagent.services.database.models.user.model import User
 from primeagent.services.database.models.variable.model import Variable
-from wfx.services.settings.constants import AGENTIC_VARIABLES
 from sqlmodel import select
+from wfx.services.settings.constants import AGENTIC_VARIABLES
 
 
 async def _seed_user(session) -> User:

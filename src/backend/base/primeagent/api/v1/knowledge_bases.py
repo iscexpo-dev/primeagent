@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from wfx.base.data.utils import extract_text_from_bytes
 from wfx.base.knowledge_bases.backends import BackendType, create_backend, is_local_backend, is_local_chroma
 from wfx.base.knowledge_bases.backends.naming import StorageRoutingNotAllowedError, ensure_storage_routing_allowed
@@ -29,8 +31,6 @@ from wfx.services.model_provider_policy import (
     ModelProviderPolicyPurpose,
     require_model_provider,
 )
-from pydantic import BaseModel, Field
-from sqlalchemy.exc import IntegrityError
 
 from primeagent.api.utils import CurrentActiveUser, ingestion_run_service, knowledge_base_service
 from primeagent.api.utils.execution_errors import integration_http_error

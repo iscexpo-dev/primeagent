@@ -23,8 +23,8 @@ from uuid import UUID
 
 from filelock import FileLock
 from filelock import Timeout as FileLockTimeout
-from wfx.log.logger import logger
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.flow.model import Flow, FlowRead
 from primeagent.services.deps import get_settings_service, session_scope
@@ -36,8 +36,8 @@ from primeagent.services.warm_registry.service import (
 )
 
 if TYPE_CHECKING:
-    from wfx.graph.graph.base import Graph
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.graph.graph.base import Graph
 
 
 _WARM_ALL_LOCK_PATH = Path(tempfile.gettempdir()) / "primeagent_warm_registry.lock"

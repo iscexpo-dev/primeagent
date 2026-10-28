@@ -1,8 +1,8 @@
 from uuid import uuid4
 
 import pytest
-from wfx.utils.schemas import ChatOutputResponse
 from pydantic import ValidationError
+from wfx.utils.schemas import ChatOutputResponse
 
 
 def test_chat_output_response_coerces_uuid_session_id():

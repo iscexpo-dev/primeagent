@@ -10,17 +10,17 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from wfx.log.logger import logger
 from sqlalchemy import exc as sqlalchemy_exc
 from sqlmodel import col, delete
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.audit_event.model import AuditEvent
 from primeagent.services.deps import get_settings_service, session_scope
 from primeagent.services.task.audit_cleanup import AuditLogCleanupWorker
 
 if TYPE_CHECKING:
-    from wfx.services.settings.service import SettingsService
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.settings.service import SettingsService
 
 
 async def purge_expired_audit_events(

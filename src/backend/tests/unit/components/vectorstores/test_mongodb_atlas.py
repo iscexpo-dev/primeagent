@@ -16,8 +16,8 @@ pytest.importorskip("wfx_bundles")
 # different copy than the one this class was loaded from.
 import wfx.components.mongodb.mongodb_atlas as mongodb_atlas_mod
 from langchain_community.embeddings.fake import DeterministicFakeEmbedding
-from wfx.schema.data import Data
 from pymongo.collection import Collection
+from wfx.schema.data import Data
 
 from tests.base import ComponentTestBaseWithoutClient, VersionComponentMapping
 

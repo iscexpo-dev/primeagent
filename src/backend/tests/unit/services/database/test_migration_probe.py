@@ -5,8 +5,8 @@ import sqlalchemy as sa
 from primeagent.services.database import migration
 from primeagent.services.database.migration import get_current_alembic_heads
 from primeagent.services.database.session import NoopSession
-from wfx.services.session import NoopSession as WfxNoopSession
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from wfx.services.session import NoopSession as WfxNoopSession
 
 
 async def test_sqlite_migration_probe_handles_missing_table_and_multiple_heads(tmp_path) -> None:

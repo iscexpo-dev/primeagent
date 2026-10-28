@@ -18,8 +18,8 @@ advances a deterministic clock while each callback runs.
 
 from time import perf_counter
 
-import wfx.base.agents.events as agent_events
 import pytest
+import wfx.base.agents.events as agent_events
 from langchain_core.messages import AIMessage, AIMessageChunk
 from wfx.base.agents.events import (
     handle_on_chain_stream,

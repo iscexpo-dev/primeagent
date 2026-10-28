@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
 import pytest
+from pydantic import SecretStr, ValidationError
 from wfx.components.data_source.web_search import (
     DEFAULT_MAX_CONTENT_LENGTH,
     DEFAULT_MAX_RESULTS,
@@ -10,7 +11,6 @@ from wfx.components.data_source.web_search import (
 )
 from wfx.schema import Data, DataFrame, Message
 from wfx.utils.ssrf_protection import SSRFProtectionError
-from pydantic import SecretStr, ValidationError
 
 from tests.base import ComponentTestBaseWithoutClient
 

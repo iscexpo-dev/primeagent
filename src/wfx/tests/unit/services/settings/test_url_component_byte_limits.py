@@ -7,8 +7,8 @@ reject non-positive values at config load.
 """
 
 import pytest
-from wfx.services.settings.base import Settings
 from pydantic import ValidationError
+from wfx.services.settings.base import Settings
 
 
 def test_url_component_byte_limits_default_to_documented_values():

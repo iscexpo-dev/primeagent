@@ -196,7 +196,9 @@ def convert_sqlite_to_postgres(
         except ImportError as exc:
             # No Postgres driver installed. Reported for the same reason as below.
             report.problems.append(
-                Problem("target_unreachable", f"could not use the target database: {exc}; install primeagent[postgresql]")
+                Problem(
+                    "target_unreachable", f"could not use the target database: {exc}; install primeagent[postgresql]"
+                )
             )
         except sa.exc.SQLAlchemyError as exc:
             # Reported rather than raised: a traceback would print the target URL,

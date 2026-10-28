@@ -4,8 +4,8 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING
 
-from wfx.log.logger import logger
 from sqlmodel import col, delete, select
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.message.model import MessageTable
 from primeagent.services.database.models.transactions.model import TransactionTable

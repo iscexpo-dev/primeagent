@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException
+from sqlmodel import select
 from wfx.base.mcp.constants import MAX_MCP_SERVER_NAME_LENGTH
 from wfx.base.mcp.util import project_mcp_server_name, sanitize_mcp_name
 from wfx.base.mcp.uvx import mcp_sdk_constraint_args
 from wfx.log import logger
 from wfx.services.deps import get_settings_service
-from sqlmodel import select
 
 from primeagent.api.v2.mcp import get_server_list, update_server
 from primeagent.services.auth.mcp_encryption import decrypt_auth_settings, encrypt_auth_settings

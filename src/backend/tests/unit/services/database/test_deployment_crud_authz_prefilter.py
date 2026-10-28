@@ -24,9 +24,9 @@ from primeagent.services.database.models.deployment_provider_account.model impor
 from primeagent.services.database.models.deployment_provider_account.schemas import DeploymentProviderKey
 from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.database.models.user.model import User
+from sqlalchemy.ext.asyncio import AsyncSession
 from wfx.services.adapters.deployment.schema import DeploymentType
 from wfx.services.authorization import ResourceVisibilityScope
-from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _seed(async_session: AsyncSession):

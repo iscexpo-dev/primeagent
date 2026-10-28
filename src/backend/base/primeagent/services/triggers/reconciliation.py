@@ -34,8 +34,8 @@ import re
 import secrets
 from typing import TYPE_CHECKING, Any
 
-from wfx.log.logger import logger
 from sqlalchemy.exc import DBAPIError
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.trigger.model import Trigger
 from primeagent.services.database.models.trigger.schemas import TriggerSessionPolicy, TriggerState

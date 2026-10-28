@@ -230,7 +230,9 @@ class TestGetEnabledProvidersForUser:
         )
         try:
             with (
-                patch("primeagent.agentic.services.provider_service.get_variable_service", return_value=mock_db_service),
+                patch(
+                    "primeagent.agentic.services.provider_service.get_variable_service", return_value=mock_db_service
+                ),
                 patch(
                     "primeagent.agentic.services.provider_service.get_model_provider_variable_mapping",
                     return_value={"OpenAI": "OPENAI_API_KEY"},
@@ -499,7 +501,9 @@ class TestGetEnabledProvidersForUser:
 
         try:
             with (
-                patch("primeagent.agentic.services.provider_service.get_variable_service", return_value=mock_db_service),
+                patch(
+                    "primeagent.agentic.services.provider_service.get_variable_service", return_value=mock_db_service
+                ),
                 patch(
                     "primeagent.agentic.services.provider_service.aresolve_model_provider_policy",
                     new=AsyncMock(return_value=policy),

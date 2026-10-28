@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
-from wfx.schema.validators import ensure_utc
 from pydantic import BeforeValidator
+from wfx.schema.validators import ensure_utc
 
 TF_WITH_TZ_AND_MICROSECONDS = "%Y-%m-%d %H:%M:%S.%f %Z"
 TF_WITH_TZ_AND_MICROSECONDS_ISO = "%Y-%m-%dT%H:%M:%S.%f%z"

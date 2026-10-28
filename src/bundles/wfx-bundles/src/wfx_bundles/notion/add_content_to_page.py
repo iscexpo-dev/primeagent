@@ -4,13 +4,13 @@ from typing import Any
 import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import StructuredTool
+from markdown import markdown
+from pydantic import BaseModel, Field
 from wfx.base.langchain_utilities.model import LCToolComponent
 from wfx.field_typing import Tool
 from wfx.inputs.inputs import MultilineInput, SecretStrInput, StrInput
 from wfx.log.logger import logger
 from wfx.schema.data import Data
-from markdown import markdown
-from pydantic import BaseModel, Field
 
 MIN_ROWS_IN_TABLE = 3
 

@@ -18,12 +18,12 @@ from typing import Any
 from uuid import UUID
 
 from filelock import FileLock, Timeout
-from wfx.base.knowledge_bases.backends import BackendType, create_backend
-from wfx.base.knowledge_bases.backends.base import BackendConfigurationError, BaseVectorStoreBackend, IngestedDocument
-from wfx.base.knowledge_bases.backends.sqlite import SQLiteBackend, SQLiteStorageContext
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import select
+from wfx.base.knowledge_bases.backends import BackendType, create_backend
+from wfx.base.knowledge_bases.backends.base import BackendConfigurationError, BaseVectorStoreBackend, IngestedDocument
+from wfx.base.knowledge_bases.backends.sqlite import SQLiteBackend, SQLiteStorageContext
 
 from primeagent.services.database.models.knowledge_base import KnowledgeBaseRecord
 from primeagent.services.database.models.knowledge_base_storage_migration import KnowledgeBaseStorageMigration

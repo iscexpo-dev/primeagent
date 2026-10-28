@@ -58,7 +58,9 @@ def _runner(job_service, job_id, source):
 async def _suspend_a_job(job_service, *, request_id="req-1"):
     user_id, flow_id, job_id = uuid4(), uuid4(), uuid4()
     await job_service.create_job(job_id=job_id, flow_id=flow_id, user_id=user_id)
-    await job_service.update_job_metadata(job_id, {"request": {"flow_id": str(flow_id), "stream_protocol": "primeagent"}})
+    await job_service.update_job_metadata(
+        job_id, {"request": {"flow_id": str(flow_id), "stream_protocol": "primeagent"}}
+    )
     payload = {"reason": "human_input_required", "request_id": request_id, "options": ["approve", "reject"]}
     await _runner(job_service, job_id, _pause_source(payload)).run(job_id=job_id, source_kwargs={})
     return user_id, job_id

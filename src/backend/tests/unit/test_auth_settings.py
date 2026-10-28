@@ -2,13 +2,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pydantic import SecretStr, ValidationError
 from wfx.services.settings.auth import AuthSettings
 from wfx.services.settings.constants import (
     DEFAULT_SUPERUSER,
     DEFAULT_SUPERUSER_PASSWORD,
     SHORT_SECRET_KEY_WARNING,
 )
-from pydantic import SecretStr, ValidationError
 
 
 @pytest.mark.parametrize("environment_value", [None, "false", "true"])

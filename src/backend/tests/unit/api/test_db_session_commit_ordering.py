@@ -19,9 +19,9 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.responses import StreamingResponse
 from primeagent.api.utils.core import DbSession
-from wfx.services.deps import injectable_session_scope
 from sqlalchemy import text
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
+from wfx.services.deps import injectable_session_scope
 
 
 def _http_scope(path: str) -> dict:

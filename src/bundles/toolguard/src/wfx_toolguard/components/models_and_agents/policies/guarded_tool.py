@@ -4,9 +4,9 @@ import json
 from collections.abc import Awaitable, Callable  # noqa: TC003
 from typing import TYPE_CHECKING
 
+from pydantic import Field
 from wfx.field_typing import Tool
 from wfx.log.logger import logger
-from pydantic import Field
 
 if TYPE_CHECKING:
     from langchain_core.messages import ToolCall

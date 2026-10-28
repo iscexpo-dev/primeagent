@@ -10,9 +10,9 @@ the feature were a no-op in production.
 import tempfile
 from pathlib import Path
 
-from primeagent.services.telemetry.opentelemetry import DB_POOL_GAUGES, instrument_db_pool
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from primeagent.services.telemetry.opentelemetry import DB_POOL_GAUGES, instrument_db_pool
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 
@@ -123,7 +123,9 @@ async def test_file_backed_sqlite_is_instrumented():
     """
     provider, reader = _provider_with_reader()
     with tempfile.TemporaryDirectory() as tmp:
-        engine = create_async_engine(f"sqlite+aiosqlite:///{Path(tmp) / 'primeagent.db'}", pool_size=20, max_overflow=30)
+        engine = create_async_engine(
+            f"sqlite+aiosqlite:///{Path(tmp) / 'primeagent.db'}", pool_size=20, max_overflow=30
+        )
         try:
             instrument_db_pool(provider, engine)
             collected = _collect(reader)

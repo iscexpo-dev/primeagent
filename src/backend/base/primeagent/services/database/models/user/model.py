@@ -2,10 +2,10 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from wfx.schema.validators import ensure_utc
 from pydantic import BaseModel, field_validator
 from sqlalchemy import JSON, Column, Index, text
 from sqlmodel import Field, Relationship, SQLModel
+from wfx.schema.validators import ensure_utc
 
 from primeagent.schema.serialize import UUIDstr
 

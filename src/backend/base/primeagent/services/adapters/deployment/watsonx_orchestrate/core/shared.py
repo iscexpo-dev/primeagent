@@ -33,8 +33,8 @@ from primeagent.services.adapters.deployment.watsonx_orchestrate.utils import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
 
-    from wfx.services.adapters.deployment.schema import BaseFlowArtifact, IdLike
     from sqlalchemy.ext.asyncio import AsyncSession
+    from wfx.services.adapters.deployment.schema import BaseFlowArtifact, IdLike
 
     from primeagent.services.adapters.deployment.watsonx_orchestrate.payloads import (
         WatsonxConnectionRawPayload,

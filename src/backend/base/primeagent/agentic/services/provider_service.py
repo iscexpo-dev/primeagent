@@ -4,6 +4,7 @@ import os
 import re
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from wfx.base.models.model_metadata import CONDITIONAL_LIVE_MODEL_PROVIDERS, LIVE_MODEL_PROVIDERS
 from wfx.base.models.model_utils import get_live_models_for_provider
 from wfx.base.models.provider_registry import get_registry_snapshot, is_api_key_optional
@@ -15,7 +16,6 @@ from wfx.base.models.unified_models import (
 from wfx.log.logger import logger
 from wfx.services.model_provider_policy import ModelProviderPolicyPurpose, aresolve_model_provider_policy
 from wfx.utils.secrets import secret_value_to_str
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from primeagent.services.deps import get_variable_service
 from primeagent.services.variable.service import DatabaseVariableService, VariableService

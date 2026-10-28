@@ -16,10 +16,10 @@ from typing import Any
 
 import pytest
 from googleapiclient.http import HttpMockSequence
+from pydantic import SecretStr
 from wfx.integrations.models import ResolvedCredential
 from wfx.services.authorization.base import ExecutionPrincipal
 from wfx.utils import file_path_security
-from pydantic import SecretStr
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "google_workspace"
 

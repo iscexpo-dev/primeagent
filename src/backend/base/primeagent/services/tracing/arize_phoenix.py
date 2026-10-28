@@ -12,14 +12,14 @@ from typing import TYPE_CHECKING, Any
 
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from wfx.log.logger import logger
-from wfx.schema.data import Data
 from openinference.semconv.trace import OpenInferenceMimeTypeValues, SpanAttributes
 from opentelemetry.sdk.trace.export import SpanProcessor
 from opentelemetry.semconv.trace import SpanAttributes as OTELSpanAttributes
 from opentelemetry.trace import Span, Status, StatusCode, use_span
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from typing_extensions import override
+from wfx.log.logger import logger
+from wfx.schema.data import Data
 
 from primeagent.schema.message import Message
 from primeagent.services.tracing.base import BaseTracer
@@ -29,9 +29,9 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from langchain_core.callbacks.base import BaseCallbackHandler
-    from wfx.graph.vertex.base import Vertex
     from opentelemetry.propagators.textmap import CarrierT
     from opentelemetry.util.types import AttributeValue
+    from wfx.graph.vertex.base import Vertex
 
     from primeagent.services.tracing.schema import Log
 

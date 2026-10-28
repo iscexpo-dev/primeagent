@@ -15,11 +15,11 @@ from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import session_scope
 from primeagent.services.triggers import source_cleanup, source_clients, source_subscription
 from primeagent.services.triggers.cleanup import delete_triggers
-from wfx.integrations.errors import AuthExpiredError
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.integrations.errors import AuthExpiredError
 
 from tests.unit.erase_helpers import wait_for_erase
 

@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from sqlmodel import col, select, update
 from wfx.log.logger import logger
 from wfx.services.authorization.base import ResourceVisibilityScope
 from wfx.services.settings.constants import AGENTIC_VARIABLES
 from wfx.services.variable import VariableNotFoundError
-from sqlmodel import col, select, update
 
 from primeagent.services.auth import utils as auth_utils
 from primeagent.services.base import Service
@@ -20,9 +20,9 @@ from primeagent.services.variable.constants import CREDENTIAL_TYPE, GENERIC_TYPE
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from wfx.services.settings.service import SettingsService
     from pydantic import SecretStr
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.settings.service import SettingsService
 
 
 def has_variable_value(variable: Variable) -> bool:

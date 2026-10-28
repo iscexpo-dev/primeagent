@@ -32,8 +32,8 @@ import pytest
 # file needs the exporter the command installs in the subprocess and the proto module the
 # collector decodes with, and the exporter import brings both (plus the SDK) or fails.
 pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-from wfx.observability import APPLICATION_TRACER_NAME
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from wfx.observability import APPLICATION_TRACER_NAME
 
 FLOW = Path(__file__).resolve().parents[2] / "data" / "simple_chat_no_llm.json"
 

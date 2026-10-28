@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from wfx.base.knowledge_bases.ingestion_sources import (
     GoogleDriveSource,
     create_source,
@@ -31,7 +32,6 @@ from wfx.base.knowledge_bases.ingestion_sources.google_drive import DRIVE_FILE_S
 from wfx.integrations.errors import ConnectionNotAuthorizedError, ResourceNotFoundError
 from wfx.integrations.models import ResolvedCredential
 from wfx.services.connection.base import BaseConnectionResolverService, ConnectionAccessPolicy
-from pydantic import SecretStr
 
 USER_ID = uuid4()
 FAKE_TOKEN = "fake-drive-access-token"  # noqa: S105  # pragma: allowlist secret

@@ -509,7 +509,10 @@ async def test_the_check_reads_every_part_of_the_destination_that_this_instance_
     address = f"postgresql+psycopg://migrator:{DB_PASSWORD}@{unanswering}/primeagent"
     # The knowledge bases went into the destination database, and the files into the bucket.
     assert (given["PRIMEAGENT_DATABASE_URL"], given["PGVECTOR_CONNECTION_STRING"]) == (address, address)
-    assert [given[name] for name in ("PRIMEAGENT_STORAGE_TYPE", "PRIMEAGENT_OBJECT_STORAGE_BUCKET_NAME")] == ["s3", "acme"]
+    assert [given[name] for name in ("PRIMEAGENT_STORAGE_TYPE", "PRIMEAGENT_OBJECT_STORAGE_BUCKET_NAME")] == [
+        "s3",
+        "acme",
+    ]
     assert given["AWS_SECRET_ACCESS_KEY"] == S3_SECRET
     await client.delete(f"{RUNS.format(CHECK)}/{run_id}", headers=headers)
     await asyncio.wait_for(_to_its_end(run_id), _TIMEOUT)

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from wfx.services.settings.base import Settings
 from pydantic import ValidationError
+from wfx.services.settings.base import Settings
 
 
 def test_cache_type_disk_is_rejected(monkeypatch):

@@ -20,8 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from wfx.log.logger import logger
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.connection.model import Connection
 from primeagent.services.database.models.connection.oauth import ConnectionOAuth

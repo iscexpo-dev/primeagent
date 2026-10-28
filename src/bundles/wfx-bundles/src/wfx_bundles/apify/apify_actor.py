@@ -4,12 +4,12 @@ from typing import Any, cast
 
 from apify_client import ApifyClient
 from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field, field_serializer
 from wfx.custom.custom_component.component import Component
 from wfx.field_typing import Tool
 from wfx.inputs.inputs import BoolInput
 from wfx.io import MultilineInput, Output, SecretStrInput, StrInput
 from wfx.schema.data import Data
-from pydantic import BaseModel, Field, field_serializer
 
 MAX_DESCRIPTION_LEN = 250
 

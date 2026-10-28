@@ -7,9 +7,9 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID
 
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictStr, field_validator, model_validator
 from wfx.integrations.capabilities import IntegrationIdentity
 from wfx.integrations.models import CONNECTION_NAME_PATTERN, PROVIDER_ID_PATTERN, ConnectionAccount
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictStr, field_validator, model_validator
 
 
 class ConnectionOwnershipMode(str, Enum):

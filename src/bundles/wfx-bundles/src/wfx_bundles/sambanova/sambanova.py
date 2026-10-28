@@ -1,13 +1,13 @@
 import os
 
 from langchain_sambanova import ChatSambaNova
+from pydantic.v1 import SecretStr
 from wfx.base.models.model import LCModelComponent
 from wfx.base.models.provider_ssrf import ensure_credential_endpoint_allowed, openai_compatible_client_kwargs
 from wfx.base.models.sambanova_constants import SAMBANOVA_MODEL_NAMES
 from wfx.field_typing import LanguageModel
 from wfx.field_typing.range_spec import RangeSpec
 from wfx.io import DropdownInput, IntInput, SecretStrInput, SliderInput, StrInput
-from pydantic.v1 import SecretStr
 
 DEFAULT_SAMBANOVA_API_BASE = "https://api.sambanova.ai/v1"
 

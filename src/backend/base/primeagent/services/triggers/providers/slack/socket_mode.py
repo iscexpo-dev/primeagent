@@ -46,6 +46,10 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 import httpx
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import col, select
+from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import ConnectionClosed
 from wfx.integrations.errors import (
     AuthExpiredError,
     ConnectionUnresolvedError,
@@ -53,10 +57,6 @@ from wfx.integrations.errors import (
     RateLimitedError,
 )
 from wfx.log.logger import logger
-from sqlalchemy.exc import IntegrityError
-from sqlmodel import col, select
-from websockets.asyncio.client import connect as ws_connect
-from websockets.exceptions import ConnectionClosed
 
 from primeagent.services.database.models.connection.model import Connection
 from primeagent.services.database.models.trigger.model import Trigger

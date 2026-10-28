@@ -35,10 +35,10 @@ from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import get_auth_service, get_settings_service, session_scope
-from wfx.services.authorization.base import BaseAuthorizationService, ResourceVisibilityScope
 from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
 from sqlalchemy.sql.sqltypes import NullType
 from sqlmodel import select
+from wfx.services.authorization.base import BaseAuthorizationService, ResourceVisibilityScope
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence

@@ -22,13 +22,13 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr, ValidationError
 from wfx.components.input_output import TextInputComponent
 from wfx.custom import Component
 from wfx.inputs.inputs import IntInput, SecretStrInput, StrInput
 from wfx.interface.initialize.loading import update_params_with_load_from_db_fields
 from wfx.io import Output
 from wfx.schema.message import Message
-from pydantic import SecretStr, ValidationError
 
 # Sentinel used as a stand-in for a "real" CREDENTIAL global variable's value.
 # Tests assert this string never appears in error messages, attributes, or

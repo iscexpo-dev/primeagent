@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
-from wfx.log.logger import logger
 from sqlalchemy import and_, column, values
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, delete, func, select, update
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.deployment.orm_guards import ensure_attachment_project_match
 from primeagent.services.database.models.flow_version.crud import lock_flow_version_entry

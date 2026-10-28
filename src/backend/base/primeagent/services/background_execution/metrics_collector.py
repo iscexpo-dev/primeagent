@@ -21,8 +21,8 @@ from datetime import datetime, timedelta, timezone
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 
-from wfx.log.logger import logger
 from sqlmodel import col, func, select
+from wfx.log.logger import logger
 
 from primeagent.services.background_execution.metrics import current_backend
 from primeagent.services.database.models.jobs.metrics import is_background_job, terminal_counts

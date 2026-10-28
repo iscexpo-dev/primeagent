@@ -14,8 +14,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from wfx.base.mcp.util import create_tool_coroutine
 from pydantic import BaseModel
+from wfx.base.mcp.util import create_tool_coroutine
 
 
 class _ArgSchema(BaseModel):

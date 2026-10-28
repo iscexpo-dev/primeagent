@@ -5,6 +5,8 @@ from collections.abc import Collection
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query
+from loguru import logger
+from pydantic import BaseModel, field_validator
 from wfx.base.models.model_metadata import EXPLICIT_ENABLE_ONLY_PROVIDERS, LIVE_MODEL_PROVIDERS
 from wfx.base.models.model_utils import inject_custom_enabled_models, replace_with_live_models
 from wfx.base.models.provider_registry import (
@@ -33,8 +35,6 @@ from wfx.services.model_provider_policy import (
     ModelProviderPolicySnapshot,
     aresolve_model_provider_policy,
 )
-from loguru import logger
-from pydantic import BaseModel, field_validator
 
 from primeagent.api.utils import CurrentActiveUser, DbSession
 from primeagent.api.v1.model_provider_policy_scope import (

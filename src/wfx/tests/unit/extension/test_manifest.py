@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import ValidationError
 from wfx.extension.manifest import (
     DEFERRED_FIELDS,
     EXTENSION_SCHEMA_URL,
@@ -14,7 +15,6 @@ from wfx.extension.manifest import (
     WfxCompat,
     load_manifest,
 )
-from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from pathlib import Path

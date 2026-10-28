@@ -41,8 +41,8 @@ from primeagent.services.memory_base.flow_cleanup import (
     purge_flow_memory_bases,
 )
 from primeagent.services.memory_base.ingestion import cancel_active_jobs
-from wfx.base.knowledge_bases.backends.base import TestConnectionResult
 from sqlmodel import col, select
+from wfx.base.knowledge_bases.backends.base import TestConnectionResult
 
 if TYPE_CHECKING:
     from httpx import AsyncClient

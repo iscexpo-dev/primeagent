@@ -37,6 +37,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from slack_sdk.errors import SlackApiError
+from slack_sdk.web.async_client import AsyncWebClient
 from wfx.integrations.errors import (
     ActionUnsupportedError,
     AuthExpiredError,
@@ -49,14 +51,12 @@ from wfx.integrations.errors import (
     normalize_integration_error,
     register_error_normalizer,
 )
-from slack_sdk.errors import SlackApiError
-from slack_sdk.web.async_client import AsyncWebClient
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from wfx.integrations.models import CredentialLease, ResolvedCredential
     from slack_sdk.web.async_slack_response import AsyncSlackResponse
+    from wfx.integrations.models import CredentialLease, ResolvedCredential
 
 PROVIDER_ID = "slack"
 

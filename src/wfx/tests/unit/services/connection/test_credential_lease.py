@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from pydantic import SecretStr
 from wfx.integrations import (
     AuthExpiredError,
     ConnectionRef,
@@ -12,7 +13,6 @@ from wfx.integrations import (
     ResolvedCredential,
 )
 from wfx.services.authorization.base import ExecutionPrincipal
-from pydantic import SecretStr
 
 
 class Resolver:

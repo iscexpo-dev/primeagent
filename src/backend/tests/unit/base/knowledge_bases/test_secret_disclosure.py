@@ -9,9 +9,9 @@ import pytest
 from fastapi import HTTPException
 from primeagent.api.v1 import knowledge_bases as kb_api
 from primeagent.schema.knowledge_base import TestBackendConnectionRequest as ConnectionRequest
+from pydantic import SecretStr
 from wfx.base.knowledge_bases.backends.opensearch import OpenSearchBackend
 from wfx.services.deps import get_settings_service
-from pydantic import SecretStr
 
 
 @pytest.mark.parametrize("enabled", [False, True])

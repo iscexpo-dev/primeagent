@@ -2,13 +2,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_oracledb import OracleEmbeddings
-from wfx_oracle.components.oracle.oracledb_embeddings import OracleEmbeddingsComponent
 from oracle_test_utils import (
     get_oracle_connection_inputs,
     get_oracle_connection_params,
     get_oracle_embedding_params,
     get_oracle_test_connection_inputs,
 )
+from wfx_oracle.components.oracle.oracledb_embeddings import OracleEmbeddingsComponent
 
 
 def test_oracle_embeddings_connection_secrets_are_password_inputs():

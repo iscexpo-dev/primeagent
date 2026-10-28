@@ -11,11 +11,11 @@ import json
 
 import httpx
 import pytest
+from microsoft_testkit import TransportRecorder, build_component, graph_fixture, json_response
 from wfx.integrations.errors import ConnectionNotAuthorizedError, ConnectionUnresolvedError, ScopeMissingError
 from wfx.integrations.models import ConnectionRef
 from wfx.services.authorization.base import ExecutionPrincipal
 from wfx_microsoft import OutlookSearchComponent
-from microsoft_testkit import TransportRecorder, build_component, graph_fixture, json_response
 
 ENV_KEY = ConnectionRef(provider="microsoft", name="work").env_key()
 HEADLESS = ExecutionPrincipal(kind="headless_operator")

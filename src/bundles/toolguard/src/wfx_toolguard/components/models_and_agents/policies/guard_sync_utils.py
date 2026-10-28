@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
+from toolguard.runtime.runtime import RESULTS_FILENAME
 from wfx.io import CodeInput
 from wfx.log.logger import logger
-from toolguard.runtime.runtime import RESULTS_FILENAME
 
 GENERATED_GUARD_INFO_PREFIX = "Auto-generated ToolGuard code for "
 

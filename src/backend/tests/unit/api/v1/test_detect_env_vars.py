@@ -10,8 +10,8 @@ import pytest
 from fastapi import HTTPException
 from primeagent.api.v1.schemas.deployments import DetectVarsRequest
 from primeagent.api.v1.variable import detect_env_vars
-from wfx.services.model_provider_policy import ModelProviderPolicyPurpose
 from pydantic import ValidationError
+from wfx.services.model_provider_policy import ModelProviderPolicyPurpose
 
 MODULE = "primeagent.api.v1.variable"
 

@@ -4,6 +4,7 @@ import json
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 from wfx.services.adapters.deployment.schema import (
     BaseDeploymentData,
     BaseDeploymentDataUpdate,
@@ -37,7 +38,6 @@ from wfx.services.adapters.deployment.schema import (
     get_str_id,
     get_uuid,
 )
-from pydantic import ValidationError
 
 
 def test_snapshot_items_requires_at_least_one_source() -> None:

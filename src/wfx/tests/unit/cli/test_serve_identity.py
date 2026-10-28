@@ -784,8 +784,8 @@ class TestServeCli:
     """The identity options are reachable through the real ``wfx serve`` CLI."""
 
     def test_serve_help_lists_identity_options(self):
-        from wfx.__main__ import app
         from typer.testing import CliRunner
+        from wfx.__main__ import app
 
         # Force a wide terminal so rich does not wrap long option names across lines.
         with patch.dict(os.environ, {"COLUMNS": "200"}):
@@ -799,8 +799,8 @@ class TestServeCli:
         assert "--identity-jwt-issuer" in plain
 
     def test_jwt_mode_without_issuer_fails_fast(self):
-        from wfx.__main__ import app
         from typer.testing import CliRunner
+        from wfx.__main__ import app
 
         env = {k: v for k, v in os.environ.items() if not k.startswith("WFX_SERVE_")}
         env["PRIMEAGENT_API_KEY"] = API_KEY

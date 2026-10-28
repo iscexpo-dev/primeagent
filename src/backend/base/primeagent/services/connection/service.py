@@ -10,6 +10,9 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from pydantic import SecretStr
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import and_, col, false, or_, select
 from wfx.integrations.capabilities import ScopeSet
 from wfx.integrations.errors import (
     AuthExpiredError,
@@ -28,9 +31,6 @@ from wfx.integrations.models import (
 )
 from wfx.log.logger import logger
 from wfx.services.connection.base import BaseConnectionResolverService, ConnectionAccessPolicy
-from pydantic import SecretStr
-from sqlalchemy.exc import IntegrityError
-from sqlmodel import and_, col, false, or_, select
 
 from primeagent.services.auth import utils as auth_utils
 from primeagent.services.authorization import filter_visible_resources, visible_scope_prefilter
@@ -65,8 +65,8 @@ from primeagent.services.database.models.connection.schemas import ConnectionRev
 from primeagent.services.deps import get_authorization_service, get_settings_service, session_scope
 
 if TYPE_CHECKING:
-    from wfx.services.authorization.base import ExecutionPrincipal
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.authorization.base import ExecutionPrincipal
 
     from primeagent.services.database.models.user.model import User, UserRead
 

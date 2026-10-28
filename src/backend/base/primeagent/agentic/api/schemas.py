@@ -2,8 +2,8 @@
 
 from typing import Literal
 
-from wfx.services.deps import get_settings_service
 from pydantic import BaseModel, Field, field_validator
+from wfx.services.deps import get_settings_service
 
 # All possible step types for SSE progress events
 StepType = Literal[

@@ -20,8 +20,8 @@ import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from wfx.log.logger import logger
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.trigger.model import Trigger, TriggerSubscription
 from primeagent.services.database.models.trigger.schemas import (

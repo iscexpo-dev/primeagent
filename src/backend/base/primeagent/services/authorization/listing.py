@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from wfx.services.authorization.base import ResourceVisibilityScope
 from sqlalchemy import Select, and_, false
 from sqlmodel import col, or_, select
+from wfx.services.authorization.base import ResourceVisibilityScope
 
 from primeagent.services.authorization.actions import FlowAction
 from primeagent.services.authorization.guards import (

@@ -150,8 +150,8 @@ def test_version_constraint_unsatisfied(tmp_path: Path, monkeypatch: pytest.Monk
     from wfx.extension.manifest import (
         BundleRef,
         ExtensionManifest,
-        WfxCompat,
         ManifestSource,
+        WfxCompat,
     )
 
     (tmp_path / "pilot").mkdir()

@@ -13,13 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from sqlalchemy import update
+from sqlmodel import col, select
 from wfx.base.knowledge_bases.backends.sqlite import SQLiteBackend, SQLiteStorageContext
 from wfx.base.knowledge_bases.migration import ExportHeader, import_qualified_export, qualify_export, write_export
 from wfx.base.knowledge_bases.migration.legacy_reader import export_local_snapshot
 from wfx.base.knowledge_bases.migration.protocol import AutomaticMigrationLimitError, MigrationProtocolError
 from wfx.log.logger import logger
-from sqlalchemy import update
-from sqlmodel import col, select
 
 from primeagent.services.database.models.knowledge_base import KnowledgeBaseRecord
 from primeagent.services.database.models.knowledge_base_storage_migration import KnowledgeBaseStorageMigration

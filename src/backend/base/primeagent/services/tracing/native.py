@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid5
 
-from wfx.log.logger import logger
 from typing_extensions import override
+from wfx.log.logger import logger
 
 from primeagent.serialization.serialization import serialize
 from primeagent.services.database.models.traces.model import SpanStatus, SpanType

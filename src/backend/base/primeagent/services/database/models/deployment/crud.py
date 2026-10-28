@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from wfx.log.logger import logger
 from sqlalchemy import Select, column, values
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, delete, func, select, update
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.deployment.model import Deployment
 from primeagent.services.database.models.deployment.orm_guards import ensure_deployment_immutable_fields
@@ -21,10 +21,10 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from uuid import UUID
 
-    from wfx.services.adapters.deployment.schema import DeploymentType
-    from wfx.services.authorization.base import ResourceVisibilityScope
     from sqlalchemy.sql.selectable import CTE
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.adapters.deployment.schema import DeploymentType
+    from wfx.services.authorization.base import ResourceVisibilityScope
 
 
 class UnconfirmedDeleteRowcount:

@@ -11,11 +11,11 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from microsoft_testkit import RecordingResolver, credential
 from wfx.services.connection.base import BaseConnectionResolverService
 from wfx.services.manager import get_service_manager
 from wfx.services.schema import ServiceType
 from wfx.utils import file_path_security
-from microsoft_testkit import RecordingResolver, credential
 
 if TYPE_CHECKING:
     from wfx.integrations.models import ResolvedCredential

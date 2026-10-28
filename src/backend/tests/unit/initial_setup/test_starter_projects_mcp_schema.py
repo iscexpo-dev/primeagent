@@ -21,7 +21,9 @@ import pytest
 from primeagent.helpers.flow import json_schema_from_flow
 from wfx.graph.schema import INPUT_COMPONENTS
 
-STARTER_PROJECTS_DIR = Path(__file__).resolve().parents[3] / "base" / "primeagent" / "initial_setup" / "starter_projects"
+STARTER_PROJECTS_DIR = (
+    Path(__file__).resolve().parents[3] / "base" / "primeagent" / "initial_setup" / "starter_projects"
+)
 
 
 def _starter_project_files() -> list[Path]:

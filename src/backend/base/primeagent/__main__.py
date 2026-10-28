@@ -43,9 +43,6 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from httpx import HTTPError
 from jwt import InvalidTokenError
-from wfx.cli.command_plugins import register_cli_command_plugins
-from wfx.log.logger import configure, logger
-from wfx.services.settings.constants import DEFAULT_SUPERUSER
 from multiprocess import cpu_count
 from multiprocess.context import Process
 from packaging import version as pkg_version
@@ -54,6 +51,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from sqlmodel import select
+from wfx.cli.command_plugins import register_cli_command_plugins
+from wfx.log.logger import configure, logger
+from wfx.services.settings.constants import DEFAULT_SUPERUSER
 
 from primeagent.cli.admin import admin_app
 from primeagent.cli.progress import create_primeagent_progress
@@ -62,7 +62,12 @@ from primeagent.main import setup_app
 from primeagent.services.auth.utils import get_current_user_from_access_token
 from primeagent.services.database.models.api_key.crud import check_key
 from primeagent.services.database.service import UnsupportedPostgreSQLVersionError, check_postgresql_version_sync
-from primeagent.services.deps import get_db_service, get_settings_service, is_settings_service_initialized, session_scope
+from primeagent.services.deps import (
+    get_db_service,
+    get_settings_service,
+    is_settings_service_initialized,
+    session_scope,
+)
 from primeagent.services.utils import get_auto_login_superuser_password, initialize_services
 from primeagent.utils.version import fetch_latest_version, get_version_info
 from primeagent.utils.version import is_pre_release as primeagent_is_pre_release
@@ -692,7 +697,7 @@ def run(
             progress.print_summary()
             print_banner(str(host), int(port or 7860), protocol)
 
-        from primeagent.helpers.windows_postgres_helper import PRIMEAGENT_DATABASE_URL, POSTGRESQL_PREFIXES
+        from primeagent.helpers.windows_postgres_helper import POSTGRESQL_PREFIXES, PRIMEAGENT_DATABASE_URL
 
         db_url = os.environ.get(PRIMEAGENT_DATABASE_URL, "")
         loop_type = "asyncio"
@@ -883,7 +888,9 @@ def build_version_notice(current_version: str, package_name: str) -> str:
         'A new version of primeagent is available: 1.1.0'
     """
     with suppress(httpx.ConnectError):
-        latest_version = fetch_latest_version(package_name, include_prerelease=primeagent_is_pre_release(current_version))
+        latest_version = fetch_latest_version(
+            package_name, include_prerelease=primeagent_is_pre_release(current_version)
+        )
         if latest_version and pkg_version.parse(current_version) < pkg_version.parse(latest_version):
             release_type = "pre-release" if primeagent_is_pre_release(latest_version) else "version"
             return f"A new {release_type} of {package_name} is available: {latest_version}"

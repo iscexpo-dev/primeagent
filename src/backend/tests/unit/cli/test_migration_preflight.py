@@ -27,9 +27,9 @@ from primeagent.services.database.models.variable.model import Variable
 from primeagent.services.deps import get_auth_service, get_settings_service, get_storage_service, session_scope
 from primeagent.services.variable.constants import CREDENTIAL_TYPE
 from primeagent.utils.version import get_version_info
-from wfx.services.settings.constants import DEFAULT_SUPERUSER, LEGACY_DEFAULT_SUPERUSER_PASSWORD
 from pydantic import SecretStr
 from sqlmodel import select
+from wfx.services.settings.constants import DEFAULT_SUPERUSER, LEGACY_DEFAULT_SUPERUSER_PASSWORD
 
 if TYPE_CHECKING:
     from pathlib import Path

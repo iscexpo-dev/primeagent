@@ -7,13 +7,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
+from sqlalchemy import update
+from sqlmodel import col, select
 from wfx.base.models.provider_registry import resolve_provider_id
 from wfx.log.logger import logger
 from wfx.services.integration_policy import normalize_integration_policy_key
 from wfx.services.model_provider_policy import ModelProviderPolicyService, normalize_blocked_model_key
 from wfx.services.policy_bundle import PolicyBundleSnapshot, policy_bundle_content_hash
-from sqlalchemy import update
-from sqlmodel import col, select
 
 from primeagent.services.database.models.catalog_policy import (
     CatalogPolicyMode,

@@ -5,12 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from requests import HTTPError, Response
 from wfx.base.knowledge_bases.backends.chroma import ChromaMigrationRequiredError
 from wfx_bundles.apify.apify_actor import ApifyActorsComponent
 from wfx_bundles.chroma.chroma import ChromaVectorStoreComponent
 from wfx_bundles.cloudflare.cloudflare import CloudflareWorkersAIEmbeddingsComponent
 from wfx_bundles.needle.needle import NeedleComponent
-from requests import HTTPError, Response
 
 TEST_TOKEN = "test-token"  # noqa: S105 - dummy credential for HTTP fixtures
 

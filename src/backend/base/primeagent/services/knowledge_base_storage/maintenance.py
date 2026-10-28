@@ -156,7 +156,9 @@ def _legacy_process(process: psutil.Process) -> bool:
                     )
                 index += 1
             return False
-        return executable in ("uvicorn", "gunicorn") and any(part.startswith("primeagent.main:") for part in command[1:])
+        return executable in ("uvicorn", "gunicorn") and any(
+            part.startswith("primeagent.main:") for part in command[1:]
+        )
     except psutil.NoSuchProcess:
         return False
     except psutil.AccessDenied as exc:

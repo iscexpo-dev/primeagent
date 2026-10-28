@@ -11,7 +11,9 @@ pytestmark = pytest.mark.no_blockbuster
 
 
 def test_storage_recovery_migration_retains_ledgers_and_guards_downgrade(tmp_path, monkeypatch):
-    migration = importlib.import_module("primeagent.alembic.versions.d42f18a9b760_storage_retirement_and_pending_purges")
+    migration = importlib.import_module(
+        "primeagent.alembic.versions.d42f18a9b760_storage_retirement_and_pending_purges"
+    )
     engine = sa.create_engine(f"sqlite:///{tmp_path / 'recovery.sqlite3'}")
     with engine.begin() as connection:
         connection.exec_driver_sql("PRAGMA foreign_keys=ON")

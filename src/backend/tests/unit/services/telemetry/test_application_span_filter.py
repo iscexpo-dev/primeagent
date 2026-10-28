@@ -6,13 +6,13 @@ tests pin that boundary from the APM side, without touching the vendor integrati
 """
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from primeagent.services.telemetry.opentelemetry import (
     APPLICATION_INSTRUMENTATION_SCOPES,
     APPLICATION_TRACER_NAME,
     ApplicationOnlySpanProcessor,
 )
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 SENTINEL = "SENTINEL-PROMPT-TEXT-MUST-NOT-BE-EXPORTED"
 

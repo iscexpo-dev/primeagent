@@ -35,8 +35,8 @@ from primeagent.services.telemetry.schema import (
 from primeagent.utils.version import get_version_info
 
 if TYPE_CHECKING:
-    from wfx.services.settings.service import SettingsService
     from pydantic import BaseModel
+    from wfx.services.settings.service import SettingsService
 
     from primeagent.services.telemetry.schema import IntegrationActionPayload
 

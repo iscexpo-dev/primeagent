@@ -9,7 +9,9 @@ import type { PrimeagentPage } from "../types";
  * The caller is responsible for the subsequent assertions (e.g. waiting
  * for the mainpage_title).
  */
-export async function mockAutoLoginDisabled(page: PrimeagentPage): Promise<void> {
+export async function mockAutoLoginDisabled(
+  page: PrimeagentPage,
+): Promise<void> {
   await page.route("**/api/v1/auto_login", (route) => {
     route.fulfill({
       status: 403,

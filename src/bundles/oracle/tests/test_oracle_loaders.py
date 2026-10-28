@@ -7,16 +7,16 @@ from unittest.mock import MagicMock, patch
 import oracledb
 import pytest
 from langchain_core.documents import Document
-from wfx.schema.data import Data
-from wfx_oracle.components.oracle.oracledb_loaders import (
-    OracleAutonomousDatabaseLoaderComponent,
-    OracleDocLoaderComponent,
-)
 from oracle_test_utils import (
     get_oracle_connection_inputs,
     get_oracle_connection_params,
     get_oracle_owner,
     get_oracle_test_connection_inputs,
+)
+from wfx.schema.data import Data
+from wfx_oracle.components.oracle.oracledb_loaders import (
+    OracleAutonomousDatabaseLoaderComponent,
+    OracleDocLoaderComponent,
 )
 
 

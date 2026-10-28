@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.tools import StructuredTool
 from primeagent.api.v1.schemas import ResultDataResponse, VertexBuildResponse
-from wfx.components.models_and_agents.policies.guarded_tool import GuardedTool
 from pydantic import BaseModel
 from toolguard.runtime import PolicyViolationException
+from wfx.components.models_and_agents.policies.guarded_tool import GuardedTool
 
 
 class Person(BaseModel):

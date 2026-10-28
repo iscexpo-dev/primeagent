@@ -494,7 +494,8 @@ class TestMemoryBaseCreateFlowOwnership:
         with (
             patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(mock_db)),
             patch(
-                "primeagent.services.memory_base.kb_path_helpers.resolve_kb_username", AsyncMock(return_value="testuser")
+                "primeagent.services.memory_base.kb_path_helpers.resolve_kb_username",
+                AsyncMock(return_value="testuser"),
             ),
             patch("primeagent.services.memory_base.kb_path_helpers.initialize_kb", AsyncMock()),
             contextlib.suppress(Exception),
@@ -665,7 +666,9 @@ class TestMemoryBaseProviderPolicy:
             patch("primeagent.services.memory_base.service.infer_llm_provider", return_value="Anthropic"),
             patch("primeagent.services.memory_base.service.infer_embedding_provider", return_value="OpenAI"),
             patch("primeagent.services.memory_base.service.aresolve_model_provider_policy", resolve_policy),
-            patch("primeagent.services.memory_base.service.get_api_key_for_provider", return_value="owner-secret") as key,
+            patch(
+                "primeagent.services.memory_base.service.get_api_key_for_provider", return_value="owner-secret"
+            ) as key,
             patch("primeagent.services.memory_base.service.initialize_kb", AsyncMock()) as initialize,
             pytest.raises(ModelProviderPolicyError),
         ):
@@ -3837,7 +3840,9 @@ class TestInitializeKbConnectivity:
         backend.teardown = AsyncMock()
 
         with (
-            patch("primeagent.services.memory_base.kb_path_helpers.KBStorageHelper.get_root_path", return_value=tmp_path),
+            patch(
+                "primeagent.services.memory_base.kb_path_helpers.KBStorageHelper.get_root_path", return_value=tmp_path
+            ),
             patch("primeagent.services.memory_base.kb_path_helpers.create_backend", MagicMock(return_value=backend)),
             pytest.raises(BackendProvisioningError, match="connection refused"),
         ):

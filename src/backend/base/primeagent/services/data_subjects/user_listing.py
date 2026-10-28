@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from wfx.services.settings.feature_flags import FEATURE_FLAGS
 from sqlmodel import col, select
+from wfx.services.settings.feature_flags import FEATURE_FLAGS
 
 from primeagent.services.database.models.data_subject_request import (
     OPEN_STATUSES,

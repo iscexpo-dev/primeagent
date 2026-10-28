@@ -36,15 +36,15 @@ from primeagent.services.deps import (
     is_settings_service_initialized,
     session_scope,
 )
-from wfx.components.input_output import ChatInput
-from wfx.graph import Graph
-from wfx.log.logger import logger
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel.pool import StaticPool
 from typer.testing import CliRunner
+from wfx.components.input_output import ChatInput
+from wfx.graph import Graph
+from wfx.log.logger import logger
 
 from tests.api_keys import get_openai_api_key
 from tests.database_template import DatabaseTemplate

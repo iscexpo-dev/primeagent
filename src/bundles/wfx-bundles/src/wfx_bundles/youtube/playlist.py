@@ -1,9 +1,9 @@
+from pytube import Playlist  # Ensure you have pytube installed
 from wfx.custom.custom_component.component import Component
 from wfx.inputs.inputs import MessageTextInput
 from wfx.schema.data import Data
 from wfx.schema.dataframe import DataFrame
 from wfx.template.field.base import Output
-from pytube import Playlist  # Ensure you have pytube installed
 
 
 class YouTubePlaylistComponent(Component):

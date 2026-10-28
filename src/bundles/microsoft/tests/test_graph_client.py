@@ -4,6 +4,14 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from microsoft_testkit import (
+    RecordingResolver,
+    TransportRecorder,
+    credential,
+    graph_error,
+    graph_fixture,
+    json_response,
+)
 from wfx.integrations.errors import (
     ActionUnsupportedError,
     AuthExpiredError,
@@ -22,14 +30,6 @@ from wfx_microsoft.graph import (
     drive_root,
     odata_params,
     prefer_header,
-)
-from microsoft_testkit import (
-    RecordingResolver,
-    TransportRecorder,
-    credential,
-    graph_error,
-    graph_fixture,
-    json_response,
 )
 
 

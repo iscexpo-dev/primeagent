@@ -11,9 +11,9 @@ import pytest
 
 pytest.importorskip("wfx_bundles")
 
+from opensearchpy.exceptions import RequestError
 from wfx_bundles.elastic.opensearch import OpenSearchVectorStoreComponent
 from wfx_bundles.elastic.opensearch_multimodal import OpenSearchVectorStoreComponentMultimodalMultiEmbedding
-from opensearchpy.exceptions import RequestError
 
 _COMPONENT_CLASSES = (
     pytest.param(OpenSearchVectorStoreComponent, id="opensearch"),

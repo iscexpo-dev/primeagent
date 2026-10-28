@@ -173,7 +173,9 @@ def check_target_version(target_version: str) -> CheckResult:
         target = Version(target_version.strip())
     except InvalidVersion:
         return CheckResult(
-            name, "warn", f"{target_version!r} is not a Primeagent version, such as {source}; the version was not checked"
+            name,
+            "warn",
+            f"{target_version!r} is not a Primeagent version, such as {source}; the version was not checked",
         )
     if target < source:
         return CheckResult(

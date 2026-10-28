@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import wfx.base.models.unified_models as unified_models_module
 import pytest
+import wfx.base.models.unified_models as unified_models_module
 from wfx.base.models.unified_models import instantiation
 from wfx.base.models.unified_models.instantiation import get_llm
 

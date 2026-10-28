@@ -24,8 +24,8 @@ from primeagent.services.triggers.listeners.adapters import (
     unregister_adapter,
 )
 from primeagent.services.triggers.listeners.supervisor import ListenerSupervisor
-from wfx.integrations.errors import AuthExpiredError, ConnectionUnresolvedError, ProviderUnavailableError
 from sqlmodel import col, select
+from wfx.integrations.errors import AuthExpiredError, ConnectionUnresolvedError, ProviderUnavailableError
 
 pytestmark = pytest.mark.no_blockbuster
 

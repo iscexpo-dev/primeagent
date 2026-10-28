@@ -19,10 +19,10 @@ from primeagent.services.database.models.message.model import MessageTable
 from primeagent.services.database.models.traces.model import SpanStatus, TraceTable
 from primeagent.services.database.models.vertex_builds.model import VertexBuildTable
 from primeagent.services.deps import session_scope
-from wfx.memory.flow_context import derive_message_owner_uuid
-from wfx.services.authorization.base import PUBLIC_ANONYMOUS_ACTOR_ID
 from sqlalchemy import func
 from sqlmodel import col, select
+from wfx.memory.flow_context import derive_message_owner_uuid
+from wfx.services.authorization.base import PUBLIC_ANONYMOUS_ACTOR_ID
 
 from tests.unit.services.data_subjects._seed import create_user, end_user_message
 

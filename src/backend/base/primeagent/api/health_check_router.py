@@ -3,9 +3,9 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, status
-from wfx.log.logger import logger
 from pydantic import BaseModel
 from sqlmodel import select
+from wfx.log.logger import logger
 
 from primeagent.api.utils import DbSession
 from primeagent.services.database.models.flow.model import Flow

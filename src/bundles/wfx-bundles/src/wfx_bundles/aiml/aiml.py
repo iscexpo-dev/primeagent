@@ -1,4 +1,5 @@
 from langchain_openai import ChatOpenAI
+from typing_extensions import override
 from wfx.base.models.aiml_constants import AimlModels
 from wfx.base.models.model import LCModelComponent
 from wfx.base.models.provider_ssrf import ensure_credential_endpoint_allowed, openai_compatible_client_kwargs
@@ -13,7 +14,6 @@ from wfx.inputs.inputs import (
     StrInput,
 )
 from wfx.utils.secrets import secret_value_to_str
-from typing_extensions import override
 
 
 class AIMLModelComponent(LCModelComponent):

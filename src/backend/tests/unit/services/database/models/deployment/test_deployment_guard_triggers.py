@@ -25,12 +25,12 @@ from primeagent.services.database.models.flow_version.model import FlowVersion
 from primeagent.services.database.models.flow_version_deployment_attachment.crud import create_deployment_attachment
 from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.database.models.user.model import User
-from wfx.services.adapters.deployment.schema import DeploymentType
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.services.adapters.deployment.schema import DeploymentType
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine

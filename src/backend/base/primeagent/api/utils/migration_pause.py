@@ -39,8 +39,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
-from wfx.services.settings.feature_flags import FEATURE_FLAGS
 from starlette.responses import JSONResponse
+from wfx.services.settings.feature_flags import FEATURE_FLAGS
 
 from primeagent.services.deps import get_settings_service
 

@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 
 import pytest
+from microsoft_testkit import TransportRecorder, build_component, credential, graph_error, graph_fixture, json_response
 from wfx.integrations.errors import ConnectionNotAuthorizedError, ScopeMissingError
 from wfx.schema.data import Data
 from wfx_microsoft import TeamsChannelPostComponent, TeamsChatPostComponent
-from microsoft_testkit import TransportRecorder, build_component, credential, graph_error, graph_fixture, json_response
 
 
 async def test_chat_post_targets_the_chat_messages_collection(resolver_factory) -> None:

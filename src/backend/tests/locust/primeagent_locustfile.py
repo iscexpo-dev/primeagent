@@ -82,7 +82,12 @@ def setup_error_logging():
     error_logger.addHandler(error_handler)
 
     # Try to capture Primeagent logs
-    primeagent_log_paths = ["primeagent.log", "logs/primeagent.log", "../../../primeagent.log", "../../../../primeagent.log"]
+    primeagent_log_paths = [
+        "primeagent.log",
+        "logs/primeagent.log",
+        "../../../primeagent.log",
+        "../../../../primeagent.log",
+    ]
 
     for log_path in primeagent_log_paths:
         if Path(log_path).exists():

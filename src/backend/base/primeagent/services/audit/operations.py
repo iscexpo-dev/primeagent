@@ -22,8 +22,8 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException
-from wfx.log.logger import logger
 from sqlalchemy.exc import IntegrityError, OperationalError
+from wfx.log.logger import logger
 
 from primeagent.services.audit.attribution import resolve_audit_actor
 from primeagent.services.audit.details import (

@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from cryptography.fernet import InvalidToken
-from wfx.log.logger import logger
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.log.logger import logger
 
 from primeagent.services.auth import utils as auth_utils
 from primeagent.services.database.models.api_key.model import ApiKey, ApiKeyCreate, ApiKeyRead, UnmaskedApiKeyRead

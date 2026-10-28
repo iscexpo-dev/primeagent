@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from microsoft_testkit import RecordingResolver, TransportRecorder, build_component, credential, json_response
+from test_graph_client import lease_for
 from wfx.integrations.errors import AuthExpiredError, ProviderUnavailableError, ScopeMissingError
 from wfx.utils import file_path_security
 from wfx_microsoft import (
@@ -20,8 +22,6 @@ from wfx_microsoft import (
 )
 from wfx_microsoft.components.microsoft import outlook_send
 from wfx_microsoft.graph import GraphClient, drive_children_path, drive_item_path
-from microsoft_testkit import RecordingResolver, TransportRecorder, build_component, credential, json_response
-from test_graph_client import lease_for
 
 
 @pytest.mark.parametrize(

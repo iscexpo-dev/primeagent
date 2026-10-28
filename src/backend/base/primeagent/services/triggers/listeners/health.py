@@ -20,8 +20,8 @@ import contextlib
 import json
 from typing import TYPE_CHECKING, Any
 
-from wfx.log.logger import logger
 from sqlalchemy import text
+from wfx.log.logger import logger
 
 from primeagent.services.deps import get_settings_service, session_scope
 

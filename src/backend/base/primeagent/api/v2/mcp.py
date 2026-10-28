@@ -4,11 +4,11 @@ from io import BytesIO
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile
-from wfx.base.agents.utils import safe_cache_get, safe_cache_set
-from wfx.base.mcp.util import update_tools
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
+from wfx.base.agents.utils import safe_cache_get, safe_cache_set
+from wfx.base.mcp.util import update_tools
 
 from primeagent.api.utils import CurrentActiveUser, DbSession
 from primeagent.api.utils.mcp.discovery import discovery_clients, run_server_checks

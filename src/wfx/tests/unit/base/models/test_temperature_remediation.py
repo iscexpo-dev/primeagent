@@ -25,10 +25,10 @@ from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, Huma
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.prompts import ChatPromptTemplate
+from pydantic import Field
 from wfx.base.models.model import LCModelComponent
 from wfx.base.models.model_remediation import find_remediation, reset_remediation_cache
 from wfx.schema.message import Message
-from pydantic import Field
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

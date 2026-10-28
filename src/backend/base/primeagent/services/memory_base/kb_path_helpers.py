@@ -10,10 +10,10 @@ import hashlib
 import re
 from typing import TYPE_CHECKING
 
+from sqlmodel import select
 from wfx.base.knowledge_bases.backends import BackendType, create_backend
 from wfx.base.knowledge_bases.validation import MAX_LOCAL_COLLECTION_NAME_LENGTH
 from wfx.log.logger import logger
-from sqlmodel import select
 
 from primeagent.api.utils.kb_helpers import KBStorageHelper, validate_kb_path
 from primeagent.services.deps import session_scope

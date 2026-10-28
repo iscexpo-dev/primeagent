@@ -13,6 +13,10 @@ from primeagent.services.database.models.variable.model import Variable, Variabl
 from primeagent.services.deps import get_settings_service
 from primeagent.services.variable.constants import CREDENTIAL_TYPE, GENERIC_TYPE
 from primeagent.services.variable.service import DatabaseVariableService, has_variable_value
+from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlmodel import SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession
 from wfx.services.authorization.base import ResourceVisibilityScope
 from wfx.services.model_provider_policy import (
     ModelProviderPolicyContext,
@@ -21,10 +25,6 @@ from wfx.services.model_provider_policy import (
 )
 from wfx.services.settings.constants import VARIABLES_TO_GET_FROM_ENVIRONMENT
 from wfx.services.variable import VariableNotFoundError
-from pydantic import SecretStr
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 @pytest.fixture

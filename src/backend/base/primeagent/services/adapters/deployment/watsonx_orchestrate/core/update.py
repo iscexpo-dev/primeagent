@@ -53,12 +53,12 @@ from primeagent.services.adapters.deployment.watsonx_orchestrate.payloads import
 from primeagent.services.adapters.deployment.watsonx_orchestrate.utils import dedupe_list
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
     from wfx.services.adapters.deployment.schema import (
         BaseDeploymentDataUpdate,
         DeploymentUpdate,
         IdLike,
     )
-    from sqlalchemy.ext.asyncio import AsyncSession
 
     from primeagent.services.adapters.deployment.watsonx_orchestrate.types import WxOClient
 

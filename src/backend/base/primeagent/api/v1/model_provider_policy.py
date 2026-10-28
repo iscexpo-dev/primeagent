@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 from wfx.base.models.provider_registry import get_registry_snapshot, resolve_provider_id
 from wfx.services.deps import get_model_provider_policy_service
-from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from primeagent.api.utils import DbSession, DbSessionReadOnly
 from primeagent.api.v1.policy_bundle_errors import policy_bundle_revision_conflict

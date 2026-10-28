@@ -12,8 +12,8 @@ import secrets
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-import wfx.custom.utils as wfx_utils
 import pytest
+import wfx.custom.utils as wfx_utils
 from primeagent.agentic.services.user_components import register_user_component
 from primeagent.agentic.services.user_components_overlay import (
     load_registry_with_user_overlay,

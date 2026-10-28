@@ -11,9 +11,9 @@ away from it. That is a startup error, not a runtime surprise.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 from wfx.services.settings.base import Settings
 from wfx.services.settings.groups.runtime import RuntimeSettings
-from pydantic import ValidationError
 
 
 def test_the_defaults_leave_room_to_renew() -> None:

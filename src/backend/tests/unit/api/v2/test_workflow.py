@@ -21,9 +21,9 @@ from httpx import AsyncClient
 from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.database.models.jobs.model import Job, JobType
 from primeagent.services.task.service import TaskService
+from sqlalchemy.exc import OperationalError
 from wfx.schema.workflow import JobStatus, WorkflowExecutionResponse
 from wfx.services.deps import session_scope
-from sqlalchemy.exc import OperationalError
 
 
 class TestWorkflowDeveloperAPIProtection:

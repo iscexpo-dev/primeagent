@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import pytest
-from wfx.components.agentics import agenerate_component, amap_component, areduce_component
 from pydantic import BaseModel, create_model
+from wfx.components.agentics import agenerate_component, amap_component, areduce_component
 
 if TYPE_CHECKING:
     from collections.abc import Callable

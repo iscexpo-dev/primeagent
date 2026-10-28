@@ -4,14 +4,14 @@ import json
 import uuid
 from typing import Any
 
+from opensearchpy import OpenSearch, helpers
+from opensearchpy.exceptions import RequestError
 from wfx.base.vectorstores.model import LCVectorStoreComponent, check_cached_vector_store
 from wfx.base.vectorstores.vector_store_connection_decorator import vector_store_connection
 from wfx.io import BoolInput, DropdownInput, HandleInput, IntInput, MultilineInput, SecretStrInput, StrInput, TableInput
 from wfx.log import logger
 from wfx.schema.data import Data
 from wfx.utils.ssrf_protection import validate_connector_url_for_ssrf
-from opensearchpy import OpenSearch, helpers
-from opensearchpy.exceptions import RequestError
 
 
 @vector_store_connection

@@ -63,7 +63,9 @@ def test_stable_import_path_resolves():
 
     mod = importlib.import_module("primeagent.services.telemetry")
     assert callable(getattr(mod, "pop_all", None)), "pop_all missing from primeagent.services.telemetry"
-    assert callable(getattr(mod, "append_run_event", None)), "append_run_event missing from primeagent.services.telemetry"
+    assert callable(getattr(mod, "append_run_event", None)), (
+        "append_run_event missing from primeagent.services.telemetry"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
+from pydantic import SecretStr, ValidationError
 from wfx.cli.validation import is_valid_env_var_name
 from wfx.extension.manifest import ExtensionManifest
 from wfx.inputs.input_mixin import SENSITIVE_FIELD_TYPES, FieldTypes
@@ -23,7 +24,6 @@ from wfx.integrations import (
 from wfx.integrations.capabilities import CapabilityMaturity, DeploymentContext, ExecutionSubstrate, OAuthKind
 from wfx.io.schema import create_input_schema, create_input_schema_from_dict
 from wfx.schema.dotdict import dotdict
-from pydantic import SecretStr, ValidationError
 
 
 @pytest.mark.parametrize("handle", ["google", "google/", "/work", "Google/work", "google/Work", "google/work-a"])

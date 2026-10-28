@@ -2,6 +2,10 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
+from sqlmodel.sql.expression import SelectOfScalar
 from wfx.services.authorization import (
     AuthorizationMutation,
     AuthorizationMutationKind,
@@ -9,10 +13,6 @@ from wfx.services.authorization import (
     UserAuthorizationSnapshot,
 )
 from wfx.utils.util_strings import escape_like_pattern
-from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
-from sqlmodel import select
-from sqlmodel.sql.expression import SelectOfScalar
 
 from primeagent.api.utils import CurrentActiveUser, DbSession
 from primeagent.api.v1.schemas import PasswordResetRequest, UsersResponse

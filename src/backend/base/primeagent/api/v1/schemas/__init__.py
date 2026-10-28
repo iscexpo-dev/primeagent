@@ -3,11 +3,6 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID
 
-from wfx.base.knowledge_bases.backends.opensearch import opensearch_env_configured
-from wfx.base.knowledge_bases.backends.postgres import postgres_env_configured, resolve_default_kb_backend
-from wfx.graph.schema import RunOutputs
-from wfx.services.settings.base import Settings
-from wfx.services.settings.feature_flags import FEATURE_FLAGS, FeatureFlags
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -17,6 +12,11 @@ from pydantic import (
     field_validator,
     model_serializer,
 )
+from wfx.base.knowledge_bases.backends.opensearch import opensearch_env_configured
+from wfx.base.knowledge_bases.backends.postgres import postgres_env_configured, resolve_default_kb_backend
+from wfx.graph.schema import RunOutputs
+from wfx.services.settings.base import Settings
+from wfx.services.settings.feature_flags import FEATURE_FLAGS, FeatureFlags
 
 from primeagent.schema.dotdict import dotdict
 from primeagent.schema.graph import Tweaks

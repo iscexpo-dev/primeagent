@@ -24,11 +24,11 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlmodel import select, update
 from wfx.base.knowledge_bases.backends import BackendType, create_backend, get_backend_class
 from wfx.base.knowledge_bases.backends.base import BackendConfigurationError
 from wfx.log.logger import logger
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
-from sqlmodel import select, update
 
 from primeagent.services.database.models.knowledge_base import KnowledgeBaseRecord, KnowledgeBaseStatus
 from primeagent.services.database.models.user.model import User

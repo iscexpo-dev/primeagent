@@ -10,11 +10,11 @@ pass on both eager (<=0.136) and lazy (>=0.137) inclusion.
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from wfx.observability_fastapi import (
     _safe_get_route_details,
     patch_otel_fastapi_route_details,
 )
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 
 def _build_app() -> FastAPI:

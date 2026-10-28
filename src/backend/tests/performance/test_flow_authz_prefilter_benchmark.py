@@ -18,9 +18,9 @@ from primeagent.services.authorization.listing import (
 )
 from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.database.models.folder.model import Folder
-from wfx.services.authorization.base import ResourceVisibilityScope
 from sqlalchemy import case, func
 from sqlmodel import Session, col, create_engine, select
+from wfx.services.authorization.base import ResourceVisibilityScope
 
 FLOW_COUNT = 10_000
 PAGE_OFFSET = 25

@@ -3,6 +3,8 @@ from typing import Any
 from urllib.parse import urljoin
 
 from langchain_core.tools import StructuredTool, ToolException
+from pydantic import BaseModel
+from pydantic.v1 import Field
 from wfx.base.langchain_utilities.model import LCToolComponent
 from wfx.field_typing import Tool
 from wfx.inputs.inputs import IntInput, MultilineInput, NestedDictInput, SecretStrInput, StrInput
@@ -10,8 +12,6 @@ from wfx.io import Output
 from wfx.schema.data import Data
 from wfx.schema.dataframe import DataFrame
 from wfx.utils.ssrf_httpx import ssrf_safe_httpx_post
-from pydantic import BaseModel
-from pydantic.v1 import Field
 
 
 class GleanSearchAPISchema(BaseModel):

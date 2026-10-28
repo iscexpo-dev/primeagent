@@ -6,8 +6,8 @@ import openai
 import pytest
 from primeagent.helpers.base_model import build_model_from_schema
 from primeagent.inputs.inputs import TableInput
-from wfx.components.llm_operations.structured_output import StructuredOutputComponent
 from pydantic import BaseModel
+from wfx.components.llm_operations.structured_output import StructuredOutputComponent
 
 from tests.base import ComponentTestBaseWithoutClient
 from tests.unit.mock_language_model import MockLanguageModel

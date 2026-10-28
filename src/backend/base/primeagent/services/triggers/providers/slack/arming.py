@@ -23,8 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from wfx.integrations.models import ConnectionRef
 from sqlmodel import select
+from wfx.integrations.models import ConnectionRef
 
 from primeagent.services.database.models.connection.model import Connection
 from primeagent.services.database.models.connection.oauth import ConnectionOAuth

@@ -8,8 +8,8 @@ identified serving run's ``end_user_id`` fills ``tracing_user_id``; otherwise th
 
 from uuid import uuid4
 
-import wfx.graph.graph.base as base_module
 import pytest
+import wfx.graph.graph.base as base_module
 from wfx.components.input_output import ChatInput, ChatOutput
 from wfx.graph.graph.base import Graph
 

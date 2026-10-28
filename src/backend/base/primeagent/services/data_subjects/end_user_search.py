@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections import Counter
 from typing import TYPE_CHECKING
 
-from wfx.utils.util_strings import escape_like_pattern
-from wfx.workflow.end_user_identity import SCOPE_SEPARATOR
 from sqlalchemy import func
 from sqlmodel import col, select
+from wfx.utils.util_strings import escape_like_pattern
+from wfx.workflow.end_user_identity import SCOPE_SEPARATOR
 
 from primeagent.services.data_subjects.identity import ANONYMOUS_PREFIX
 from primeagent.services.data_subjects.schemas import EndUserMatch

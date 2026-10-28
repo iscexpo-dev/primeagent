@@ -75,7 +75,9 @@ def test_poc_flow_translation(converter, poc_flow_data):
     assert flow.steps, "translated flow has no steps"
 
     for step in flow.steps:
-        assert step.component.startswith(("/primeagent/", "/builtin/")), f"unexpected component prefix: {step.component}"
+        assert step.component.startswith(("/primeagent/", "/builtin/")), (
+            f"unexpected component prefix: {step.component}"
+        )
 
     # Verify the variable schema includes OPENAI_API_KEY with env_var annotation
     import msgspec

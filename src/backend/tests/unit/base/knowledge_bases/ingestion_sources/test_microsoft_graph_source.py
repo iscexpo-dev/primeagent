@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from wfx.base.knowledge_bases.ingestion_sources import (
     OneDriveSource,
     SharePointSource,
@@ -28,7 +29,6 @@ from wfx.integrations.models import ResolvedCredential
 from wfx.services.connection.base import BaseConnectionResolverService, ConnectionAccessPolicy
 from wfx.services.manager import get_service_manager
 from wfx.services.schema import ServiceType
-from pydantic import SecretStr
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 DOWNLOAD_URL = "https://contoso-my.sharepoint.com/personal/_layouts/15/download.aspx?SECRET=preauth"

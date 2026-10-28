@@ -174,10 +174,10 @@ def test_metric_probe_uses_the_configured_temporality(monkeypatch):
     delta when asked to. A probe left on InMemoryMetricReader's cumulative default would test a
     differently shaped point than the one production sends.
     """
-    from wfx.observability import _resource
-    from wfx.observability_doctor import _probe_metrics
     from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
     from opentelemetry.sdk.metrics import Counter
+    from wfx.observability import _resource
+    from wfx.observability_doctor import _probe_metrics
 
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "delta")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")

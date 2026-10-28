@@ -1949,7 +1949,9 @@ class DeploymentsApiParallelE2E:
         return version_ids
 
     def _resolve_starter_project_paths(self, *, count: int) -> list[Path]:
-        starter_root = Path(__file__).resolve().parents[3] / "src/backend/base/primeagent/initial_setup/starter_projects"
+        starter_root = (
+            Path(__file__).resolve().parents[3] / "src/backend/base/primeagent/initial_setup/starter_projects"
+        )
         if not starter_root.is_dir():
             msg = f"starter projects directory not found: {starter_root}"
             raise RuntimeError(msg)

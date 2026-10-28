@@ -17,11 +17,11 @@ from primeagent.services.database.models.catalog_policy import (
     CatalogResourceKind,
 )
 from primeagent.services.schema import ServiceType
-from wfx.services.catalog_policy import BaseCatalogPolicyService
-from wfx.services.policy_bundle import PolicyBundleService, PolicyBundleSnapshot
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.services.catalog_policy import BaseCatalogPolicyService
+from wfx.services.policy_bundle import PolicyBundleService, PolicyBundleSnapshot
 
 
 class _Database:

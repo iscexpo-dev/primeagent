@@ -8,11 +8,11 @@ from typing import Any
 import oracledb
 from langchain_oracledb.vectorstores import DistanceStrategy, OracleVS
 from langchain_oracledb.vectorstores.oraclevs import create_index
+from pydantic import BaseModel
 from wfx.base.vectorstores.model import LCVectorStoreComponent, check_cached_vector_store
 from wfx.helpers.data import docs_to_data
 from wfx.io import BoolInput, DictInput, DropdownInput, HandleInput, IntInput, Output, SecretStrInput, StrInput
 from wfx.schema.data import Data
-from pydantic import BaseModel
 
 from .connection import build_connection_params
 

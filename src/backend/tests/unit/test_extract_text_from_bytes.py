@@ -2,8 +2,8 @@ from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
-from wfx.base.data.utils import extract_text_from_bytes
 from pypdf import PdfWriter
+from wfx.base.data.utils import extract_text_from_bytes
 
 
 def _make_blank_pdf(num_pages: int = 1) -> bytes:

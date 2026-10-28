@@ -4,6 +4,12 @@ from enum import Enum
 from typing import Any
 from weakref import WeakValueDictionary
 
+from opentelemetry import metrics
+from opentelemetry.metrics import CallbackOptions, Meter, Observation
+from opentelemetry.metrics._internal.instrument import Counter, Histogram, UpDownCounter
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.trace import TracerProvider
 from wfx.observability import (
     APPLICATION_INSTRUMENTATION_SCOPES,
     APPLICATION_METER_NAME,
@@ -17,12 +23,6 @@ from wfx.observability import (
     ApplicationTelemetry,
     bootstrap_application_telemetry,
 )
-from opentelemetry import metrics
-from opentelemetry.metrics import CallbackOptions, Meter, Observation
-from opentelemetry.metrics._internal.instrument import Counter, Histogram, UpDownCounter
-from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.trace import TracerProvider
 
 # The provider bootstrap, the export filters and the runtime metrics now live in
 # wfx.observability, so that wfx serve and wfx run get the same application observability as

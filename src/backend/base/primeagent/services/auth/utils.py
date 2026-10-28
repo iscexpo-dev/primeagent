@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from collections.abc import Coroutine
     from datetime import timedelta
 
-    from wfx.services.settings.service import SettingsService
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.settings.service import SettingsService
 
     from primeagent.services.database.models.user.model import User, UserRead
 

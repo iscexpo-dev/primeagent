@@ -15,11 +15,11 @@ from primeagent.memory import aget_messages, astore_message
 from primeagent.schema.message import Message
 from primeagent.services.database.models.message.model import MessageTable
 from primeagent.services.deps import session_scope
+from sqlmodel import select
 from wfx.components.input_output import ChatInput, ChatOutput
 from wfx.graph.graph.base import Graph
 from wfx.memory.flow_context import reset_messages_persist, set_messages_persist
 from wfx.schema.workflow import WorkflowRunRequest
-from sqlmodel import select
 
 
 def _msg(session_id: str) -> Message:

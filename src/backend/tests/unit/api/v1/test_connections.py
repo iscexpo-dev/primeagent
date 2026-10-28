@@ -14,12 +14,12 @@ from primeagent.services.auth.utils import encrypt_api_key, get_auth_service
 from primeagent.services.database.models.connection import ConnectionSecret
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import get_connection_resolver_service, get_db_service, session_scope
+from sqlalchemy import event
+from sqlmodel import select
 from wfx.integrations.errors import ConnectionNotAuthorizedError, ConnectionUnresolvedError, ScopeMissingError
 from wfx.integrations.models import ConnectionRef, ConnectionResolutionRequest
 from wfx.services.authorization.base import ExecutionPrincipal
 from wfx.services.deps import get_settings_service
-from sqlalchemy import event
-from sqlmodel import select
 
 from tests.unit.services.authorization._policy_double import install_policy_authz
 

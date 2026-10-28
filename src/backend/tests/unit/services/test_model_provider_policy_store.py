@@ -9,12 +9,12 @@ import pytest
 from primeagent.services import model_provider_policy as policy_store
 from primeagent.services.database.models.model_provider_policy import ModelProviderPolicy
 from primeagent.services.task import model_provider_policy_refresh as refresh_module
-from wfx.services.catalog_policy import CatalogPolicyService
-from wfx.services.model_provider_policy import BaseModelProviderPolicyService, ModelProviderPolicyService
-from wfx.services.policy_bundle import PolicyBundleService, PolicyBundleSnapshot
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.services.catalog_policy import CatalogPolicyService
+from wfx.services.model_provider_policy import BaseModelProviderPolicyService, ModelProviderPolicyService
+from wfx.services.policy_bundle import PolicyBundleService, PolicyBundleSnapshot
 
 
 class _Result:

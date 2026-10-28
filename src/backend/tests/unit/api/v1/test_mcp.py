@@ -7,9 +7,9 @@ import anyio
 import pytest
 from fastapi import HTTPException, status
 from httpx import AsyncClient
-from primeagent.services.database.models.user import User
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser, authorization_context
 from mcp.server.sse import SseServerTransport
+from primeagent.services.database.models.user import User
 
 # Mark all tests in this module as asyncio
 pytestmark = pytest.mark.asyncio

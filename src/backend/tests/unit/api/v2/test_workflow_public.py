@@ -26,8 +26,8 @@ import pytest
 from httpx import AsyncClient, codes
 from primeagent.services.database.models.auth import AuthzShare, SharePermissionLevel, ShareScope
 from primeagent.services.database.models.flow.model import Flow
-from wfx.services.deps import session_scope
 from sqlmodel import select
+from wfx.services.deps import session_scope
 
 if TYPE_CHECKING:
     from uuid import UUID

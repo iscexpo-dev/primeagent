@@ -5,9 +5,9 @@ from unittest.mock import patch
 import pytest
 from langchain_core.tools import StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from pydantic import BaseModel, ValidationError
 from wfx.io.schema import flatten_schema
 from wfx.schema.json_schema import create_input_schema_from_json_schema
-from pydantic import BaseModel, ValidationError
 
 
 class TestCreateInputSchemaFromJsonSchema:

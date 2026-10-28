@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+from sqlmodel import col, select, update
 from wfx.integrations.errors import (
     AuthExpiredError,
     ConnectionNotAuthorizedError,
@@ -52,8 +54,6 @@ from wfx.integrations.errors import (
 from wfx.integrations.models import ConnectionRef, ConnectionResolutionRequest
 from wfx.log.logger import logger
 from wfx.services.settings.feature_flags import FEATURE_FLAGS
-from pydantic import ValidationError
-from sqlmodel import col, select, update
 
 from primeagent.services.database.models.connection.model import Connection
 from primeagent.services.database.models.trigger.model import Trigger

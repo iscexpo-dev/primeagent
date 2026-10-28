@@ -26,12 +26,12 @@ from contextvars import ContextVar
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from mcp import types
+from mcp.server import Server
 from wfx.log.logger import logger
 from wfx.mcp.client import PrimeagentClient
 from wfx.mcp.server import client_scope
 from wfx.mcp.server import mcp as wfx_mcp
-from mcp import types
-from mcp.server import Server
 
 from primeagent.api.utils import CurrentActiveMCPUser, DbSession
 from primeagent.api.v1.mcp import ResponseNoOp, StreamableHTTP
@@ -55,7 +55,9 @@ def _excluded_tools() -> frozenset[str]:
     return _HTTP_EXCLUDED_TOOLS | _AGENTIC_GATED_TOOLS
 
 
-current_loopback_client_ctx: ContextVar[PrimeagentClient | None] = ContextVar("current_loopback_client_ctx", default=None)
+current_loopback_client_ctx: ContextVar[PrimeagentClient | None] = ContextVar(
+    "current_loopback_client_ctx", default=None
+)
 
 server: Server = Server("primeagent-mcp")
 

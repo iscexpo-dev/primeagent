@@ -32,6 +32,7 @@ from primeagent.memory import (
 from primeagent.schema.message import Message
 from primeagent.services.database.models.message.model import MessageTable
 from primeagent.services.deps import session_scope
+from sqlmodel import select
 from wfx.components.deactivated.store_message import StoreMessageComponent
 from wfx.components.flow_controls.run_flow import RunFlowComponent
 from wfx.components.input_output import ChatInput, ChatOutput
@@ -52,7 +53,6 @@ from wfx.memory.flow_context import (
     should_persist_messages,
 )
 from wfx.schema.data import Data
-from sqlmodel import select
 
 
 async def _store(session_id: str, flow_id, user_id, text: str) -> None:

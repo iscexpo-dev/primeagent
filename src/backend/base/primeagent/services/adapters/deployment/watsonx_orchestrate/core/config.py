@@ -30,7 +30,9 @@ from wfx.services.adapters.payload import AdapterPayloadMissingError, AdapterPay
 
 from primeagent.services.adapters.deployment.watsonx_orchestrate.client import resolve_runtime_credentials
 from primeagent.services.adapters.deployment.watsonx_orchestrate.constants import ErrorPrefix
-from primeagent.services.adapters.deployment.watsonx_orchestrate.core.tools import extract_primeagent_connections_binding
+from primeagent.services.adapters.deployment.watsonx_orchestrate.core.tools import (
+    extract_primeagent_connections_binding,
+)
 from primeagent.services.adapters.deployment.watsonx_orchestrate.payloads import validate_wxo_name
 from primeagent.services.adapters.deployment.watsonx_orchestrate.utils import (
     raise_as_deployment_error,

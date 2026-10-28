@@ -11,11 +11,11 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 from wfx.integrations.capabilities import ConditionalScopeRequirement
 from wfx.integrations.models import PROVIDER_ID_PATTERN
 from wfx.services.deps import get_integration_policy_service
 from wfx.services.integration_policy import IntegrationPolicyPurpose, aresolve_integration_policy
-from pydantic import BaseModel, Field
 
 from primeagent.api.utils import CurrentActiveUser, DbSessionReadOnly
 from primeagent.api.v1.connections import ConnectionService

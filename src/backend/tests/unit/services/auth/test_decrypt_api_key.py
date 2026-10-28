@@ -9,10 +9,10 @@ from cryptography.fernet import Fernet
 from primeagent.services.auth.mcp_encryption import is_encrypted
 from primeagent.services.auth.service import AuthService
 from primeagent.services.auth.utils import decrypt_api_key, encrypt_api_key
-from wfx.services.settings.auth import AuthSettings
 from pydantic import SecretStr
 from structlog import make_filtering_bound_logger, wrap_logger
 from structlog.testing import LogCapture
+from wfx.services.settings.auth import AuthSettings
 
 
 @pytest.fixture

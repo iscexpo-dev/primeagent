@@ -10,8 +10,8 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING
 
-from wfx.log.logger import logger
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.api.utils.migration_pause import is_paused, writing
 from primeagent.services.data_subjects.engine import RUNNABLE, is_retry_due, run_request

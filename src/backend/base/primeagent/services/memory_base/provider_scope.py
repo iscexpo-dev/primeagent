@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from wfx.services.model_provider_policy import ModelProviderPolicyPurpose, aresolve_model_provider_policy
 from sqlmodel import select
+from wfx.services.model_provider_policy import ModelProviderPolicyPurpose, aresolve_model_provider_policy
 
 from primeagent.services.database.models.flow.model import Flow, is_virtual_flow_id
 from primeagent.services.database.models.memory_base.model import MemoryBase
@@ -17,8 +17,8 @@ from primeagent.services.model_provider_policy_scope import scoped_model_provide
 if TYPE_CHECKING:
     import uuid
 
-    from wfx.services.model_provider_policy import ModelProviderPolicySnapshot
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.model_provider_policy import ModelProviderPolicySnapshot
 
 
 class MemoryBaseFlowNotFoundError(PermissionError):

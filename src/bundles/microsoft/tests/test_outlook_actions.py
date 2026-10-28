@@ -6,6 +6,7 @@ import json
 
 import httpx
 import pytest
+from microsoft_testkit import TransportRecorder, build_component, credential, graph_error, graph_fixture, json_response
 from wfx.integrations.errors import RateLimitedError, ScopeMissingError
 from wfx_microsoft import (
     OutlookCalendarCreateComponent,
@@ -14,7 +15,6 @@ from wfx_microsoft import (
     OutlookSendComponent,
 )
 from wfx_microsoft.components.microsoft.outlook_send import MAX_ATTACHMENT_BYTES
-from microsoft_testkit import TransportRecorder, build_component, credential, graph_error, graph_fixture, json_response
 
 
 async def test_send_mail_posts_the_graph_message_shape(resolver_factory) -> None:

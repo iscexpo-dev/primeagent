@@ -9,10 +9,10 @@ it names its tool AND freezes the endpoint and the argument/result schemas.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 from wfx.extension.integration_manifest import IntegrationCapabilityManifest
 from wfx.integrations import McpToolPin
 from wfx.integrations.capabilities import IntegrationCapability
-from pydantic import ValidationError
 
 SERVER_URL = "https://mcp.example.com/mcp"
 INPUT_SCHEMA = {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}

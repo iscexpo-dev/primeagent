@@ -33,8 +33,8 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal
 
 import anyio
-from wfx.log.logger import logger
 from sqlmodel import select
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.file.model import File
 from primeagent.services.database.models.flow.model import Flow

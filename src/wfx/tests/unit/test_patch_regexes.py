@@ -232,7 +232,7 @@ class TestSdkVersionSubstitution:
     def test_updates_wfx_sdk_dependency(self, operator):
         txt = f'dependencies = ["primeagent-sdk{operator}0.3.0", "orjson>=3.10.0"]'
         result = _patch_wfx_sdk_dependency(txt, "0.4.0")
-        assert '"primeagent-sdk>=0.4.0"' in result
+        assert '"primeagent-sdk"' in result
         assert '"orjson>=3.10.0"' in result
 
 

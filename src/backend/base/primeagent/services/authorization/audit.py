@@ -32,8 +32,8 @@ from primeagent.services.auth.context import (
 from primeagent.services.deps import get_settings_service
 
 if TYPE_CHECKING:
-    from wfx.services.authorization import AuthorizationPrincipal
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.authorization import AuthorizationPrincipal
 
 # Shared audit result vocabulary.
 AUDIT_ALLOW = "allow"

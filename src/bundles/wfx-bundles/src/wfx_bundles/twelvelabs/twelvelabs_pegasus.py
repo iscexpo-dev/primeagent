@@ -1,14 +1,14 @@
 import time
 from typing import Any
 
+from tenacity import retry, stop_after_attempt, wait_exponential
+from twelvelabs import TwelveLabs
 from wfx.custom import Component
 from wfx.field_typing.range_spec import RangeSpec
 from wfx.inputs import DataInput, DropdownInput, MessageInput, MultilineInput, SecretStrInput, SliderInput
 from wfx.io import Output
 from wfx.schema.message import Message
 from wfx.utils.file_path_security import component_file_access_scopes
-from tenacity import retry, stop_after_attempt, wait_exponential
-from twelvelabs import TwelveLabs
 
 from wfx_bundles.twelvelabs.file_access import resolve_video_file
 

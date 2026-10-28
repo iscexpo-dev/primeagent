@@ -694,9 +694,9 @@ class TestV2WorkflowDelegatedErrorPolicy:
         """A transient DB lock during permission enforcement must surface as 503 DATABASE_ERROR."""
         from primeagent.api.v2 import workflow as workflow_module
         from primeagent.api.v2.workflow_host import PrimeagentWorkflowHost
+        from sqlalchemy.exc import OperationalError
         from wfx.workflow.actions import WorkflowAction
         from wfx.workflow.host import ResolvedFlow
-        from sqlalchemy.exc import OperationalError
 
         flow = SimpleNamespace(id=uuid4(), user_id=uuid4(), workspace_id=None, folder_id=None)
         resolved = ResolvedFlow(flow_id="my-endpoint", graph=flow)

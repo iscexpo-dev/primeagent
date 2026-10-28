@@ -12,8 +12,8 @@ import uuid
 from pathlib import Path
 from unittest.mock import Mock
 
-import primeagent
 import orjson
+import primeagent
 import pytest
 from a2a.compat.v0_3 import types as a2a_types
 from httpx import AsyncClient

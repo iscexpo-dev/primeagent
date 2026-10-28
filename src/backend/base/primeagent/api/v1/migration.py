@@ -31,12 +31,12 @@ import anyio
 import psutil
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from wfx.base.knowledge_bases.backends import is_local_backend
-from wfx.base.knowledge_bases.backends.postgres import postgres_env_configured
-from wfx.log.logger import logger
 from pydantic import BaseModel, SecretStr, StringConstraints, ValidationError
 from sqlalchemy.engine import make_url
 from sqlmodel import select
+from wfx.base.knowledge_bases.backends import is_local_backend
+from wfx.base.knowledge_bases.backends.postgres import postgres_env_configured
+from wfx.log.logger import logger
 
 from primeagent.api.utils.migration_copies import (
     COPY_COMMANDS,
@@ -50,7 +50,13 @@ from primeagent.api.utils.migration_copies import (
 )
 from primeagent.api.utils.migration_jobs import active_jobs, live_listeners
 from primeagent.api.utils.migration_pause import drained, is_paused, under_way
-from primeagent.api.utils.migration_probes import database_identity, location, probe_database, probe_files, probe_vectors
+from primeagent.api.utils.migration_probes import (
+    database_identity,
+    location,
+    probe_database,
+    probe_files,
+    probe_vectors,
+)
 from primeagent.api.utils.migration_runs import (
     RunActiveError,
     RunNotFoundError,

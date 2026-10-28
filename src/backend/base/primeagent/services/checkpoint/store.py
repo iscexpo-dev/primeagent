@@ -19,10 +19,10 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from pydantic import ValidationError
 from wfx.graph.checkpoint.schema import GraphCheckpoint
 from wfx.graph.checkpoint.store import CheckpointStore
 from wfx.services.base import Service
-from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from primeagent.services.jobs.service import JobService

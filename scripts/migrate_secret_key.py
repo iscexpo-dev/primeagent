@@ -58,8 +58,8 @@ from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from primeagent.services.auth.mcp_encryption import MCP_SECRET_CONFIG_MAPS, _argv_secret_positions
 from platformdirs import user_cache_dir
+from primeagent.services.auth.mcp_encryption import MCP_SECRET_CONFIG_MAPS, _argv_secret_positions
 from sqlalchemy import create_engine, inspect, make_url, text
 
 MINIMUM_KEY_LENGTH = 32
@@ -798,7 +798,9 @@ def migrate(
         print(f"\nMigrated {total_migrated} items, {total_failed} failures")
         print(f"\nBackup key location: {config_dir}/secret_key.backup.*")
         print("\nNext steps:")
-        print("1. If Primeagent gets PRIMEAGENT_SECRET_KEY (environment, .env file, secret store), set it to the new key:")
+        print(
+            "1. If Primeagent gets PRIMEAGENT_SECRET_KEY (environment, .env file, secret store), set it to the new key:"
+        )
         print(f"   the contents of {secret_file}")
         print("2. Start Primeagent and verify everything works")
         print("3. Users must log in again (JWT sessions invalidated)")

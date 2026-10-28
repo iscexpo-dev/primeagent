@@ -31,10 +31,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from wfx.log.logger import logger
-from wfx.workflow.end_user_identity import end_user_id_from_scoped_session
 from sqlalchemy import text
 from sqlmodel import Session, col, select
+from wfx.log.logger import logger
+from wfx.workflow.end_user_identity import end_user_id_from_scoped_session
 
 from primeagent.api.utils.kb_helpers import (
     KBIngestionHelper,

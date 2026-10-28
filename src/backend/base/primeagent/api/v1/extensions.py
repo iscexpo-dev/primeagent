@@ -16,12 +16,12 @@ import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from wfx.extension.bundle_registry import get_default_registry
 from wfx.extension.errors import ExtensionError
 from wfx.extension.reload import ReloadInProgressError, reload_bundle
 from wfx.log.logger import logger
 from wfx.services.deps import get_extension_events_service, get_settings_service
-from pydantic import BaseModel
 
 from primeagent.api.utils.core import CurrentActiveUser
 

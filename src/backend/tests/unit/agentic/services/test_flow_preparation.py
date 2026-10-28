@@ -12,8 +12,8 @@ from primeagent.agentic.services.flow_preparation import (
     WFX_COMPONENTS_PATH_SENTINEL,
     available_model_providers,
     inject_assistant_fs_root,
-    inject_wfx_components_path,
     inject_model_into_flow,
+    inject_wfx_components_path,
     load_and_prepare_flow,
 )
 from primeagent.agentic.services.flow_types import FLOWS_BASE_PATH, PRIMEAGENT_ASSISTANT_FLOW

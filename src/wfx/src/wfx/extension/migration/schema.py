@@ -329,9 +329,7 @@ class MigrationTable(BaseModel):
     @classmethod
     def _validate_schema_version(cls, value: int) -> int:
         if value != MIGRATION_SCHEMA_VERSION:
-            msg = (
-                f"Unsupported migration table schema_version {value}; this Primeagent expects {MIGRATION_SCHEMA_VERSION}."
-            )
+            msg = f"Unsupported migration table schema_version {value}; this Primeagent expects {MIGRATION_SCHEMA_VERSION}."
             raise ValueError(msg)
         return value
 

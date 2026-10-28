@@ -81,8 +81,8 @@ if TYPE_CHECKING:
         load_extension,
         load_extension_bundles,
         load_installed_extensions,
-        load_wfx_bundles_extensions,
         load_seed_extensions,
+        load_wfx_bundles_extensions,
         manifest_owning_distributions,
     )
     from wfx.extension.manifest import (
@@ -92,8 +92,8 @@ if TYPE_CHECKING:
         BundleRef,
         ExtensionManifest,
         IntegrationManifestRef,
-        WfxCompat,
         ManifestSource,
+        WfxCompat,
         load_manifest,
     )
     from wfx.extension.migration import (
@@ -245,7 +245,6 @@ __all__ = [
     "ExtensionRegistry",
     "InitOptions",
     "IntegrationManifestRef",
-    "WfxCompat",
     "LoadResult",
     "LoadStatus",
     "LoadedComponent",
@@ -256,6 +255,7 @@ __all__ = [
     "MigrationTable",
     "NodeRewriteRecord",
     "ValidateReport",
+    "WfxCompat",
     "build_registry_from_discovery",
     "dev_extension_component_paths",
     "discover_all_extensions",
@@ -272,10 +272,10 @@ __all__ = [
     "load_extension",
     "load_extension_bundles",
     "load_installed_extensions",
-    "load_wfx_bundles_extensions",
     "load_manifest",
     "load_migration_table",
     "load_seed_extensions",
+    "load_wfx_bundles_extensions",
     "manifest_owning_distributions",
     "migrate_flow_payload",
     "register_dev_extension",

@@ -22,6 +22,8 @@ from primeagent.api.utils.execution_errors import (
     integration_http_error,
 )
 from primeagent.services.database.models.message.model import MessageTable
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 from wfx.components.input_output import ChatInput, ChatOutput
 from wfx.custom import Component
 from wfx.events.event_manager import create_default_event_manager
@@ -43,8 +45,6 @@ from wfx.schema.message import Message
 from wfx.services.authorization.base import ExecutionPrincipal
 from wfx.services.integration_policy import IntegrationPolicyError, IntegrationPolicyPurpose, IntegrationPolicyService
 from wfx.services.policy_bundle import PolicyBundleService, PolicyBundleSnapshot
-from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 HTTP_FORBIDDEN = 403
 HTTP_UNAUTHORIZED = 401

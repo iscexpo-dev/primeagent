@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING, Annotated, Literal, NamedTuple
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlmodel import col, select
 from wfx.services.catalog_policy import BaseCatalogPolicyService, CatalogPolicySnapshot
 from wfx.services.deps import session_scope_readonly
 from wfx.utils.component_aliases import build_component_identity_index
 from wfx.utils.flow_validation import collect_catalog_component_keys
-from sqlmodel import col, select
 
 from primeagent.api.v1.policy_bundle_errors import policy_bundle_revision_conflict
 from primeagent.api.v1.schemas.catalog_policy import (

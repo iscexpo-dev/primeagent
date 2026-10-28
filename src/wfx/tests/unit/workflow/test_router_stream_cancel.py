@@ -20,10 +20,10 @@ import asyncio
 import time
 from types import SimpleNamespace
 
+from starlette.responses import StreamingResponse
 from wfx.workflow import router as workflow_router
 from wfx.workflow.adapters import StreamAdapterContext, get_stream_adapter
 from wfx.workflow.converters import ParsedWorkflowRun
-from starlette.responses import StreamingResponse
 
 # uvicorn's HTTP protocols advertise this spec version, which puts Starlette on the
 # task-group path that cancels the response scope on disconnect.

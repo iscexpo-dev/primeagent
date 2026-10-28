@@ -3,12 +3,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiofiles
 import pytest
+from PIL import Image as PILImage
 from wfx.schema.image import (
     get_file_paths,
     get_files,
     is_image_file,
 )
-from PIL import Image as PILImage
 
 
 @pytest.fixture

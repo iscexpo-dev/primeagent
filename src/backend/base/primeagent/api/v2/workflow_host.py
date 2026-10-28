@@ -36,9 +36,9 @@ from wfx.workflow.host import ResolvedFlow, WorkflowHostBase
 
 if TYPE_CHECKING:
     from fastapi import BackgroundTasks, Request
+    from starlette.responses import Response
     from wfx.schema.workflow import WorkflowExecutionResponse, WorkflowJobResponse
     from wfx.workflow.converters import ParsedWorkflowRun
-    from starlette.responses import Response
 
 
 class PrimeagentWorkflowHost(WorkflowHostBase):

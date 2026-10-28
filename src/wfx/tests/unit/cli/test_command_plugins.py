@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 import typer
-from wfx.cli import command_plugins
 from typer.testing import CliRunner
+from wfx.cli import command_plugins
 
 
 @dataclass

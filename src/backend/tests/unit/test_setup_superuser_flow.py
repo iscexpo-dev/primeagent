@@ -8,13 +8,13 @@ from primeagent.services.auth.utils import verify_password
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import get_auth_service, get_settings_service, session_scope
 from primeagent.services.utils import SetupSuperuserResult, setup_superuser, teardown_superuser
+from pydantic import SecretStr
+from sqlmodel import select
 from wfx.services.settings.constants import (
     DEFAULT_SUPERUSER,
     DEFAULT_SUPERUSER_PASSWORD,
     LEGACY_DEFAULT_SUPERUSER_PASSWORD,
 )
-from pydantic import SecretStr
-from sqlmodel import select
 
 _MOCK_AUTO_LOGIN_LOCK_TIMEOUT_MSG = "mock lock timeout"
 

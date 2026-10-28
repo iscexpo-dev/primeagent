@@ -167,8 +167,8 @@ def test_serialize_value_drops_a_component_tool_on_every_langchain_version():
     Pinned langchain-core (1.5.1) drops it because the dump raises; 1.6.1+ drops it because the
     dump no longer round-trips. Asserting the outcome keeps the guarantee version-independent.
     """
-    from wfx.base.tools.component_tool import ComponentStructuredTool
     from pydantic import BaseModel as PydanticBaseModel
+    from wfx.base.tools.component_tool import ComponentStructuredTool
 
     class _Args(PydanticBaseModel):
         x: str = ""

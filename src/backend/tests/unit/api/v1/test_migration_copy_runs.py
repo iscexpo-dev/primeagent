@@ -67,7 +67,11 @@ pytestmark = pytest.mark.timeout(300)
 _TIMEOUT = 120
 RUNS = "api/v1/migration/steps/{}/runs"
 DECISIONS = "api/v1/migration/decisions"
-BACKED_UP = {"location": "s3://backups/primeagent", "confirmed_by": "alice", "confirmed_at": "2026-09-30T00:30:00+00:00"}
+BACKED_UP = {
+    "location": "s3://backups/primeagent",
+    "confirmed_by": "alice",
+    "confirmed_at": "2026-09-30T00:30:00+00:00",
+}
 COPIED = {"ok": True, "revision": "head", "tables_copied": 59, "rows_copied": 48, "orphans": [], "problems": []}
 MOVED = {"ok": True, "dry_run": False, "counts": {"relocated": 1}, "attention": []}
 UPLOADED = {"ok": True, "dry_run": False, "scope": "all users", "counts": {"copied": 1}, "bytes": 4, "attention": []}
@@ -371,7 +375,10 @@ async def test_a_copy_this_instance_does_not_need_is_refused(
         # After a restart the record still says where the data goes, and the password went with the old process.
         {},
         # Another worker saved another destination since this one tested its own. Its password is for the earlier one.
-        {"database_url": f"postgresql://{NOWHERE}/primeagent", "for": {"database": {"location": "db.internal/earlier"}}},
+        {
+            "database_url": f"postgresql://{NOWHERE}/primeagent",
+            "for": {"database": {"location": "db.internal/earlier"}},
+        },
     ],
 )
 async def test_a_copy_needs_the_secrets_of_the_destination_that_is_saved(

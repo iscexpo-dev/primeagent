@@ -13,9 +13,9 @@ from primeagent.services.authorization.listing import (
 from primeagent.services.database.models.deployment.model import Deployment
 from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.database.models.folder.model import Folder
+from sqlmodel import select
 from wfx.services.adapters.deployment.schema import DeploymentType
 from wfx.services.authorization.base import ResourceVisibilityScope
-from sqlmodel import select
 
 from ._common import _StubAuthorizationService, install_authz, install_settings
 

@@ -1,6 +1,6 @@
-from wfx.utils.secrets import is_secret_value, secret_value_to_str, unwrap_secret_value
 from pydantic import SecretStr
 from pydantic.v1 import SecretStr as SecretStrV1
+from wfx.utils.secrets import is_secret_value, secret_value_to_str, unwrap_secret_value
 
 
 class NestedSecret:

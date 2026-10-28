@@ -1,9 +1,9 @@
 from langchain_perplexity import ChatPerplexity
+from pydantic.v1 import SecretStr
 from wfx.base.models.model import LCModelComponent
 from wfx.field_typing import LanguageModel
 from wfx.field_typing.range_spec import RangeSpec
 from wfx.io import DropdownInput, FloatInput, IntInput, SecretStrInput, SliderInput
-from pydantic.v1 import SecretStr
 
 
 class PerplexityComponent(LCModelComponent):

@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 from wfx.components.models_and_agents.structured_output.native_structured_invoker import (
     invoke_with_native_structured_output,
 )
-from pydantic import BaseModel
 
 
 class _Person(BaseModel):

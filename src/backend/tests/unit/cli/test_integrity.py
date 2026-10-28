@@ -30,10 +30,10 @@ from primeagent.services.database.models.message.model import MessageTable
 from primeagent.services.database.models.variable.model import Variable
 from primeagent.services.deps import get_settings_service, get_storage_service, session_scope
 from primeagent.services.variable.constants import CREDENTIAL_TYPE
+from sqlmodel import select
 from wfx.base.knowledge_bases.backends import create_backend
 from wfx.base.knowledge_bases.backends.base import IngestedDocument
 from wfx.base.knowledge_bases.backends.sqlite import SQLiteStorageContext
-from sqlmodel import select
 
 if TYPE_CHECKING:
     from pathlib import Path

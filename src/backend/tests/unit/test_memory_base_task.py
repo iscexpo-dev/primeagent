@@ -774,7 +774,8 @@ class TestIngestMemoryTaskEdgeCases:
             patch("primeagent.services.memory_base.task.resolve_local_store_path", return_value=tmp_path),
             patch("primeagent.services.memory_base.task.backend_for_name", AsyncMock(return_value=backend)),
             patch(
-                "primeagent.services.memory_base.task.KBIngestionHelper.is_job_cancelled", side_effect=cancel_before_write
+                "primeagent.services.memory_base.task.KBIngestionHelper.is_job_cancelled",
+                side_effect=cancel_before_write,
             ),
             patch(
                 "primeagent.services.memory_base.task.KBIngestionHelper.write_documents_to_backend",

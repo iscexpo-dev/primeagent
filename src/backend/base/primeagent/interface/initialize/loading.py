@@ -5,10 +5,10 @@ import warnings
 from typing import TYPE_CHECKING, Any
 
 import orjson
+from pydantic import PydanticDeprecatedSince20
 from wfx.custom.eval import eval_custom_component_code
 from wfx.log.logger import logger
 from wfx.utils.env_var_security import safe_getenv
-from pydantic import PydanticDeprecatedSince20
 
 from primeagent.schema.artifact import get_artifact_type, post_process_raw
 from primeagent.schema.data import Data

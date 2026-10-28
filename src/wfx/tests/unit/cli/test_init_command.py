@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import pytest
 import typer
+from typer.testing import CliRunner
 from wfx.__main__ import app
 from wfx.cli.init import (
     _ENVIRONMENTS_YAML,
@@ -21,7 +22,6 @@ from wfx.cli.init import (
     _write,
     init_command,
 )
-from typer.testing import CliRunner
 
 if TYPE_CHECKING:
     from pathlib import Path

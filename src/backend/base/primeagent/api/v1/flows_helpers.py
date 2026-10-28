@@ -17,10 +17,10 @@ import aiofiles
 from anyio import Path
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
-from wfx.log import logger
 from pydantic import ValidationError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.log import logger
 
 from primeagent.api.utils import (
     build_content_disposition,

@@ -57,6 +57,7 @@ from primeagent.services.adapters.deployment.watsonx_orchestrate.utils import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
     from wfx.services.adapters.deployment.payloads import DeploymentPayloadSchemas
     from wfx.services.adapters.deployment.schema import (
         BaseDeploymentData,
@@ -64,7 +65,6 @@ if TYPE_CHECKING:
         DeploymentCreate,
         IdLike,
     )
-    from sqlalchemy.ext.asyncio import AsyncSession
 
     from primeagent.services.adapters.deployment.watsonx_orchestrate.types import WxOClient
 

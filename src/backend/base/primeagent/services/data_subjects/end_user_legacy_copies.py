@@ -13,8 +13,8 @@ import asyncio
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from wfx.log.logger import logger
 from sqlmodel import col, select
+from wfx.log.logger import logger
 
 from primeagent.services.database.models.knowledge_base.model import KnowledgeBaseRecord
 from primeagent.services.database.models.knowledge_base_storage_migration import KnowledgeBaseStorageMigration

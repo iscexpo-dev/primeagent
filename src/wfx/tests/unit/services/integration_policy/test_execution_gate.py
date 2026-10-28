@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import SecretStr
 from wfx.custom.custom_component.component import Component
 from wfx.inputs.inputs import ConnectionRefInput
 from wfx.integrations import ResolvedCredential
@@ -13,7 +14,6 @@ from wfx.services.authorization.base import ExecutionPrincipal
 from wfx.services.integration_policy import IntegrationPolicyError, IntegrationPolicyService
 from wfx.services.policy_bundle import PolicyBundleService, PolicyBundleSnapshot
 from wfx.template.field.base import Output
-from pydantic import SecretStr
 
 SEARCH_CAPABILITY = "google.drive.files.search"
 SEARCH_KEY = "integrations.google.drive.search"

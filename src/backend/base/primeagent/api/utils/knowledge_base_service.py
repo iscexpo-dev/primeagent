@@ -27,9 +27,9 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlmodel import select
 from wfx.log.logger import logger
 from wfx.services.authorization.base import ResourceVisibilityScope
-from sqlmodel import select
 
 from primeagent.services.database.models.knowledge_base import KnowledgeBaseRecord, KnowledgeBaseStatus
 from primeagent.services.deps import session_scope

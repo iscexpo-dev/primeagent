@@ -20,10 +20,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from wfx.integrations.models import ConnectionAccount, ResolvedCredential
-from wfx.services.authorization.base import ExecutionPrincipal
 from pydantic import SecretStr
 from slack_sdk.web.async_base_client import AsyncBaseClient
+from wfx.integrations.models import ConnectionAccount, ResolvedCredential
+from wfx.services.authorization.base import ExecutionPrincipal
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

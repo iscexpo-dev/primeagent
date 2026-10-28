@@ -14,8 +14,8 @@ from primeagent.services.cache.service import (
     _load_or_create_cache_signing_secret,
     _read_existing_cache_signing_secret,
 )
-from wfx.services.cache.utils import CACHE_MISS
 from pydantic import SecretStr
+from wfx.services.cache.utils import CACHE_MISS
 
 
 @pytest.mark.asyncio

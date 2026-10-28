@@ -1161,8 +1161,8 @@ class TestMessageModelPostInitFiles:
 
     def test_model_post_init_with_string_image_path(self, tmp_path):
         """Test string path that is an image file."""
-        from wfx.schema.image import Image
         from PIL import Image as PILImage
+        from wfx.schema.image import Image
 
         img_path = tmp_path / "photo.jpg"
         PILImage.new("RGB", (10, 10)).save(img_path)
@@ -1236,8 +1236,8 @@ class TestMessageModelPostInitFiles:
 
     def test_model_post_init_with_multiple_images(self, tmp_path):
         """Test multiple image files."""
-        from wfx.schema.image import Image
         from PIL import Image as PILImage
+        from wfx.schema.image import Image
 
         img_path1 = tmp_path / "image1.png"
         img_path2 = tmp_path / "image2.jpg"
@@ -1258,8 +1258,8 @@ class TestMessageModelPostInitFiles:
 
     def test_model_post_init_mixed_image_and_non_image(self, tmp_path):
         """Test mixed image and non-image files."""
-        from wfx.schema.image import Image
         from PIL import Image as PILImage
+        from wfx.schema.image import Image
 
         img_path = tmp_path / "image.png"
         PILImage.new("RGB", (10, 10)).save(img_path)
@@ -1281,8 +1281,8 @@ class TestMessageModelPostInitFiles:
 
     def test_model_post_init_preserves_existing_image_instances(self, tmp_path):
         """Test that existing Image instances are not re-processed."""
-        from wfx.schema.image import Image
         from PIL import Image as PILImage
+        from wfx.schema.image import Image
 
         img_path = tmp_path / "image.png"
         PILImage.new("RGB", (10, 10)).save(img_path)

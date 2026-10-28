@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from pydantic import BaseModel
 from wfx.log.logger import logger
 from wfx.services.adapters.deployment.payloads import DeploymentPayloadFields
 from wfx.services.adapters.deployment.schema import (
@@ -63,7 +64,6 @@ from wfx.services.adapters.payload import (
     AdapterPayloadValidationError,
     PayloadSlot,
 )
-from pydantic import BaseModel
 
 from primeagent.api.v1.schemas.deployments import (
     DeploymentConfigListResponse,

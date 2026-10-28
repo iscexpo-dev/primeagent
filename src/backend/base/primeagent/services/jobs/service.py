@@ -13,11 +13,11 @@ if TYPE_CHECKING:
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from wfx.graph.exceptions import GraphPausedException
-from wfx.observability import inject_trace_carrier
 from sqlalchemy import false, update
 from sqlalchemy.exc import DataError, DBAPIError, IntegrityError, OperationalError, StatementError
 from sqlmodel import col, func, select
+from wfx.graph.exceptions import GraphPausedException
+from wfx.observability import inject_trace_carrier
 
 from primeagent.services.base import Service
 from primeagent.services.database.models.jobs.crud import (

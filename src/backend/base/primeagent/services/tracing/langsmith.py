@@ -7,8 +7,8 @@ import types
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from wfx.log.logger import logger
 from typing_extensions import override
+from wfx.log.logger import logger
 
 from primeagent.schema.data import Data
 from primeagent.serialization.serialization import serialize

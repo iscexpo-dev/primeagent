@@ -98,7 +98,7 @@
             "legacy": false,
             "lf_version": "1.4.2",
             "metadata": {
-              "code_hash": "e3714ffe5d15",
+              "code_hash": "8cde8f057646",
               "component_class_name": "PromptComponent",
               "dependencies": {
                 "dependencies": [
@@ -403,7 +403,7 @@
             "legacy": false,
             "lf_version": "1.4.2",
             "metadata": {
-              "code_hash": "0aab1c78e1dc",
+              "code_hash": "76d4a69dd1da",
               "component_class_name": "ChatOutput",
               "dependencies": {
                 "dependencies": [
@@ -694,7 +694,7 @@
             "last_updated": "2026-06-25T14:30:58.159Z",
             "legacy": false,
             "metadata": {
-              "code_hash": "9fcfe75813e7",
+              "code_hash": "d429ce481de6",
               "component_class_name": "AgentComponent",
               "dependencies": {
                 "dependencies": [

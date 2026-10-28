@@ -7,10 +7,10 @@ from primeagent.services.auth.exceptions import InvalidTokenError
 from primeagent.services.database.models.auth import SSOUserProfile
 from primeagent.services.database.models.user import User
 from primeagent.services.deps import get_auth_service, get_db_service, get_settings_service, session_scope
-from wfx.services.settings.constants import DEFAULT_SUPERUSER, LEGACY_DEFAULT_SUPERUSER_PASSWORD
 from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
+from wfx.services.settings.constants import DEFAULT_SUPERUSER, LEGACY_DEFAULT_SUPERUSER_PASSWORD
 
 _EXTERNAL_TEST_SECRET = "external-test-secret-with-enough-length"  # noqa: S105 # pragma: allowlist secret
 _EXTERNAL_AUTH_HEADER = "X-Primeagent-External-Auth"

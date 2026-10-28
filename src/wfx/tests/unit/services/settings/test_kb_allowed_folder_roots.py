@@ -14,8 +14,8 @@ file-size tests likewise pin the operator-owned default and environment binding.
 """
 
 import pytest
-from wfx.services.settings.base import Settings
 from pydantic import ValidationError
+from wfx.services.settings.base import Settings
 
 
 def test_kb_allowed_folder_roots_field_is_declared(monkeypatch):

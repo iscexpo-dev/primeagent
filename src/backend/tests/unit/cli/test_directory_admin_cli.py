@@ -323,7 +323,9 @@ def test_directory_commands_explain_missing_enterprise_plugin(monkeypatch, capsy
 def test_directory_client_preserves_typed_resource_and_access_errors(status, detail, code):
     def handler(request):
         assert request.url.path.endswith("/authz/directory/connection")
-        return httpx.Response(status, json={"detail": detail}, headers={"X-Primeagent-Error-Code": code} if code else {})
+        return httpx.Response(
+            status, json={"detail": detail}, headers={"X-Primeagent-Error-Code": code} if code else {}
+        )
 
     with (
         AdminClient(

@@ -12,7 +12,12 @@ from primeagent.services.telemetry.opentelemetry import (
     OpenTelemetry,
     ThreadSafeSingletonMetaUsingWeakref,
 )
-from primeagent.services.telemetry.schema import DeploymentPayload, IntegrationActionPayload, RunPayload, ShutdownPayload
+from primeagent.services.telemetry.schema import (
+    DeploymentPayload,
+    IntegrationActionPayload,
+    RunPayload,
+    ShutdownPayload,
+)
 from primeagent.services.telemetry.service import TelemetryService
 from wfx.services.telemetry.identity import get_installation_user_id
 

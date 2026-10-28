@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 import httpx
+from pydantic import SecretStr
+from sqlalchemy import or_
+from sqlmodel import col, select, update
 from wfx.integrations.errors import AuthExpiredError
 from wfx.integrations.models import ConnectionRef, ConnectionResolutionRequest, CredentialLease, ResolvedCredential
 from wfx.log.logger import logger
 from wfx.services.authorization.base import ExecutionPrincipal
-from pydantic import SecretStr
-from sqlalchemy import or_
-from sqlmodel import col, select, update
 
 from primeagent.services.connection.service import (
     ConnectionSecretError,
@@ -33,8 +33,8 @@ from primeagent.services.triggers.ownership import is_owned_by
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from wfx.integrations.models import ConnectionStatus
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.integrations.models import ConnectionStatus
 
 # Cleanup never retains refresh tokens or extends the deleted owner's access.
 _CREDENTIAL_RETENTION = timedelta(hours=1)

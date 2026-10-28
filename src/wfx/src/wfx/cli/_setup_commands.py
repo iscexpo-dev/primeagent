@@ -40,7 +40,9 @@ def register(app: typer.Typer) -> None:
             example=example,
         )
 
-    @app.command(name="login", help="Validate credentials against a remote Primeagent instance", rich_help_panel="Setup")
+    @app.command(
+        name="login", help="Validate credentials against a remote Primeagent instance", rich_help_panel="Setup"
+    )
     def login_command_wrapper(
         env: str | None = typer.Option(
             None,

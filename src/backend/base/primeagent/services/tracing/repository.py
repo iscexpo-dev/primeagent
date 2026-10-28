@@ -11,9 +11,9 @@ import math
 from typing import TYPE_CHECKING, Any
 
 import sqlalchemy as sa
+from sqlmodel import col, func, select
 from wfx.schema.validators import ensure_utc
 from wfx.utils.util_strings import escape_like_pattern
-from sqlmodel import col, func, select
 
 if TYPE_CHECKING:
     from datetime import datetime

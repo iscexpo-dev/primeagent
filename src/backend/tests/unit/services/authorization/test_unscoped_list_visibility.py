@@ -17,8 +17,8 @@ from primeagent.services.database.models.file.model import File as UserFile
 from primeagent.services.database.models.variable.model import Variable
 from primeagent.services.deps import get_settings_service
 from primeagent.services.variable.service import DatabaseVariableService
-from wfx.services.authorization.base import ResourceVisibilityScope
 from sqlmodel import select
+from wfx.services.authorization.base import ResourceVisibilityScope
 
 
 class _CapturingSession:

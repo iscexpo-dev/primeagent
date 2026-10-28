@@ -24,14 +24,14 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from sqlalchemy import func
+from sqlmodel import select
 from wfx.base.knowledge_bases.ingestion_sources.base import (
     IngestionItemStatus,
     IngestionRunStatus,
     IngestionSummary,
 )
 from wfx.log.logger import logger
-from sqlalchemy import func
-from sqlmodel import select
 
 from primeagent.services.database.models.jobs.model import Job, JobStatus, JobType
 from primeagent.services.deps import session_scope

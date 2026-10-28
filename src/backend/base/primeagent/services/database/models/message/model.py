@@ -7,10 +7,10 @@ from uuid import UUID, uuid4
 import numpy as np
 import pandas as pd
 from fastapi.encoders import jsonable_encoder
-from wfx.schema.legacy_render import render_v1_content_blocks
 from pydantic import ConfigDict, field_serializer, field_validator
 from sqlalchemy import Index, Text, text
 from sqlmodel import JSON, Column, Field, SQLModel
+from wfx.schema.legacy_render import render_v1_content_blocks
 
 from primeagent.schema.content_block import ContentType
 from primeagent.schema.properties import Properties

@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from wfx.log.logger import logger
 from sqlmodel import col, delete, select
+from wfx.log.logger import logger
 
 if TYPE_CHECKING:
     from uuid import UUID

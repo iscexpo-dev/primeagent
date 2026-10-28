@@ -34,12 +34,12 @@ from primeagent.services.auth.service import AuthService
 from primeagent.services.database.models.api_key.crud import ApiKeyAuthResult, hash_api_key
 from primeagent.services.database.models.api_key.model import ApiKey
 from primeagent.services.database.models.user.model import User
-from wfx.services.settings.auth import AuthSettings
-from wfx.services.settings.constants import DEFAULT_SUPERUSER, LEGACY_DEFAULT_SUPERUSER_PASSWORD
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
+from wfx.services.settings.auth import AuthSettings
+from wfx.services.settings.constants import DEFAULT_SUPERUSER, LEGACY_DEFAULT_SUPERUSER_PASSWORD
 
 
 @pytest.fixture
@@ -79,7 +79,9 @@ async def test_get_current_user_from_access_token_returns_active_user(auth_servi
     token = auth_service.create_token({"sub": str(user_id), "type": "access"}, timedelta(minutes=5))
     fake_user = _dummy_user(user_id)
 
-    with patch("primeagent.services.auth.service.get_user_by_id", new=AsyncMock(return_value=fake_user)) as mock_get_user:
+    with patch(
+        "primeagent.services.auth.service.get_user_by_id", new=AsyncMock(return_value=fake_user)
+    ) as mock_get_user:
         result = await auth_service.get_current_user_from_access_token(token, db)
 
     assert result is fake_user
@@ -2555,8 +2557,8 @@ async def test_single_credential_policy_rejection_exits_with_clean_session_and_c
     """
     from primeagent.services.auth.external import get_current_external_access_context
     from primeagent.services.database.models.auth import SSOUserProfile
-    from wfx.services.authorization import AuthorizationMutationRejected
     from sqlmodel import select
+    from wfx.services.authorization import AuthorizationMutationRejected
 
     auth_settings.EXTERNAL_AUTH_ENABLED = True
     auth_settings.EXTERNAL_AUTH_TRUSTED_JWT_DECODE = True
@@ -2608,8 +2610,8 @@ async def test_get_optional_user_swallowed_policy_rejection_stages_nothing_for_c
     from primeagent.services.auth.external import get_current_external_access_context
     from primeagent.services.auth.utils import get_optional_user
     from primeagent.services.database.models.auth import SSOUserProfile
-    from wfx.services.authorization import AuthorizationMutationRejected
     from sqlmodel import select
+    from wfx.services.authorization import AuthorizationMutationRejected
 
     auth_settings.EXTERNAL_AUTH_ENABLED = True
     auth_settings.EXTERNAL_AUTH_TRUSTED_JWT_DECODE = True

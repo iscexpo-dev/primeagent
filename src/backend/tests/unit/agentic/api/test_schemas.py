@@ -10,8 +10,8 @@ from primeagent.agentic.api.schemas import (
     StepType,
     ValidationResult,
 )
-from wfx.services.deps import get_settings_service
 from pydantic import ValidationError
+from wfx.services.deps import get_settings_service
 
 
 class TestAssistantRequest:

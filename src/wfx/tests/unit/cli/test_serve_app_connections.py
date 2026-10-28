@@ -136,7 +136,9 @@ def test_trm_blob_resolves_the_sample_connection(serve_client: TestClient) -> No
     credential = json.dumps(
         {"access_token": "blob-token", "scopes": ["https://www.googleapis.com/auth/drive.readonly"]}
     )
-    status, payload = _run(serve_client, global_vars={"PRIMEAGENT_REQUEST_VARIABLES": json.dumps({ENV_KEY: credential})})
+    status, payload = _run(
+        serve_client, global_vars={"PRIMEAGENT_REQUEST_VARIABLES": json.dumps({ENV_KEY: credential})}
+    )
 
     assert status == 200, payload
     assert "scopes_verified=True" in payload["result"]

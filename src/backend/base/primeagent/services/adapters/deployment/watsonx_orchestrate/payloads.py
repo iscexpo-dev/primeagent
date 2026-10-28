@@ -6,11 +6,11 @@ from collections import Counter
 from typing import Annotated, Any, Literal, TypeVar
 from uuid import uuid4
 
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 from wfx.services.adapters.deployment.exceptions import InvalidContentError
 from wfx.services.adapters.deployment.payloads import DeploymentPayloadSchemas
 from wfx.services.adapters.deployment.schema import BaseFlowArtifact, EnvVarKey, EnvVarValueSpec, NormalizedId
 from wfx.services.adapters.payload import AdapterPayload, PayloadSlot
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from primeagent.services.adapters.deployment.watsonx_orchestrate.constants import (
     WXO_SANITIZE_RE,

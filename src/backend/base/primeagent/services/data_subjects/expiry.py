@@ -9,9 +9,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from sqlmodel import col, select
 from wfx.log.logger import logger
 from wfx.services.settings.feature_flags import FEATURE_FLAGS
-from sqlmodel import col, select
 
 from primeagent.services.data_subjects.errors import DataSubjectError
 from primeagent.services.data_subjects.requests import approve

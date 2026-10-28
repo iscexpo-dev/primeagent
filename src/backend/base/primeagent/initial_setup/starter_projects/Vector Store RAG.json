@@ -210,7 +210,7 @@
             "legacy": false,
             "lf_version": "1.10.1rc3",
             "metadata": {
-              "code_hash": "45974e6b1909",
+              "code_hash": "e1a6adcd2554",
               "component_class_name": "ChatInput",
               "dependencies": {
                 "dependencies": [
@@ -477,7 +477,7 @@
             "legacy": false,
             "lf_version": "1.10.1rc3",
             "metadata": {
-              "code_hash": "e3714ffe5d15",
+              "code_hash": "8cde8f057646",
               "component_class_name": "PromptComponent",
               "dependencies": {
                 "dependencies": [
@@ -689,7 +689,7 @@
             "legacy": false,
             "lf_version": "1.10.1rc3",
             "metadata": {
-              "code_hash": "0aab1c78e1dc",
+              "code_hash": "76d4a69dd1da",
               "component_class_name": "ChatOutput",
               "dependencies": {
                 "dependencies": [
@@ -967,7 +967,7 @@
             "legacy": false,
             "lf_version": "1.10.1rc3",
             "metadata": {
-              "code_hash": "7ab5fd0e0a10",
+              "code_hash": "9cfa66c526dd",
               "component_class_name": "ParserComponent",
               "dependencies": {
                 "dependencies": [
@@ -1168,7 +1168,7 @@
             "legacy": false,
             "lf_version": "1.10.1rc3",
             "metadata": {
-              "code_hash": "a0825fa78c40",
+              "code_hash": "19faa0deea79",
               "component_class_name": "KnowledgeComponent",
               "dependencies": {
                 "dependencies": [
@@ -1190,7 +1190,7 @@
                   },
                   {
                     "name": "numpy",
-                    "version": "2.4.6"
+                    "version": "2.5.1"
                   }
                 ],
                 "total_dependencies": 5
@@ -1669,7 +1669,7 @@
             "legacy": false,
             "lf_version": "1.10.1rc3",
             "metadata": {
-              "code_hash": "9fcfe75813e7",
+              "code_hash": "d429ce481de6",
               "component_class_name": "AgentComponent",
               "dependencies": {
                 "dependencies": [

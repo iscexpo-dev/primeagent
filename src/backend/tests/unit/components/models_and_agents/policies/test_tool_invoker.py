@@ -1,9 +1,9 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from wfx.components.models_and_agents.policies.tool_invoker import ToolInvoker
 from mcp.types import CallToolResult
 from pydantic import BaseModel
+from wfx.components.models_and_agents.policies.tool_invoker import ToolInvoker
 
 
 class Person(BaseModel):

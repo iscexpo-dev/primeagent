@@ -2,6 +2,7 @@ import json
 
 import requests
 from langchain_openai import ChatOpenAI
+from typing_extensions import override
 from wfx.base.models.cometapi_constants import MODEL_NAMES
 from wfx.base.models.model import LCModelComponent
 from wfx.field_typing import LanguageModel
@@ -16,7 +17,6 @@ from wfx.inputs.inputs import (
     StrInput,
 )
 from wfx.utils.secrets import secret_value_to_str
-from typing_extensions import override
 
 
 class CometAPIComponent(LCModelComponent):

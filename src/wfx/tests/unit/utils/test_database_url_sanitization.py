@@ -7,8 +7,8 @@ This test suite validates that credentials are properly sanitized in error messa
 """
 
 import pytest
-from wfx.utils.util_strings import is_valid_database_url, sanitize_database_url
 from pydantic import ValidationError
+from wfx.utils.util_strings import is_valid_database_url, sanitize_database_url
 
 # Database URLs the settings validator rejects, paired with the credential fragments
 # that must never be rendered. Short URLs matter: pydantic truncates long

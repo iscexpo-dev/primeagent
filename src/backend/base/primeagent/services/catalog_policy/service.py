@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from sqlmodel import col, select
 from wfx.services.catalog_policy import BaseCatalogPolicyService, CatalogPolicySnapshot, CatalogPolicyUpdate
 from wfx.services.deps import session_scope, session_scope_readonly
 from wfx.services.policy_bundle import BasePolicyBundleService, PolicyBundleSnapshot
 from wfx.services.schema import ServiceType
-from sqlmodel import col, select
 
 from primeagent.services.database.models.catalog_policy import (
     CatalogPolicyMode,

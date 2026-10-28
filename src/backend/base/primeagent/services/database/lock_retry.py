@@ -19,8 +19,8 @@ import random
 import sqlite3
 from typing import TYPE_CHECKING, TypeVar
 
-from wfx.log.logger import logger
 from sqlalchemy.exc import SQLAlchemyError
+from wfx.log.logger import logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

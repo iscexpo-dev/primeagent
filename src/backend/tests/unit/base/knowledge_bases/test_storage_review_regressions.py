@@ -18,10 +18,10 @@ from primeagent.services.database.models.knowledge_base_storage_migration import
 from primeagent.services.database.models.memory_base.model import MemoryBase, MemoryBaseSession
 from primeagent.services.knowledge_base_storage import cleanup, coordinator, maintenance, runtime
 from primeagent.services.memory_base import ingestion
+from sqlmodel import SQLModel
 from wfx.base.knowledge_bases.backends.base import BackendConfigurationError, BaseVectorStoreBackend, IngestedDocument
 from wfx.base.knowledge_bases.backends.sqlite import SQLiteBackend, SQLiteStorageContext
 from wfx.components.files_and_knowledge.knowledge import KnowledgeComponent
-from sqlmodel import SQLModel
 
 from . import test_storage_upgrade as storage_tests
 

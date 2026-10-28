@@ -27,8 +27,8 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import NAMESPACE_URL, uuid5
 
-from wfx.log.logger import logger
 from sqlmodel import col, func, select, update
+from wfx.log.logger import logger
 
 from primeagent.api.utils.migration_pause import is_paused, writing
 from primeagent.services.database.models.trigger.model import Trigger, TriggerEvent, TriggerSubscription

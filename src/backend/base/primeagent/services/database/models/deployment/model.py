@@ -3,11 +3,11 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
-from wfx.services.adapters.deployment.schema import DeploymentType
 from pydantic import field_validator
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy import ForeignKey, UniqueConstraint
 from sqlmodel import Column, DateTime, Field, Relationship, SQLModel, func
+from wfx.services.adapters.deployment.schema import DeploymentType
 
 from primeagent.schema.serialize import UUIDstr
 from primeagent.services.database.utils import validate_non_empty_string, validate_non_empty_string_preserve_value

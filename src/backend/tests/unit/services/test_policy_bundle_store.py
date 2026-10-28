@@ -14,14 +14,14 @@ from primeagent.services.database.models.model_provider_policy import ModelProvi
 from primeagent.services.database.models.policy_bundle import PolicyBundleActive, PolicyBundleRevision
 from primeagent.services.database.models.user.model import User
 from primeagent.services.task import model_provider_policy_refresh as refresh_module
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel import SQLModel, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 from wfx.services import deps as wfx_service_deps
 from wfx.services.catalog_policy import CatalogPolicyService
 from wfx.services.catalog_policy.base import BaseCatalogPolicyService, CatalogPolicySnapshot
 from wfx.services.model_provider_policy import ModelProviderPolicyService
 from wfx.services.policy_bundle import PolicyBundleService, PolicyBundleSnapshot
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel, select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 _INITIAL_PROVIDERS = frozenset({"openai"})
 _INITIAL_COMPONENTS = frozenset({"OldComponent"})

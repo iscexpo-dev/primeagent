@@ -27,12 +27,12 @@ from primeagent.services.audit.vocabulary import (
 from primeagent.services.audit.writer import build_audit_event, stage_audit_event
 from primeagent.services.auth.context import AuthCredentialContext, clear_current_auth_context, set_current_auth_context
 from primeagent.services.database.models.audit_event.model import AuditEvent
-from wfx.services.session import NoopSession
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from wfx.services.session import NoopSession
 
 from .conftest import project_patch_draft, user_actor
 

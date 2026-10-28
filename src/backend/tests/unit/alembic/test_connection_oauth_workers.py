@@ -37,10 +37,10 @@ def _worker(database_url, key, owner_id, barrier, exchanges_path, results):
     from primeagent.services.connection import service
     from primeagent.services.connection.oauth import broker, providers
     from primeagent.services.connection.oauth.config import OAuthSettings
-    from wfx.integrations.models import ConnectionRef, ConnectionResolutionRequest
-    from wfx.services.authorization.base import ExecutionPrincipal
     from sqlalchemy.ext.asyncio import create_async_engine
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.integrations.models import ConnectionRef, ConnectionResolutionRequest
+    from wfx.services.authorization.base import ExecutionPrincipal
 
     async def run():
         async_url = (

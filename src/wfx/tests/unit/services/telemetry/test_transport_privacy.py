@@ -5,11 +5,11 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from pydantic import BaseModel, Field
 from wfx.services.telemetry.identity import get_installation_user_id, is_installation_user_id
 from wfx.services.telemetry.privacy import get_safe_payload_properties
 from wfx.services.telemetry.schema import ComponentPayload, ExceptionPayload, MCPToolPayload, RunPayload
 from wfx.services.telemetry.service import TelemetryService
-from pydantic import BaseModel, Field
 
 ERROR_TEXT = "synthetic-private-input; SQL parameters: synthetic@example.test"
 

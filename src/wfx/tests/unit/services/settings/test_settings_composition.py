@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from wfx.services.settings.base import (
     BASE_COMPONENTS_PATH,
     CustomSource,
@@ -26,7 +27,6 @@ from wfx.services.settings.base import (
 from wfx.services.settings.constants import AGENTIC_VARIABLES
 from wfx.services.settings.groups.runtime import RuntimeSettings
 from wfx.services.telemetry.constants import DEFAULT_SEGMENT_WRITE_KEY
-from pydantic import ValidationError
 
 
 def test_voice_mode_requires_openai_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -50,6 +50,34 @@ def test_voice_mode_requires_openai_sdk(monkeypatch: pytest.MonkeyPatch) -> None
 def test_segment_has_no_write_key_in_source_checkout() -> None:
     assert DEFAULT_SEGMENT_WRITE_KEY == ""
     assert Settings().segment_write_key == DEFAULT_SEGMENT_WRITE_KEY
+
+
+def test_empty_environment_variables_use_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Blank entries in a copied .env file should not override typed defaults."""
+    for name in (
+        "PRIMEAGENT_PORT",
+        "PRIMEAGENT_WORKERS",
+        "PRIMEAGENT_OPEN_BROWSER",
+        "PRIMEAGENT_SAVE_DB_IN_CONFIG_DIR",
+        "PRIMEAGENT_MCP_COMPOSER_ENABLED",
+        "PRIMEAGENT_CACHE_TYPE",
+        "PRIMEAGENT_SSRF_PROTECTION_ENABLED",
+        "PRIMEAGENT_REMOVE_API_KEYS",
+        "PRIMEAGENT_RATE_LIMIT_PER_MINUTE",
+        "PRIMEAGENT_RATE_LIMIT_TRUST_PROXY",
+        "PRIMEAGENT_PUBLIC_FLOW_RATE_LIMIT_PER_MINUTE",
+        "PRIMEAGENT_STORE_ENVIRONMENT_VARIABLES",
+    ):
+        monkeypatch.setenv(name, "")
+
+    settings = Settings()
+
+    assert settings.port == 7860
+    assert settings.workers == 1
+    assert settings.open_browser is False
+    assert settings.cache_type == "async"
+    assert settings.rate_limit_per_minute == 5
+    assert settings.public_flow_rate_limit_per_minute == 20
 
 
 # Every field the composed Settings must expose: the original monolith fields

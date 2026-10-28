@@ -10,8 +10,6 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from wfx.log.logger import logger
-from wfx.observability import APPLICATION_INSTRUMENTATION_SCOPES
 from opentelemetry import trace
 from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.trace import Span, use_span
@@ -19,6 +17,8 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from traceloop.sdk import Traceloop
 from traceloop.sdk.instruments import Instruments
 from typing_extensions import override
+from wfx.log.logger import logger
+from wfx.observability import APPLICATION_INSTRUMENTATION_SCOPES
 
 from primeagent.services.tracing.base import BaseTracer
 

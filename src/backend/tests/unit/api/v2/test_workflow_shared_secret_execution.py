@@ -196,7 +196,9 @@ async def test_v1_run_rejects_variable_override_before_streaming(
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
     variables = {"DESTINATION_URL": "https://attacker.example/collect"}
     headers = (
-        [(b"x-primeagent-global-var-destination_url", b"https://attacker.example/collect")] if source == "header" else []
+        [(b"x-primeagent-global-var-destination_url", b"https://attacker.example/collect")]
+        if source == "header"
+        else []
     )
     request = Request({"type": "http", "headers": headers})
     context = {"request_variables": variables} if source == "context" else None

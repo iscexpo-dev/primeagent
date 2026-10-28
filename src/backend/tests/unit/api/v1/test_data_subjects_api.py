@@ -9,8 +9,8 @@ from httpx import AsyncClient
 from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import session_scope
-from wfx.services.settings.feature_flags import FEATURE_FLAGS
 from sqlmodel import col, select
+from wfx.services.settings.feature_flags import FEATURE_FLAGS
 
 from tests.unit.erase_helpers import wait_for_erase
 from tests.unit.services.data_subjects._seed import create_user, end_user_message

@@ -1,10 +1,10 @@
 from urllib.parse import urlparse
 
+from pypdf import PdfReader
 from wfx.base.data.base_file import BaseFileComponent
 from wfx.base.models.provider_ssrf import validate_provider_base_url
 from wfx.inputs.inputs import BoolInput, DropdownInput, FloatInput, IntInput, MessageTextInput, SecretStrInput
 from wfx.schema.data import Data
-from pypdf import PdfReader
 
 
 class NvidiaIngestComponent(BaseFileComponent):

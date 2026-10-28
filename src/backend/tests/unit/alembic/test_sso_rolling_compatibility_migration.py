@@ -23,7 +23,9 @@ _TEST_INVALID_BASE64_ENVELOPE = (  # pragma: allowlist secret
     "lf-sso:v1:hkdf-sha256-v1:aes-256-gcm:!!!!!!!!!!!!!!!!:!!!!!!!!!!!!!!!!!!!!!!"
 )
 _TEST_PASSWORD = "hashed"  # noqa: S105  # pragma: allowlist secret
-_INVARIANT_MIGRATION = importlib.import_module("primeagent.alembic.versions.7c8e9f0a1b2d_add_sso_config_invariant_checks")
+_INVARIANT_MIGRATION = importlib.import_module(
+    "primeagent.alembic.versions.7c8e9f0a1b2d_add_sso_config_invariant_checks"
+)
 _HEAD_MIGRATION = importlib.import_module("primeagent.alembic.versions.8d9e0f1a2b3c_complete_sso_expand_compatibility")
 
 

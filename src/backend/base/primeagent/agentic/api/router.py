@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 from wfx.base.models.unified_models import (
     get_all_variables_for_provider,
     get_provider_required_variable_keys,
@@ -24,7 +25,6 @@ from wfx.base.models.unified_models import (
 from wfx.log.logger import logger
 from wfx.services.deps import get_settings_service, session_scope
 from wfx.services.model_provider_policy import ModelProviderPolicyPurpose
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from primeagent.agentic.api.deps import require_agentic_component_admin, require_agentic_experience
 from primeagent.agentic.api.schemas import AssistantRequest, HeadlessAssistantRequest
@@ -35,8 +35,8 @@ from primeagent.agentic.services.assistant_service import (
 )
 from primeagent.agentic.services.flow_executor import execute_flow_file
 from primeagent.agentic.services.flow_types import (
-    PRIMEAGENT_ASSISTANT_FLOW,
     MAX_VALIDATION_RETRIES,
+    PRIMEAGENT_ASSISTANT_FLOW,
 )
 from primeagent.agentic.services.provider_service import (
     PREFERRED_PROVIDERS,

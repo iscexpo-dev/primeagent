@@ -1,10 +1,10 @@
 from langchain_community.vectorstores import SupabaseVectorStore
+from supabase.client import Client, create_client
 from wfx.base.vectorstores.model import LCVectorStoreComponent, check_cached_vector_store
 from wfx.helpers.data import docs_to_data
 from wfx.io import HandleInput, IntInput, SecretStrInput, StrInput
 from wfx.schema.data import Data
 from wfx.utils.ssrf_protection import validate_connector_url_for_ssrf
-from supabase.client import Client, create_client
 
 
 class SupabaseVectorStoreComponent(LCVectorStoreComponent):

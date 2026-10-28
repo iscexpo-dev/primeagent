@@ -33,8 +33,8 @@ from wfx_toolguard.components.models_and_agents.policies.module_utils import (
 )
 
 if TYPE_CHECKING:
-    from wfx.inputs.inputs import InputTypes
     from toolguard.buildtime import ToolGuardsCodeGenerationResult, ToolGuardSpec
+    from wfx.inputs.inputs import InputTypes
 
 
 def _resolve_toolguard_work_dir() -> Path:

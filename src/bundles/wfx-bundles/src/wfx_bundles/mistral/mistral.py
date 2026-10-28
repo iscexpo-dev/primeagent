@@ -1,8 +1,8 @@
 from langchain_mistralai import ChatMistralAI
+from pydantic.v1 import SecretStr
 from wfx.base.models.model import LCModelComponent
 from wfx.field_typing import LanguageModel
 from wfx.io import BoolInput, DropdownInput, FloatInput, IntInput, SecretStrInput, StrInput
-from pydantic.v1 import SecretStr
 
 
 class MistralAIModelComponent(LCModelComponent):

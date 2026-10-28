@@ -14,9 +14,9 @@ from primeagent.services.database.models.deployment_provider_account.model impor
 )
 from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.deps import session_scope
+from sqlmodel import col, select
 from wfx.services.adapters.deployment.schema import DeploymentType
 from wfx.services.settings.feature_flags import FEATURE_FLAGS
-from sqlmodel import col, select
 
 from tests.unit.services.data_subjects._seed import create_user
 

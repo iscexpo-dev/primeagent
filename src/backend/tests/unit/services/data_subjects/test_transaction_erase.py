@@ -16,8 +16,8 @@ from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.database.models.transactions.model import TransactionTable
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import session_scope
-from wfx.memory.flow_context import derive_message_owner_uuid
 from sqlmodel import select
+from wfx.memory.flow_context import derive_message_owner_uuid
 
 from tests.unit.services.data_subjects._seed import create_user
 

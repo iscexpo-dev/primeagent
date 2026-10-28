@@ -9,7 +9,9 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-_MIGRATION_PATH = Path(__file__).parents[3] / "base/primeagent/alembic/versions/c6d8e0f2a4b7_add_sso_identity_details.py"
+_MIGRATION_PATH = (
+    Path(__file__).parents[3] / "base/primeagent/alembic/versions/c6d8e0f2a4b7_add_sso_identity_details.py"
+)
 
 
 def _load_migration():

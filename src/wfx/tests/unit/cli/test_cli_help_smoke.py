@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from wfx.__main__ import app
 from typer.testing import CliRunner
+from wfx.__main__ import app
 
 runner = CliRunner()
 

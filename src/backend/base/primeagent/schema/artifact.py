@@ -2,8 +2,8 @@ from collections.abc import Generator
 from enum import Enum
 
 from fastapi.encoders import jsonable_encoder
-from wfx.log.logger import logger
 from pydantic import BaseModel
+from wfx.log.logger import logger
 
 from primeagent.schema.data import Data
 from primeagent.schema.dataframe import DataFrame

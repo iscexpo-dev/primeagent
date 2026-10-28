@@ -33,8 +33,8 @@ from primeagent.services.triggers.source_delivery import append_and_advance
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from wfx.integrations.models import CredentialLease
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.integrations.models import CredentialLease
 
     from primeagent.services.database.models.trigger.model import Trigger
 

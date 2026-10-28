@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from wfx.log.logger import logger
 from typing_extensions import override
+from wfx.log.logger import logger
 
 from primeagent.services.cache.service import AsyncInMemoryCache, CacheService, RedisCache, ThreadingInMemoryCache
 from primeagent.services.factory import ServiceFactory

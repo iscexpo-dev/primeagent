@@ -11,9 +11,9 @@ from typing import Any
 
 import jsonschema
 import pytest
+from pydantic import ValidationError
 from wfx.extension.manifest import DEFERRED_FIELDS, EXTENSION_SCHEMA_URL, ExtensionManifest
 from wfx.extension.schema import build_schema, build_schema_json
-from pydantic import ValidationError
 
 _VALID = {
     "$schema": EXTENSION_SCHEMA_URL,

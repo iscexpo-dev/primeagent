@@ -8,15 +8,15 @@ from pathlib import Path
 from secrets import token_urlsafe
 from typing import TYPE_CHECKING
 
+from sqlalchemy import delete
+from sqlalchemy import exc as sqlalchemy_exc
+from sqlmodel import col, select
 from wfx.log.logger import logger
 from wfx.services.settings.constants import (
     DEFAULT_SUPERUSER,
     LEGACY_DEFAULT_SUPERUSER_PASSWORD,
 )
 from wfx.services.settings.feature_flags import FEATURE_FLAGS
-from sqlalchemy import delete
-from sqlalchemy import exc as sqlalchemy_exc
-from sqlmodel import col, select
 
 from primeagent.services.cache.base import ExternalAsyncBaseCacheService
 from primeagent.services.cache.factory import CacheServiceFactory
@@ -28,8 +28,8 @@ from primeagent.services.schema import ServiceType
 from .deps import get_auth_service, get_db_service, get_service, get_settings_service, session_scope
 
 if TYPE_CHECKING:
-    from wfx.services.settings.manager import SettingsService
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.services.settings.manager import SettingsService
 
 
 class SetupSuperuserResult(str, Enum):

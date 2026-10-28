@@ -6,8 +6,8 @@ prefix (basePath).
 """
 
 import pytest
-from primeagent.api.v1.mcp_projects import get_project_sse, project_sse_transports
 from mcp.server.sse import SseServerTransport
+from primeagent.api.v1.mcp_projects import get_project_sse, project_sse_transports
 
 # ---------------------------------------------------------------------------
 # Unit: SseServerTransport respects root_path in the ASGI scope

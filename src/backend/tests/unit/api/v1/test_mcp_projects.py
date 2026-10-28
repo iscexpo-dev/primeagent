@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException, status
 from httpx import AsyncClient
+from mcp.server.sse import SseServerTransport
 from primeagent.api.v1 import projects_mcp_helpers
 from primeagent.api.v1.mcp_projects import (
     ProjectMCPServer,
@@ -26,13 +27,12 @@ from primeagent.services.database.models.flow import Flow
 from primeagent.services.database.models.folder import Folder
 from primeagent.services.database.models.user.model import User
 from primeagent.services.deps import get_settings_service
+from sqlmodel import select
 from wfx.base.mcp.constants import MAX_MCP_SERVER_NAME_LENGTH
 from wfx.base.mcp.util import project_mcp_server_name, sanitize_mcp_name
 from wfx.services.deps import session_scope
 from wfx.services.mcp_composer.service import COMPOSER_BACKEND_AUTH_HEADER
 from wfx.services.settings.base import Settings
-from mcp.server.sse import SseServerTransport
-from sqlmodel import select
 
 from tests.unit.utils.mcp import project_session_manager_lifespan
 
@@ -1892,7 +1892,9 @@ async def test_should_report_installed_true_when_config_file_contains_matching_u
     # Write config files with matching URLs for all clients
     project_id = user_test_project.id
     for path in client_paths.values():
-        config = {"mcpServers": {"lf-test": {"args": [f"https://primeagent.local/api/v1/mcp/project/{project_id}/sse"]}}}
+        config = {
+            "mcpServers": {"lf-test": {"args": [f"https://primeagent.local/api/v1/mcp/project/{project_id}/sse"]}}
+        }
         path.write_text(json.dumps(config))
 
     response = await client.get(

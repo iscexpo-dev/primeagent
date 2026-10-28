@@ -1,10 +1,10 @@
 import requests
 from langchain_core.tools import StructuredTool
+from pydantic import BaseModel
 from wfx.base.langchain_utilities.model import LCToolComponent
 from wfx.field_typing import Tool
 from wfx.inputs.inputs import SecretStrInput
 from wfx.schema.data import Data
-from pydantic import BaseModel
 
 
 class NotionUserList(LCToolComponent):

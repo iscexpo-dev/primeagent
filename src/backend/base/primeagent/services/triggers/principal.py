@@ -22,10 +22,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pydantic import ValidationError
 from wfx.integrations.errors import ConnectionNotAuthorizedError
 from wfx.integrations.models import ConnectionRef, ConnectionResolutionRequest
 from wfx.services.authorization.base import ExecutionPrincipal
-from pydantic import ValidationError
 
 from primeagent.services.database.models.connection.model import Connection
 from primeagent.services.deps import get_connection_resolver_service
@@ -38,8 +38,8 @@ from primeagent.services.triggers.constants import (
 )
 
 if TYPE_CHECKING:
-    from wfx.integrations.errors import IntegrationError
     from sqlmodel.ext.asyncio.session import AsyncSession
+    from wfx.integrations.errors import IntegrationError
 
     from primeagent.services.database.models.trigger.model import Trigger
 

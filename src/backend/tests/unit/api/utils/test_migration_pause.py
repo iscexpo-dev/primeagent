@@ -57,8 +57,8 @@ from primeagent.services.telemetry_writer.service import TelemetryWriterService
 from primeagent.services.triggers.constants import DISPATCHER_LEASE_NAME, SCHEDULER_LEASE_NAME
 from primeagent.services.triggers.dispatcher import TriggerDispatcher
 from primeagent.services.triggers.listeners.supervisor import ListenerSupervisor
-from wfx.services.settings.feature_flags import FEATURE_FLAGS
 from sqlmodel import select
+from wfx.services.settings.feature_flags import FEATURE_FLAGS
 
 from tests.unit.api.v1 import test_connection_oauth as oauth
 
@@ -815,7 +815,9 @@ async def test_a_schedule_that_comes_due_during_the_pause_fires_after_it_ends(ac
 async def test_a_queued_job_stays_queued_while_paused_and_starts_after(active_user, config_dir, background_service):
     _write_record(config_dir, PAUSED)
 
-    job_id = await background_service.submit(flow_id=uuid4(), request={"stream_protocol": "primeagent"}, user=active_user)
+    job_id = await background_service.submit(
+        flow_id=uuid4(), request={"stream_protocol": "primeagent"}, user=active_user
+    )
     await asyncio.sleep(0.5)
 
     assert await _job_status(job_id) == JobStatus.QUEUED

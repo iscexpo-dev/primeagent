@@ -1,5 +1,5 @@
-from wfx.services.settings.service import SettingsService
 from typing_extensions import override
+from wfx.services.settings.service import SettingsService
 
 from primeagent.services.factory import ServiceFactory
 from primeagent.services.state.service import InMemoryStateService

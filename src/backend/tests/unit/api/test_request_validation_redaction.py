@@ -22,10 +22,10 @@ from httpx import ASGITransport, AsyncClient
 from primeagent.api.utils.core import DbSession
 from primeagent.api.validation_errors import redact_validation_errors, request_validation_exception_handler
 from primeagent.services.variable.constants import CREDENTIAL_TYPE
-from wfx.services.deps import session_scope
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictStr, ValidationError, field_validator
 from structlog import PrintLogger, make_filtering_bound_logger, wrap_logger
 from structlog.dev import ConsoleRenderer, plain_traceback
+from wfx.services.deps import session_scope
 
 CANARY = "lf-canary-9d1f4e7a2c8b"  # pragma: allowlist secret
 NUMERIC_CANARY = 5550123987

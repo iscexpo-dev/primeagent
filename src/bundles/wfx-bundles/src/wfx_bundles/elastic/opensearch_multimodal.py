@@ -7,6 +7,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from opensearchpy import OpenSearch, helpers
+from opensearchpy.exceptions import OpenSearchException, RequestError
 from wfx.base.vectorstores.model import LCVectorStoreComponent, check_cached_vector_store
 from wfx.base.vectorstores.vector_store_connection_decorator import vector_store_connection
 from wfx.io import (
@@ -24,8 +26,6 @@ from wfx.log import logger
 from wfx.schema.data import Data
 from wfx.schema.dataframe import Table
 from wfx.utils.ssrf_protection import validate_connector_url_for_ssrf
-from opensearchpy import OpenSearch, helpers
-from opensearchpy.exceptions import OpenSearchException, RequestError
 
 REQUEST_TIMEOUT = 60
 MAX_RETRIES = 5

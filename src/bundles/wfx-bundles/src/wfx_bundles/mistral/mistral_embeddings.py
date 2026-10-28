@@ -1,10 +1,10 @@
 import httpx
 from langchain_mistralai import MistralAIEmbeddings
+from pydantic.v1 import SecretStr
 from wfx.base.models.model import LCModelComponent
 from wfx.base.models.provider_ssrf import ensure_credential_endpoint_allowed, provider_httpx_client_kwargs
 from wfx.field_typing import Embeddings
 from wfx.io import DropdownInput, IntInput, MessageTextInput, Output, SecretStrInput
-from pydantic.v1 import SecretStr
 
 DEFAULT_MISTRAL_ENDPOINT = "https://api.mistral.ai/v1"
 

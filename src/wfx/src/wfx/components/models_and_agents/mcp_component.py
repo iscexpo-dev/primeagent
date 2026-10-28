@@ -484,7 +484,9 @@ class MCPToolsComponent(ComponentWithCache):
                     # must surface — otherwise we would silently use a stale flow-embedded
                     # config when DB config should have taken precedence.
                     missing_module = e.name or ""
-                    is_primeagent_standalone = missing_module == "primeagent" or missing_module.startswith("primeagent.")
+                    is_primeagent_standalone = missing_module == "primeagent" or missing_module.startswith(
+                        "primeagent."
+                    )
                     if not is_primeagent_standalone:
                         raise
                     await logger.ainfo(

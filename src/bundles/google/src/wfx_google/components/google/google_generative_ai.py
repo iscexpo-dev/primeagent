@@ -2,6 +2,7 @@ from typing import Any
 
 import requests
 from google import genai
+from pydantic.v1 import SecretStr
 from wfx.base.models.google_generative_ai_constants import GOOGLE_GENERATIVE_AI_MODELS
 from wfx.base.models.google_generative_ai_model import ChatGoogleGenerativeAIFixed
 from wfx.base.models.model import LCModelComponent
@@ -10,7 +11,6 @@ from wfx.field_typing.range_spec import RangeSpec
 from wfx.inputs.inputs import BoolInput, DropdownInput, FloatInput, IntInput, SecretStrInput, SliderInput
 from wfx.log.logger import logger
 from wfx.schema.dotdict import dotdict
-from pydantic.v1 import SecretStr
 
 
 class GoogleGenerativeAIComponent(LCModelComponent):

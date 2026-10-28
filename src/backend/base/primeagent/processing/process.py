@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel
 from wfx.log.logger import logger
 from wfx.processing.process import apply_tweaks as _wfx_apply_tweaks
 from wfx.processing.process import apply_tweaks_on_vertex as _wfx_apply_tweaks_on_vertex
 from wfx.processing.process import process_tweaks as _wfx_process_tweaks
 from wfx.processing.process import process_tweaks_on_graph as _wfx_process_tweaks_on_graph
 from wfx.processing.process import run_graph_internal as _wfx_run_graph_internal
-from pydantic import BaseModel
 
 from primeagent.schema.graph import InputValue, Tweaks
 from primeagent.schema.schema import INPUT_FIELD_NAME

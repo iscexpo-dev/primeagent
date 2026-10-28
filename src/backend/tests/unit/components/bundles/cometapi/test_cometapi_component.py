@@ -7,8 +7,8 @@ pytest.importorskip("wfx_bundles")
 pytest.importorskip("langchain_openai")
 
 from langchain_openai import ChatOpenAI
-from wfx.components.cometapi.cometapi import CometAPIComponent
 from pydantic.v1 import SecretStr
+from wfx.components.cometapi.cometapi import CometAPIComponent
 
 from tests.base import ComponentTestBaseWithoutClient
 

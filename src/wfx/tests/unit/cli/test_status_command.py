@@ -378,8 +378,8 @@ class TestRenderTable:
     @staticmethod
     def _capture_render(statuses, env_label):
         """Render the table to a string buffer and return the plain-text output."""
-        from wfx.cli.status import _render_table
         from rich.console import Console
+        from wfx.cli.status import _render_table
 
         buf = io.StringIO()
         fake_console = Console(file=buf, width=200, no_color=True)

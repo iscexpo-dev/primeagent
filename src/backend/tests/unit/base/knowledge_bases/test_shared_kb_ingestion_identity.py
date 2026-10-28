@@ -106,7 +106,8 @@ async def _run_dispatched_ingestion(
             "primeagent.services.knowledge_base_storage.runtime.create_backend", return_value=backend
         ) as create_backend,
         patch(
-            "primeagent.api.utils.kb_helpers.KBIngestionHelper.build_embeddings", new=AsyncMock(return_value=MagicMock())
+            "primeagent.api.utils.kb_helpers.KBIngestionHelper.build_embeddings",
+            new=AsyncMock(return_value=MagicMock()),
         ) as build_embeddings,
         patch(
             "primeagent.api.utils.kb_helpers.KBIngestionHelper.cleanup_chroma_chunks_by_job", new=AsyncMock()

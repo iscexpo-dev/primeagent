@@ -14,6 +14,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 from wfx.custom.custom_component.component import Component
 from wfx.custom.utils import (
     add_code_field_to_build_config,
@@ -48,7 +49,6 @@ from wfx.workflow.end_user_identity import (
     end_user_required_detail,
     resolve_serving_scope,
 )
-from pydantic import ValidationError
 
 from primeagent.api.utils import (
     CurrentActiveUser,

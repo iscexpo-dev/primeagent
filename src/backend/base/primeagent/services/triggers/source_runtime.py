@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from sqlmodel import update
 from wfx.integrations.errors import ConnectionUnresolvedError
 from wfx.services.deps import session_scope_readonly
-from sqlmodel import update
 
 from primeagent.services.database.models.trigger.model import Trigger
 from primeagent.services.deps import get_settings_service, session_scope

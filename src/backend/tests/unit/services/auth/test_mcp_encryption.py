@@ -11,8 +11,8 @@ from primeagent.services.auth.mcp_encryption import (
     is_encrypted,
 )
 from primeagent.services.auth.service import AuthService
-from wfx.services.settings.auth import AuthSettings
 from pydantic import SecretStr
+from wfx.services.settings.auth import AuthSettings
 
 
 @pytest.fixture

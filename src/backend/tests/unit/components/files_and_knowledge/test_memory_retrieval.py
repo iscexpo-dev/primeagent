@@ -643,7 +643,9 @@ class TestMemoryBaseRetrievalInvariants:
             TestMemoryBaseRetrievalBehavior._enter_full_chain(
                 stack, db=_exec_returning(mb_row), fake_backend=backend, owner=owner, metadata={}
             )
-            factory = stack.enter_context(patch("primeagent.api.utils.kb_helpers.backend_for_name", return_value=backend))
+            factory = stack.enter_context(
+                patch("primeagent.api.utils.kb_helpers.backend_for_name", return_value=backend)
+            )
             await component.retrieve_memory()
         assert factory.call_args.args == (owner_id, mb_row.kb_name)
 
