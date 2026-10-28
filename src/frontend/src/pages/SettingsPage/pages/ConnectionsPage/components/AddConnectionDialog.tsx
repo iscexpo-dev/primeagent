@@ -57,7 +57,11 @@ const CONSENT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Opens the consent window on the click itself, so popup blockers allow it. */
 const openBlankConsentWindow = (): Window | null =>
-  window.open("about:blank", "primeagent-oauth-consent", "width=520,height=700");
+  window.open(
+    "about:blank",
+    "primeagent-oauth-consent",
+    "width=520,height=700",
+  );
 
 /** Re-authorizing starts at `scopes`: the handle and identity already exist. */
 type Step = "details" | "scopes" | "authorize";

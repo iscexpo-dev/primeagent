@@ -112,7 +112,9 @@ describe("OSS auth customization seams", () => {
         status: 403,
         headers: {
           get: (name: string) =>
-            name === "x-primeagent-error-code" ? "tier_limit_reached" : undefined,
+            name === "x-primeagent-error-code"
+              ? "tier_limit_reached"
+              : undefined,
         },
         data: { detail: { message: "nope" } },
       },

@@ -10,59 +10,53 @@ import {
 import { skipIfComponentUnavailable } from "../../utils/skip-if-component-unavailable";
 
 // TODO: This component doesn't have slider needs updating
-test(
-  "user should be able to use slider input",
-  {
-    tag: ["@release", "@workspace"],
-  },
-  async ({ page }) => {
-    await awaitBootstrapTest(page);
+test("user should be able to use slider input", {
+  tag: ["@release", "@workspace"],
+}, async ({ page }) => {
+  await awaitBootstrapTest(page);
 
-    await page.waitForSelector('[data-testid="blank-flow"]', {
-      timeout: 30000,
-    });
-    await page.getByTestId("blank-flow").click();
-    await page.getByTestId("sidebar-search-input").click();
-    await page.getByTestId("sidebar-search-input").fill("ollama");
-    await skipIfComponentUnavailable(
-      page.getByTestId("ollamaOllama"),
-      "Ollama",
+  await page.waitForSelector('[data-testid="blank-flow"]', {
+    timeout: 30000,
+  });
+  await page.getByTestId("blank-flow").click();
+  await page.getByTestId("sidebar-search-input").click();
+  await page.getByTestId("sidebar-search-input").fill("ollama");
+  await skipIfComponentUnavailable(page.getByTestId("ollamaOllama"), "Ollama");
+
+  await page.waitForSelector('[data-testid="ollamaOllama"]', {
+    timeout: 3000,
+  });
+
+  await page
+    .getByTestId("ollamaOllama")
+    .dragTo(page.locator('//*[@id="react-flow-id"]'));
+  await page.mouse.up();
+  await page.mouse.down();
+  await adjustScreenView(page, { numberOfZoomOut: 2 });
+
+  await page.getByTestId("title-Ollama").click();
+  await page.getByTestId("code-button-modal").last().click();
+
+  const cleanCode = await extractAndCleanCode(page);
+
+  // Sanity-check: the original Ollama source has many lines. If we read it
+  // back as a single concatenated line, the textarea-value path is the
+  // problem and Ace surgery downstream cannot save us.
+  const cleanCodeNewlines = (cleanCode.match(/\n/g) || []).length;
+  if (cleanCodeNewlines < 50) {
+    throw new Error(
+      `extractAndCleanCode returned code with only ${cleanCodeNewlines} newlines (length ${cleanCode.length}); expected the multi-line Ollama source. The hidden #codeValue textarea may be returning a stripped value on this platform.`,
     );
+  }
 
-    await page.waitForSelector('[data-testid="ollamaOllama"]', {
-      timeout: 3000,
-    });
-
-    await page
-      .getByTestId("ollamaOllama")
-      .dragTo(page.locator('//*[@id="react-flow-id"]'));
-    await page.mouse.up();
-    await page.mouse.down();
-    await adjustScreenView(page, { numberOfZoomOut: 2 });
-
-    await page.getByTestId("title-Ollama").click();
-    await page.getByTestId("code-button-modal").last().click();
-
-    const cleanCode = await extractAndCleanCode(page);
-
-    // Sanity-check: the original Ollama source has many lines. If we read it
-    // back as a single concatenated line, the textarea-value path is the
-    // problem and Ace surgery downstream cannot save us.
-    const cleanCodeNewlines = (cleanCode.match(/\n/g) || []).length;
-    if (cleanCodeNewlines < 50) {
-      throw new Error(
-        `extractAndCleanCode returned code with only ${cleanCodeNewlines} newlines (length ${cleanCode.length}); expected the multi-line Ollama source. The hidden #codeValue textarea may be returning a stripped value on this platform.`,
-      );
-    }
-
-    // Replace the multiline string in the code.
-    // Use a regex so the match is resilient to line-ending differences
-    // (LF on macOS/Linux vs CRLF on Windows after git checkout).
-    const originalSliderBlockRegex =
-      /name="temperature",\s+display_name="Temperature",\s+value=0\.1,\s+range_spec=RangeSpec\(min=0, max=1, step=0\.01\),\s+advanced=True,/;
-    const newCode = cleanCode.replace(
-      originalSliderBlockRegex,
-      `name="temperature",
+  // Replace the multiline string in the code.
+  // Use a regex so the match is resilient to line-ending differences
+  // (LF on macOS/Linux vs CRLF on Windows after git checkout).
+  const originalSliderBlockRegex =
+    /name="temperature",\s+display_name="Temperature",\s+value=0\.1,\s+range_spec=RangeSpec\(min=0, max=1, step=0\.01\),\s+advanced=True,/;
+  const newCode = cleanCode.replace(
+    originalSliderBlockRegex,
+    `name="temperature",
             display_name="Temperature",
             value=0.2,
             range_spec=RangeSpec(min=3, max=30, step=1),
@@ -74,54 +68,53 @@ test(
             slider_buttons_options=[],
             slider_input=False,
             advanced=False,`,
-    );
-    // make sure codes are different
-    expect(cleanCode).not.toEqual(newCode);
-    await setAceEditorValue(page, newCode);
-    await page.locator('//*[@id="checkAndSaveBtn"]').click();
+  );
+  // make sure codes are different
+  expect(cleanCode).not.toEqual(newCode);
+  await setAceEditorValue(page, newCode);
+  await page.locator('//*[@id="checkAndSaveBtn"]').click();
 
-    // Wait for the code modal to CLOSE before validating the node. The modal
-    // only closes on a successful save (processDynamicField → setOpen(false));
-    // if validation fails it stays open showing an error. Asserting the close
-    // first (a) confirms the new code actually committed, and (b) makes a save
-    // failure surface here with a clear signal instead of downstream as a
-    // confusing stale-slider value. On a slow Windows runner the node re-render
-    // also lags the click, so this doubles as the settle wait.
-    await expect(page.locator('//*[@id="checkAndSaveBtn"]')).toBeHidden({
-      timeout: 15000,
-    });
-    await adjustScreenView(page);
+  // Wait for the code modal to CLOSE before validating the node. The modal
+  // only closes on a successful save (processDynamicField → setOpen(false));
+  // if validation fails it stays open showing an error. Asserting the close
+  // first (a) confirms the new code actually committed, and (b) makes a save
+  // failure surface here with a clear signal instead of downstream as a
+  // confusing stale-slider value. On a slow Windows runner the node re-render
+  // also lags the click, so this doubles as the settle wait.
+  await expect(page.locator('//*[@id="checkAndSaveBtn"]')).toBeHidden({
+    timeout: 15000,
+  });
+  await adjustScreenView(page);
 
-    await mutualValidation(page);
+  await mutualValidation(page);
 
-    await moveSlider(page, "right");
+  await moveSlider(page, "right");
 
-    // wait for the slider to update
+  // wait for the slider to update
 
-    await page.waitForTimeout(500);
-    await adjustScreenView(page, { numberOfZoomOut: 1 });
+  await page.waitForTimeout(500);
+  await adjustScreenView(page, { numberOfZoomOut: 1 });
 
-    // LE-1810: slider values live on the node — the parameters panel only
-    // manages parameter visibility, so a panel round-trip must not disturb
-    // the value shown on the node.
-    await page.getByTestId("title-Ollama").click();
-    await openParametersPanel(page);
+  // LE-1810: slider values live on the node — the parameters panel only
+  // manages parameter visibility, so a panel round-trip must not disturb
+  // the value shown on the node.
+  await page.getByTestId("title-Ollama").click();
+  await openParametersPanel(page);
 
-    await expect(page.getByTestId("default_slider_display_value")).toHaveText(
-      "19.00",
-    );
+  await expect(page.getByTestId("default_slider_display_value")).toHaveText(
+    "19.00",
+  );
 
-    await closeParametersPanel(page);
+  await closeParametersPanel(page);
 
-    await moveSlider(page, "left");
-    // Wait for any potential updates
-    await page.waitForTimeout(500);
+  await moveSlider(page, "left");
+  // Wait for any potential updates
+  await page.waitForTimeout(500);
 
-    await expect(page.getByTestId("default_slider_display_value")).toHaveText(
-      "14.00",
-    );
-  },
-);
+  await expect(page.getByTestId("default_slider_display_value")).toHaveText(
+    "14.00",
+  );
+});
 
 // Set the Ace editor's content using the exact same pattern that
 // queryInputComponent.spec.ts uses successfully on Windows CI:

@@ -8,86 +8,79 @@ import { waitForFlowEditorReady } from "../../utils/flow/wait-for-flow-editor-re
 import { lockFlow, unlockFlow } from "../../utils/lock-flow";
 import { unselectNodes } from "../../utils/unselect-nodes";
 
-test(
-  "user must be able to lock a flow and it must be saved",
-  { tag: ["@release", "@components"] },
-  async ({ page }) => {
-    // Four lock/unlock round trips, each a settings save plus a full editor
-    // reload, then twenty click-and-assert iterations. That is ~1 minute on
-    // Linux/macOS and lands right on the 5-minute wall on Windows CI, where
-    // every step costs 3-5x as much — the test times out mid-loop rather than
-    // finding anything. Nothing here is Windows-specific except the pace.
-    test.slow(
-      process.platform === "win32",
-      "Windows CI runners are 3-5x slower",
+test("user must be able to lock a flow and it must be saved", {
+  tag: ["@release", "@components"],
+}, async ({ page }) => {
+  // Four lock/unlock round trips, each a settings save plus a full editor
+  // reload, then twenty click-and-assert iterations. That is ~1 minute on
+  // Linux/macOS and lands right on the 5-minute wall on Windows CI, where
+  // every step costs 3-5x as much — the test times out mid-loop rather than
+  // finding anything. Nothing here is Windows-specific except the pace.
+  test.slow(process.platform === "win32", "Windows CI runners are 3-5x slower");
+
+  await openStarterProject(page, TEXTS.templateBasicPrompting);
+  const flowId = new URL(page.url()).pathname.match(/\/flow\/([^/]+)/)?.[1];
+  if (!flowId) {
+    throw new Error(
+      `Expected a flow URL after opening the starter project; got ${page.url()}`,
     );
+  }
 
-    await openStarterProject(page, TEXTS.templateBasicPrompting);
-    const flowId = new URL(page.url()).pathname.match(/\/flow\/([^/]+)/)?.[1];
-    if (!flowId) {
-      throw new Error(
-        `Expected a flow URL after opening the starter project; got ${page.url()}`,
-      );
-    }
+  await lockFlow(page);
 
-    await lockFlow(page);
+  await page.getByTestId("icon-ChevronLeft").click();
+  await page.waitForSelector('[data-testid="mainpage_title"]', {
+    timeout: 3000,
+  });
 
-    await page.getByTestId("icon-ChevronLeft").click();
-    await page.waitForSelector('[data-testid="mainpage_title"]', {
-      timeout: 3000,
-    });
+  await page.goto(`/flow/${flowId}`);
+  await waitForFlowEditorReady(page);
 
-    await page.goto(`/flow/${flowId}`);
-    await waitForFlowEditorReady(page);
+  //ensure the UI is updated
 
-    //ensure the UI is updated
+  await unlockFlow(page);
 
-    await unlockFlow(page);
+  await page.getByTestId("icon-ChevronLeft").click();
+  await page.waitForSelector('[data-testid="mainpage_title"]', {
+    timeout: 3000,
+  });
 
-    await page.getByTestId("icon-ChevronLeft").click();
-    await page.waitForSelector('[data-testid="mainpage_title"]', {
-      timeout: 3000,
-    });
+  await page.goto(`/flow/${flowId}`);
+  await waitForFlowEditorReady(page);
 
-    await page.goto(`/flow/${flowId}`);
-    await waitForFlowEditorReady(page);
+  await tryDeleteEdge(page);
 
-    await tryDeleteEdge(page);
+  // Delete edges one by one (when unlocked, should work)
+  await deleteFirstEdge(page, 2);
+  await deleteFirstEdge(page, 1);
+  await deleteFirstEdge(page, 0);
 
-    // Delete edges one by one (when unlocked, should work)
-    await deleteFirstEdge(page, 2);
-    await deleteFirstEdge(page, 1);
-    await deleteFirstEdge(page, 0);
+  await tryConnectNodes(page);
 
-    await tryConnectNodes(page);
+  await unselectNodes(page);
 
-    await unselectNodes(page);
+  await page.getByText(TEXTS.componentChatInput, { exact: true }).click();
 
-    await page.getByText(TEXTS.componentChatInput, { exact: true }).click();
+  await adjustScreenView(page);
 
-    await adjustScreenView(page);
+  await page.getByTestId("handle-prompt-shownode-prompt-right").click();
+  await page
+    .getByTestId("handle-languagemodelcomponent-shownode-system message-left")
+    .click();
 
-    await page.getByTestId("handle-prompt-shownode-prompt-right").click();
-    await page
-      .getByTestId("handle-languagemodelcomponent-shownode-system message-left")
-      .click();
+  await page
+    .getByTestId("handle-chatinput-shownode-chat message-right")
+    .click();
+  await page
+    .getByTestId("handle-languagemodelcomponent-shownode-input-left")
+    .click();
 
-    await page
-      .getByTestId("handle-chatinput-shownode-chat message-right")
-      .click();
-    await page
-      .getByTestId("handle-languagemodelcomponent-shownode-input-left")
-      .click();
-
-    await page
-      .getByTestId(
-        "handle-languagemodelcomponent-shownode-model response-right",
-      )
-      .click();
-    await page.getByTestId("handle-chatoutput-shownode-inputs-left").click();
-    await expect(page.locator(".react-flow__edge")).toHaveCount(3);
-  },
-);
+  await page
+    .getByTestId("handle-languagemodelcomponent-shownode-model response-right")
+    .click();
+  await page.getByTestId("handle-chatoutput-shownode-inputs-left").click();
+  await expect(page.locator(".react-flow__edge")).toHaveCount(3);
+});
 
 async function tryConnectNodes(page: Page) {
   await lockFlow(page);

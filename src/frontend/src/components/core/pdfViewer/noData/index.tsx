@@ -6,7 +6,8 @@ export default function NoDataPdf(): JSX.Element {
     <div className="flex h-full w-full flex-col items-center justify-center bg-muted">
       <div className="chat-alert-box">
         <span>
-          📄 <span className="primeagent-chat-span">{t("output.pdfTitle")}</span>
+          📄{" "}
+          <span className="primeagent-chat-span">{t("output.pdfTitle")}</span>
         </span>
         <br />
         <div className="primeagent-chat-desc">

@@ -9,75 +9,71 @@ import {
 } from "../../utils/project-sidebar";
 import { renameFlow } from "../../utils/rename-flow";
 
-test(
-  "CRUD folders",
-  { tag: ["@release", "@api"] },
+test("CRUD folders", { tag: ["@release", "@api"] }, async ({ page }) => {
+  await awaitBootstrapTest(page);
 
-  async ({ page }) => {
-    await awaitBootstrapTest(page);
+  await page.getByTestId("side_nav_options_all-templates").click();
+  await page
+    .getByRole("heading", { name: TEXTS.templateBasicPrompting })
+    .click();
 
-    await page.getByTestId("side_nav_options_all-templates").click();
-    await page
-      .getByRole("heading", { name: TEXTS.templateBasicPrompting })
-      .click();
+  await page.waitForSelector('[data-testid="sidebar-search-input"]', {
+    timeout: 100000,
+  });
 
-    await page.waitForSelector('[data-testid="sidebar-search-input"]', {
-      timeout: 100000,
-    });
+  await page.getByTestId("icon-ChevronLeft").first().click();
+  await expect(page.getByPlaceholder("Search flows").first()).toBeVisible();
+  await expect(page.getByText("Flows").first()).toBeVisible();
+  if (await page.getByText(TEXTS.labelComponents).first().isVisible()) {
+    await expect(page.getByText(TEXTS.labelComponents).first()).toBeVisible();
+  } else {
+    await expect(page.getByText("MCP Server").first()).toBeVisible();
+  }
+  const createdProjectResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/api/v1/projects/",
+  );
+  await page.getByTestId("add-project-button").click();
+  const createdResponse = await createdProjectResponse;
+  expect(createdResponse.status()).toBe(201);
+  const createdProject = await createdResponse.json();
+  const projectRow = getSidebarProjectRowById(page, createdProject.id);
+  await expect(projectRow).toBeVisible();
 
-    await page.getByTestId("icon-ChevronLeft").first().click();
-    await expect(page.getByPlaceholder("Search flows").first()).toBeVisible();
-    await expect(page.getByText("Flows").first()).toBeVisible();
-    if (await page.getByText(TEXTS.labelComponents).first().isVisible()) {
-      await expect(page.getByText(TEXTS.labelComponents).first()).toBeVisible();
-    } else {
-      await expect(page.getByText("MCP Server").first()).toBeVisible();
-    }
-    const createdProjectResponse = page.waitForResponse(
-      (response) =>
-        response.request().method() === "POST" &&
-        new URL(response.url()).pathname === "/api/v1/projects/",
-    );
-    await page.getByTestId("add-project-button").click();
-    const createdResponse = await createdProjectResponse;
-    expect(createdResponse.status()).toBe(201);
-    const createdProject = await createdResponse.json();
-    const projectRow = getSidebarProjectRowById(page, createdProject.id);
-    await expect(projectRow).toBeVisible();
+  await projectRow.getByTestId(/^sidebar-nav-/).dblclick();
 
-    await projectRow.getByTestId(/^sidebar-nav-/).dblclick();
+  const element = page.getByTestId("input-project");
+  await element.fill("new project test name");
+  const renamedProjectResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" &&
+      new URL(response.url()).pathname ===
+        `/api/v1/projects/${createdProject.id}`,
+  );
+  await element.press("Enter");
+  const renamedResponse = await renamedProjectResponse;
+  expect(renamedResponse.status()).toBe(200);
+  expect((await renamedResponse.json()).name).toBe("new project test name");
+  await expect(
+    getSidebarProjectButton(page, "new project test name"),
+  ).toBeVisible({ timeout: 30000 });
 
-    const element = page.getByTestId("input-project");
-    await element.fill("new project test name");
-    const renamedProjectResponse = page.waitForResponse(
-      (response) =>
-        response.request().method() === "PATCH" &&
-        new URL(response.url()).pathname ===
-          `/api/v1/projects/${createdProject.id}`,
-    );
-    await element.press("Enter");
-    const renamedResponse = await renamedProjectResponse;
-    expect(renamedResponse.status()).toBe(200);
-    expect((await renamedResponse.json()).name).toBe("new project test name");
-    await expect(
-      getSidebarProjectButton(page, "new project test name"),
-    ).toBeVisible({ timeout: 30000 });
+  await getSidebarProjectButton(page, "new project test name").last().hover();
 
-    await getSidebarProjectButton(page, "new project test name").last().hover();
+  await getSidebarProjectOptionsButton(page, "new project test name").waitFor({
+    state: "visible",
+    timeout: 5000,
+  });
 
-    await getSidebarProjectOptionsButton(page, "new project test name").waitFor(
-      { state: "visible", timeout: 5000 },
-    );
+  await getSidebarProjectOptionsButton(page, "new project test name").click();
 
-    await getSidebarProjectOptionsButton(page, "new project test name").click();
-
-    await page.getByTestId("btn-delete-project").click();
-    await page.getByText(TEXTS.delete).last().click();
-    await expect(page.getByText(TEXTS.toastProjectDeleted)).toBeVisible({
-      timeout: 3000,
-    });
-  },
-);
+  await page.getByTestId("btn-delete-project").click();
+  await page.getByText(TEXTS.delete).last().click();
+  await expect(page.getByText(TEXTS.toastProjectDeleted)).toBeVisible({
+    timeout: 3000,
+  });
+});
 
 test("add a flow into a folder by drag and drop", async ({ page }) => {
   await page.goto("/");

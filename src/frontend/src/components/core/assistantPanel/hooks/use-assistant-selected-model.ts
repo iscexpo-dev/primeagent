@@ -11,7 +11,8 @@ import type { AssistantModel } from "../assistant-panel.types";
  * input (canvas overlay) consume this so a user who picks a model in one
  * place sees it pre-selected in the other.
  */
-export const ASSISTANT_MODEL_STORAGE_KEY = "primeagent-assistant-selected-model";
+export const ASSISTANT_MODEL_STORAGE_KEY =
+  "primeagent-assistant-selected-model";
 
 function readStoredModel(): AssistantModel | null {
   try {

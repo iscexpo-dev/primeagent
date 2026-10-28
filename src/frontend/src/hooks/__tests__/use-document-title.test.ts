@@ -7,7 +7,9 @@ describe("formatDocumentTitle", () => {
   });
 
   it("does not double-brand a title that already names the product", () => {
-    expect(formatDocumentTitle("Primeagent API Keys")).toBe("Primeagent API Keys");
+    expect(formatDocumentTitle("Primeagent API Keys")).toBe(
+      "Primeagent API Keys",
+    );
   });
 
   it("falls back to the product name for an empty title", () => {

@@ -59,31 +59,29 @@ async function composeKorean(page: Page, input: Locator) {
   });
 }
 
-test(
-  "node input preserves IME composition",
-  { tag: ["@release", "@workspace"] },
-  async ({ page }) => {
-    await addTextInputNode(page);
+test("node input preserves IME composition", {
+  tag: ["@release", "@workspace"],
+}, async ({ page }) => {
+  await addTextInputNode(page);
 
-    const textInput = page.getByTestId("textarea_str_input_value");
+  const textInput = page.getByTestId("textarea_str_input_value");
 
-    await textInput.fill("");
-    await expect(textInput).toHaveValue("");
+  await textInput.fill("");
+  await expect(textInput).toHaveValue("");
 
-    await composeAccent(page, textInput);
+  await composeAccent(page, textInput);
 
-    await expect(textInput).toHaveValue("á");
-    await page.getByTestId("div-generic-node").click();
-    await expect(textInput).toHaveValue("á");
+  await expect(textInput).toHaveValue("á");
+  await page.getByTestId("div-generic-node").click();
+  await expect(textInput).toHaveValue("á");
 
-    await textInput.fill("");
-    await expect(textInput).toHaveValue("");
+  await textInput.fill("");
+  await expect(textInput).toHaveValue("");
 
-    await composeKorean(page, textInput);
+  await composeKorean(page, textInput);
 
-    await expect(textInput).toHaveValue("하");
+  await expect(textInput).toHaveValue("하");
 
-    await page.getByTestId("div-generic-node").click();
-    await expect(textInput).toHaveValue("하");
-  },
-);
+  await page.getByTestId("div-generic-node").click();
+  await expect(textInput).toHaveValue("하");
+});

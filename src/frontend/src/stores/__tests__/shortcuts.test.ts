@@ -250,9 +250,9 @@ describe("useShortcutsStore", () => {
         result.current.getShortcutsFromStorage();
       });
 
-      expect(JSON.parse(localStorage.getItem("primeagent-shortcuts")!)).toEqual([
-        { name: "Test", display_name: "Test", shortcut: "t" },
-      ]);
+      expect(JSON.parse(localStorage.getItem("primeagent-shortcuts")!)).toEqual(
+        [{ name: "Test", display_name: "Test", shortcut: "t" }],
+      );
     });
 
     it("should drop a modifier-only shortcut that has no default", () => {

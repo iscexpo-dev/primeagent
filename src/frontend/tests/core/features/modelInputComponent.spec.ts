@@ -62,18 +62,16 @@ test.describe("ModelInputComponent", () => {
     );
   });
 
-  test(
-    "should display model selector in a node with model input",
-    { tag: ["@release", "@components", "@workspace"] },
-    async ({ page }) => {
-      await openBlankFlowForModelInput(page);
+  test("should display model selector in a node with model input", {
+    tag: ["@release", "@components", "@workspace"],
+  }, async ({ page }) => {
+    await openBlankFlowForModelInput(page);
 
-      const node = await addLanguageModelNode(page);
+    const node = await addLanguageModelNode(page);
 
-      const modelSection = node.locator(
-        '[data-testid*="model"], button:has-text("Setup Provider"), [role="combobox"]',
-      );
-      await expect(modelSection.first()).toBeVisible({ timeout: 3000 });
-    },
-  );
+    const modelSection = node.locator(
+      '[data-testid*="model"], button:has-text("Setup Provider"), [role="combobox"]',
+    );
+    await expect(modelSection.first()).toBeVisible({ timeout: 3000 });
+  });
 });

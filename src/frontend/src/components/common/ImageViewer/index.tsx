@@ -89,7 +89,9 @@ export default function ImageViewer({ image }: { image: string }) {
       </div>
       <div className="align-center flex justify-center">
         <div className="primeagent-chat-desc align-center flex justify-center">
-          <div className="primeagent-chat-desc-span">{t("output.imgError")}</div>
+          <div className="primeagent-chat-desc-span">
+            {t("output.imgError")}
+          </div>
         </div>
       </div>
     </div>

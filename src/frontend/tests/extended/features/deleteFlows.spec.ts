@@ -3,68 +3,66 @@ import { TEXTS } from "../../utils/constants/texts";
 import { loadDotenvIfLocal } from "../../utils/env/load-dotenv";
 import { skipIfMissing } from "../../utils/env/skip-if-missing";
 
-test(
-  "should delete a flow (requires store API key)",
-  { tag: ["@release", "@api"] },
-  async ({ page }) => {
-    skipIfMissing.storeApiKey();
-    loadDotenvIfLocal(__dirname);
-    await page.goto("/");
-    await page.waitForTimeout(1000);
+test("should delete a flow (requires store API key)", {
+  tag: ["@release", "@api"],
+}, async ({ page }) => {
+  skipIfMissing.storeApiKey();
+  loadDotenvIfLocal(__dirname);
+  await page.goto("/");
+  await page.waitForTimeout(1000);
 
-    await page.getByTestId("button-store").click();
-    await page.waitForTimeout(1000);
+  await page.getByTestId("button-store").click();
+  await page.waitForTimeout(1000);
 
-    await page.getByTestId("api-key-button-store").click({
-      timeout: 200000,
-    });
+  await page.getByTestId("api-key-button-store").click({
+    timeout: 200000,
+  });
 
-    await page
-      .getByPlaceholder(TEXTS.placeholderApiKey)
-      .fill(process.env.STORE_API_KEY ?? "");
+  await page
+    .getByPlaceholder(TEXTS.placeholderApiKey)
+    .fill(process.env.STORE_API_KEY ?? "");
 
-    await page.getByTestId("api-key-save-button-store").click();
+  await page.getByTestId("api-key-save-button-store").click();
 
-    await page.waitForTimeout(1000);
-    await expect(page.getByText(TEXTS.toastApiKeySaved)).toBeVisible();
-    await page.waitForSelector('[data-testid="button-store"]', {
-      timeout: 30000,
-    });
+  await page.waitForTimeout(1000);
+  await expect(page.getByText(TEXTS.toastApiKeySaved)).toBeVisible();
+  await page.waitForSelector('[data-testid="button-store"]', {
+    timeout: 30000,
+  });
 
-    await page.getByTestId("button-store").click();
-    await page.waitForLoadState("networkidle");
+  await page.getByTestId("button-store").click();
+  await page.waitForLoadState("networkidle");
 
-    // Get and click install button
-    const installButton = await waitForInstallButton(page);
-    await installButton.click();
+  // Get and click install button
+  const installButton = await waitForInstallButton(page);
+  await installButton.click();
 
-    // Handle success message
-    await waitForSuccessMessage(page);
+  // Handle success message
+  await waitForSuccessMessage(page);
 
-    // Wait for navigation button
-    await page.waitForSelector('[data-testid="sidebar-search-input"]', {
-      state: "visible",
-      timeout: 30000,
-    });
+  // Wait for navigation button
+  await page.waitForSelector('[data-testid="sidebar-search-input"]', {
+    state: "visible",
+    timeout: 30000,
+  });
 
-    await page.getByTestId("icon-ChevronLeft").first().click();
+  await page.getByTestId("icon-ChevronLeft").first().click();
 
-    await page.waitForSelector("text=Website Content QA", { timeout: 30000 });
+  await page.waitForSelector("text=Website Content QA", { timeout: 30000 });
 
-    await expect(page.getByText("Website Content QA").first()).toBeVisible();
-    await page.getByTestId("home-dropdown-menu").first().click();
-    await page.waitForTimeout(500);
+  await expect(page.getByText("Website Content QA").first()).toBeVisible();
+  await page.getByTestId("home-dropdown-menu").first().click();
+  await page.waitForTimeout(500);
 
-    await page.getByText(TEXTS.delete).last().click();
-    await page.waitForTimeout(500);
-    await page
-      .getByText("Are you sure you want to delete the selected component?")
-      .isVisible();
-    await page.getByText(TEXTS.delete).nth(1).click();
-    await page.waitForTimeout(1000);
-    await expect(page.getByText("Successfully").first()).toBeVisible();
-  },
-);
+  await page.getByText(TEXTS.delete).last().click();
+  await page.waitForTimeout(500);
+  await page
+    .getByText("Are you sure you want to delete the selected component?")
+    .isVisible();
+  await page.getByText(TEXTS.delete).nth(1).click();
+  await page.waitForTimeout(1000);
+  await expect(page.getByText("Successfully").first()).toBeVisible();
+});
 
 async function waitForInstallButton(page) {
   try {

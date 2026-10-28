@@ -194,343 +194,305 @@ async function openDbProvidersRoute(
 }
 
 test.describe("DB providers route accessibility", () => {
-  test(
-    "scans default SQLite Local active state",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, emptyVariables);
-      await expect(page.getByTestId("db-provider-item-sqlite")).toBeVisible();
+  test("scans default SQLite Local active state", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    await openDbProvidersRoute(page, emptyVariables);
+    await expect(page.getByTestId("db-provider-item-sqlite")).toBeVisible();
+    await expect(
+      page.getByTestId("db-provider-item-sqlite").getByText("Active"),
+    ).toBeVisible();
+
+    await page.runA11yScan("db-providers-sqlite-default");
+  });
+
+  test("scans OpenSearch required configuration and disabled actions", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    await openDbProvidersRoute(page, emptyVariables);
+    await page.getByTestId("db-provider-item-opensearch").click();
+
+    await expect(page.getByLabel("Cluster URL")).toBeVisible();
+    await expect(page.getByLabel("Username")).toBeVisible();
+    await expect(page.getByLabel("Password")).toBeVisible();
+    await expect(page.getByLabel("Default index name")).toBeVisible();
+    // Required connection fields are empty, so both actions must be disabled —
+    // asserting this exercises the `disabled` path on real <button>s
+    // rather than just their presence.
+    await expect(
+      page.getByTestId("db-provider-test-connection"),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("button").filter({ hasText: "Save and use" }),
+    ).toBeDisabled();
+
+    await page.runA11yScan("db-providers-opensearch-required-fields");
+  });
+
+  test("scans OpenSearch unconfigured configuration form with default toggle states", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    await openDbProvidersRoute(page, emptyVariables);
+    await page.getByTestId("db-provider-item-opensearch").click();
+
+    await expect(page.getByLabel("Cluster URL")).toBeVisible();
+    await expect(page.getByLabel("Username")).toBeVisible();
+    await expect(page.getByLabel("Password")).toBeVisible();
+    await expect(page.getByLabel("Default index name")).toBeVisible();
+    await expect(page.getByLabel("Vector field")).toBeVisible();
+    await expect(page.getByLabel("Text field")).toBeVisible();
+
+    const useSslToggle = page.getByTestId(
+      "db-provider-toggle-OPENSEARCH_USE_SSL",
+    );
+    const verifyCertsToggle = page.getByTestId(
+      "db-provider-toggle-OPENSEARCH_VERIFY_CERTS", // pragma: allowlist secret
+    );
+    await expect(useSslToggle).toHaveAttribute("data-state", "checked");
+    await expect(verifyCertsToggle).toHaveAttribute("data-state", "checked");
+    // Required Cluster URL/Username/Password/Index name are empty, so
+    // both actions must be disabled.
+    await expect(
+      page.getByTestId("db-provider-test-connection"),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("button").filter({ hasText: "Save and use" }),
+    ).toBeDisabled();
+
+    await page.runA11yScan("db-providers-opensearch-form");
+  });
+
+  test("scans OpenSearch form with TLS toggles switched off", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    await openDbProvidersRoute(page, emptyVariables);
+    await page.getByTestId("db-provider-item-opensearch").click();
+
+    const useSslToggle = page.getByTestId(
+      "db-provider-toggle-OPENSEARCH_USE_SSL",
+    );
+    const verifyCertsToggle = page.getByTestId(
+      "db-provider-toggle-OPENSEARCH_VERIFY_CERTS", // pragma: allowlist secret
+    );
+    await useSslToggle.click();
+    await verifyCertsToggle.click();
+    await expect(useSslToggle).toHaveAttribute("data-state", "unchecked");
+    await expect(verifyCertsToggle).toHaveAttribute("data-state", "unchecked");
+
+    await page.runA11yScan("db-providers-opensearch-toggles-off");
+  });
+
+  test("scans OpenSearch configured/active state with masked secret field", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    await openDbProvidersRoute(page, openSearchConfiguredVariables);
+
+    await expect(
+      page.getByTestId("db-provider-item-opensearch").getByText("Active"),
+    ).toBeVisible();
+    await expect(page.getByLabel("Password")).toHaveValue("••••••••");
+    await expect(page.getByLabel("Cluster URL")).toHaveValue(
+      "https://search.example.com:9200",
+    );
+
+    await page.runA11yScan("db-providers-opensearch-configured-masked");
+  });
+
+  test("scans secret field editing/unmasked state", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    await openDbProvidersRoute(page, openSearchConfiguredVariables);
+
+    const passwordField = page.getByLabel("Password");
+    await expect(passwordField).toHaveValue("••••••••");
+    await passwordField.click();
+    await expect(passwordField).toHaveValue("");
+
+    await page.runA11yScan("db-providers-opensearch-secret-editing");
+  });
+
+  test("scans coming-soon provider panel", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    await openDbProvidersRoute(page, emptyVariables);
+
+    // Both stubbed providers share the same coming-soon render
+    // path; assert each of their list buttons individually so every
+    // provider button in the list is exercised at least once, not just
+    // the one whose panel we scan below.
+    for (const providerId of ["astra", "mongodb"]) {
       await expect(
-        page.getByTestId("db-provider-item-sqlite").getByText("Active"),
+        page
+          .getByTestId(`db-provider-item-${providerId}`)
+          .getByText("Coming soon"),
       ).toBeVisible();
+    }
 
-      await page.runA11yScan("db-providers-sqlite-default");
-    },
-  );
+    await page.getByTestId("db-provider-item-astra").click();
+    await expect(
+      page.getByText(
+        "This provider is stubbed in the Knowledge Base backend registry",
+      ),
+    ).toBeVisible();
 
-  test(
-    "scans OpenSearch required configuration and disabled actions",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, emptyVariables);
-      await page.getByTestId("db-provider-item-opensearch").click();
+    await page.runA11yScan("db-providers-coming-soon");
+  });
 
-      await expect(page.getByLabel("Cluster URL")).toBeVisible();
-      await expect(page.getByLabel("Username")).toBeVisible();
-      await expect(page.getByLabel("Password")).toBeVisible();
-      await expect(page.getByLabel("Default index name")).toBeVisible();
-      // Required connection fields are empty, so both actions must be disabled —
-      // asserting this exercises the `disabled` path on real <button>s
-      // rather than just their presence.
-      await expect(
-        page.getByTestId("db-provider-test-connection"),
-      ).toBeDisabled();
-      await expect(
-        page.getByRole("button").filter({ hasText: "Save and use" }),
-      ).toBeDisabled();
+  test("scans save-pending loading state", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    // SQLite Local's "Use SQLite" action fires a single activation
+    // request (no preceding field-save call), so delaying it produces a
+    // stable, gap-free pending window to scan — unlike the two-phase
+    // save-then-activate flow used by the other providers.
+    const writeBehavior: WriteBehavior = {};
+    await openDbProvidersRoute(
+      page,
+      openSearchConfiguredVariables,
+      writeBehavior,
+    );
+    // Locate by text content rather than accessible role name: the
+    // Button component visually hides its label (CSS `invisible`) while
+    // `loading` is true, which strips the accessible name from the a11y
+    // tree — a real gap this scan is designed to surface — so a
+    // name-based role query would stop matching mid-flight.
+    await page.getByTestId("db-provider-item-sqlite").click();
+    const useSQLiteButton = page
+      .getByRole("button")
+      .filter({ hasText: "Use SQLite" });
+    await expect(useSQLiteButton).toBeEnabled();
 
-      await page.runA11yScan("db-providers-opensearch-required-fields");
-    },
-  );
+    writeBehavior.delayMs = 1500;
+    await useSQLiteButton.click();
+    // Busy uses aria-disabled (not native disabled) so focus is retained.
+    await expect(useSQLiteButton).toHaveAttribute("aria-busy", "true");
+    await expect(useSQLiteButton).toHaveAttribute("aria-disabled", "true");
 
-  test(
-    "scans OpenSearch unconfigured configuration form with default toggle states",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, emptyVariables);
-      await page.getByTestId("db-provider-item-opensearch").click();
+    await page.runA11yScan("db-providers-save-pending");
+  });
 
-      await expect(page.getByLabel("Cluster URL")).toBeVisible();
-      await expect(page.getByLabel("Username")).toBeVisible();
-      await expect(page.getByLabel("Password")).toBeVisible();
-      await expect(page.getByLabel("Default index name")).toBeVisible();
-      await expect(page.getByLabel("Vector field")).toBeVisible();
-      await expect(page.getByLabel("Text field")).toBeVisible();
+  test("scans save success toast state", { tag: ["@release", "@api"] }, async ({
+    page,
+  }) => {
+    await openDbProvidersRoute(page, emptyVariables);
+    await page.getByTestId("db-provider-item-opensearch").click();
+    await page
+      .getByLabel("Cluster URL")
+      .fill("https://search.example.com:9200");
+    await page.getByLabel("Username").fill("admin");
+    await page.getByLabel("Password").fill("a11y-test-password"); // pragma: allowlist secret
+    await page.getByRole("button", { name: "Save and use OpenSearch" }).click();
 
-      const useSslToggle = page.getByTestId(
-        "db-provider-toggle-OPENSEARCH_USE_SSL",
-      );
-      const verifyCertsToggle = page.getByTestId(
-        "db-provider-toggle-OPENSEARCH_VERIFY_CERTS", // pragma: allowlist secret
-      );
-      await expect(useSslToggle).toHaveAttribute("data-state", "checked");
-      await expect(verifyCertsToggle).toHaveAttribute("data-state", "checked");
-      // Required Cluster URL/Username/Password/Index name are empty, so
-      // both actions must be disabled.
-      await expect(
-        page.getByTestId("db-provider-test-connection"),
-      ).toBeDisabled();
-      await expect(
-        page.getByRole("button").filter({ hasText: "Save and use" }),
-      ).toBeDisabled();
+    await expect(page.getByText("OpenSearch configuration saved")).toBeVisible({
+      timeout: TIMEOUTS.standard,
+    });
 
-      await page.runA11yScan("db-providers-opensearch-form");
-    },
-  );
+    await page.runA11yScan("db-providers-save-success");
+  });
 
-  test(
-    "scans OpenSearch form with TLS toggles switched off",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, emptyVariables);
-      await page.getByTestId("db-provider-item-opensearch").click();
+  test("scans save error toast state", { tag: ["@release", "@api"] }, async ({
+    page,
+  }) => {
+    const writeBehavior: WriteBehavior = {
+      fail: true,
+      failedRequestCount: 3,
+    };
+    await openDbProvidersRoute(page, emptyVariables, writeBehavior);
+    await page.getByTestId("db-provider-item-opensearch").click();
+    await page
+      .getByLabel("Cluster URL")
+      .fill("https://search.example.com:9200");
+    await page.getByLabel("Username").fill("admin");
+    await page.getByLabel("Password").fill("a11y-test-password"); // pragma: allowlist secret
+    await page.getByRole("button", { name: "Save and use OpenSearch" }).click();
 
-      const useSslToggle = page.getByTestId(
-        "db-provider-toggle-OPENSEARCH_USE_SSL",
-      );
-      const verifyCertsToggle = page.getByTestId(
-        "db-provider-toggle-OPENSEARCH_VERIFY_CERTS", // pragma: allowlist secret
-      );
-      await useSslToggle.click();
-      await verifyCertsToggle.click();
-      await expect(useSslToggle).toHaveAttribute("data-state", "unchecked");
-      await expect(verifyCertsToggle).toHaveAttribute(
-        "data-state",
-        "unchecked",
-      );
+    await expect(page.getByText("Error saving DB Provider")).toBeVisible({
+      timeout: TIMEOUTS.standard,
+    });
 
-      await page.runA11yScan("db-providers-opensearch-toggles-off");
-    },
-  );
+    await page.runA11yScan("db-providers-save-error");
+  });
 
-  test(
-    "scans OpenSearch configured/active state with masked secret field",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, openSearchConfiguredVariables);
+  test("scans test-connection pending loading state", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    const testConnectionBehavior: TestConnectionBehavior = {
+      delayMs: 1500,
+      response: { ok: true, message: "" },
+    };
+    await openDbProvidersRoute(page, openSearchConfiguredVariables);
+    await mockTestConnection(page, testConnectionBehavior);
 
-      await expect(
-        page.getByTestId("db-provider-item-opensearch").getByText("Active"),
-      ).toBeVisible();
-      await expect(page.getByLabel("Password")).toHaveValue("••••••••");
-      await expect(page.getByLabel("Cluster URL")).toHaveValue(
-        "https://search.example.com:9200",
-      );
+    const testConnectionButton = page.getByTestId(
+      "db-provider-test-connection",
+    );
+    await testConnectionButton.focus();
+    await testConnectionButton.press("Enter");
+    // Busy uses aria-disabled (not native disabled) so focus is retained.
+    await expect(testConnectionButton).toHaveAttribute("aria-busy", "true");
+    await expect(testConnectionButton).toHaveAttribute("aria-disabled", "true");
+    await expect(testConnectionButton).toBeFocused();
 
-      await page.runA11yScan("db-providers-opensearch-configured-masked");
-    },
-  );
+    await page.runA11yScan("db-providers-test-connection-pending");
+  });
 
-  test(
-    "scans secret field editing/unmasked state",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, openSearchConfiguredVariables);
+  test("retains keyboard focus on test-connection after loading completes", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    const testConnectionBehavior: TestConnectionBehavior = {
+      delayMs: 400,
+      response: { ok: false, message: "Authentication failed." },
+    };
+    await openDbProvidersRoute(page, openSearchConfiguredVariables);
+    await mockTestConnection(page, testConnectionBehavior);
 
-      const passwordField = page.getByLabel("Password");
-      await expect(passwordField).toHaveValue("••••••••");
-      await passwordField.click();
-      await expect(passwordField).toHaveValue("");
+    const testConnectionButton = page.getByTestId(
+      "db-provider-test-connection",
+    );
+    await testConnectionButton.focus();
+    await expect(testConnectionButton).toBeFocused();
+    await testConnectionButton.press("Enter");
 
-      await page.runA11yScan("db-providers-opensearch-secret-editing");
-    },
-  );
+    await expect(testConnectionButton).toHaveAttribute("aria-busy", "true");
+    await expect(testConnectionButton).toBeFocused();
 
-  test(
-    "scans coming-soon provider panel",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, emptyVariables);
+    await expect(page.getByText("Connection failed")).toBeVisible({
+      timeout: TIMEOUTS.standard,
+    });
+    await expect(testConnectionButton).not.toHaveAttribute("aria-busy");
+    await expect(testConnectionButton).toBeFocused();
+  });
 
-      // Both stubbed providers share the same coming-soon render
-      // path; assert each of their list buttons individually so every
-      // provider button in the list is exercised at least once, not just
-      // the one whose panel we scan below.
-      for (const providerId of ["astra", "mongodb"]) {
-        await expect(
-          page
-            .getByTestId(`db-provider-item-${providerId}`)
-            .getByText("Coming soon"),
-        ).toBeVisible();
-      }
+  test("scans test-connection success toast state", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    await openDbProvidersRoute(page, openSearchConfiguredVariables);
+    await mockTestConnection(page, {
+      response: { ok: true, message: "cluster v2.11.0" },
+    });
 
-      await page.getByTestId("db-provider-item-astra").click();
-      await expect(
-        page.getByText(
-          "This provider is stubbed in the Knowledge Base backend registry",
-        ),
-      ).toBeVisible();
+    await page.getByTestId("db-provider-test-connection").click();
+    await expect(
+      page.getByText("Connection successful — cluster v2.11.0"),
+    ).toBeVisible({ timeout: TIMEOUTS.standard });
 
-      await page.runA11yScan("db-providers-coming-soon");
-    },
-  );
+    await page.runA11yScan("db-providers-test-connection-success");
+  });
 
-  test(
-    "scans save-pending loading state",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      // SQLite Local's "Use SQLite" action fires a single activation
-      // request (no preceding field-save call), so delaying it produces a
-      // stable, gap-free pending window to scan — unlike the two-phase
-      // save-then-activate flow used by the other providers.
-      const writeBehavior: WriteBehavior = {};
-      await openDbProvidersRoute(
-        page,
-        openSearchConfiguredVariables,
-        writeBehavior,
-      );
-      // Locate by text content rather than accessible role name: the
-      // Button component visually hides its label (CSS `invisible`) while
-      // `loading` is true, which strips the accessible name from the a11y
-      // tree — a real gap this scan is designed to surface — so a
-      // name-based role query would stop matching mid-flight.
-      await page.getByTestId("db-provider-item-sqlite").click();
-      const useSQLiteButton = page
-        .getByRole("button")
-        .filter({ hasText: "Use SQLite" });
-      await expect(useSQLiteButton).toBeEnabled();
+  test("scans test-connection failure toast state", {
+    tag: ["@release", "@api"],
+  }, async ({ page }) => {
+    await openDbProvidersRoute(page, openSearchConfiguredVariables);
+    await mockTestConnection(page, {
+      response: { ok: false, message: "Authentication failed." },
+    });
 
-      writeBehavior.delayMs = 1500;
-      await useSQLiteButton.click();
-      // Busy uses aria-disabled (not native disabled) so focus is retained.
-      await expect(useSQLiteButton).toHaveAttribute("aria-busy", "true");
-      await expect(useSQLiteButton).toHaveAttribute("aria-disabled", "true");
+    await page.getByTestId("db-provider-test-connection").click();
+    await expect(page.getByText("Connection failed")).toBeVisible({
+      timeout: TIMEOUTS.standard,
+    });
+    await expect(page.getByText("Authentication failed.")).toBeVisible();
 
-      await page.runA11yScan("db-providers-save-pending");
-    },
-  );
-
-  test(
-    "scans save success toast state",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, emptyVariables);
-      await page.getByTestId("db-provider-item-opensearch").click();
-      await page
-        .getByLabel("Cluster URL")
-        .fill("https://search.example.com:9200");
-      await page.getByLabel("Username").fill("admin");
-      await page.getByLabel("Password").fill("a11y-test-password"); // pragma: allowlist secret
-      await page
-        .getByRole("button", { name: "Save and use OpenSearch" })
-        .click();
-
-      await expect(
-        page.getByText("OpenSearch configuration saved"),
-      ).toBeVisible({ timeout: TIMEOUTS.standard });
-
-      await page.runA11yScan("db-providers-save-success");
-    },
-  );
-
-  test(
-    "scans save error toast state",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      const writeBehavior: WriteBehavior = {
-        fail: true,
-        failedRequestCount: 3,
-      };
-      await openDbProvidersRoute(page, emptyVariables, writeBehavior);
-      await page.getByTestId("db-provider-item-opensearch").click();
-      await page
-        .getByLabel("Cluster URL")
-        .fill("https://search.example.com:9200");
-      await page.getByLabel("Username").fill("admin");
-      await page.getByLabel("Password").fill("a11y-test-password"); // pragma: allowlist secret
-      await page
-        .getByRole("button", { name: "Save and use OpenSearch" })
-        .click();
-
-      await expect(page.getByText("Error saving DB Provider")).toBeVisible({
-        timeout: TIMEOUTS.standard,
-      });
-
-      await page.runA11yScan("db-providers-save-error");
-    },
-  );
-
-  test(
-    "scans test-connection pending loading state",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      const testConnectionBehavior: TestConnectionBehavior = {
-        delayMs: 1500,
-        response: { ok: true, message: "" },
-      };
-      await openDbProvidersRoute(page, openSearchConfiguredVariables);
-      await mockTestConnection(page, testConnectionBehavior);
-
-      const testConnectionButton = page.getByTestId(
-        "db-provider-test-connection",
-      );
-      await testConnectionButton.focus();
-      await testConnectionButton.press("Enter");
-      // Busy uses aria-disabled (not native disabled) so focus is retained.
-      await expect(testConnectionButton).toHaveAttribute("aria-busy", "true");
-      await expect(testConnectionButton).toHaveAttribute(
-        "aria-disabled",
-        "true",
-      );
-      await expect(testConnectionButton).toBeFocused();
-
-      await page.runA11yScan("db-providers-test-connection-pending");
-    },
-  );
-
-  test(
-    "retains keyboard focus on test-connection after loading completes",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      const testConnectionBehavior: TestConnectionBehavior = {
-        delayMs: 400,
-        response: { ok: false, message: "Authentication failed." },
-      };
-      await openDbProvidersRoute(page, openSearchConfiguredVariables);
-      await mockTestConnection(page, testConnectionBehavior);
-
-      const testConnectionButton = page.getByTestId(
-        "db-provider-test-connection",
-      );
-      await testConnectionButton.focus();
-      await expect(testConnectionButton).toBeFocused();
-      await testConnectionButton.press("Enter");
-
-      await expect(testConnectionButton).toHaveAttribute("aria-busy", "true");
-      await expect(testConnectionButton).toBeFocused();
-
-      await expect(page.getByText("Connection failed")).toBeVisible({
-        timeout: TIMEOUTS.standard,
-      });
-      await expect(testConnectionButton).not.toHaveAttribute("aria-busy");
-      await expect(testConnectionButton).toBeFocused();
-    },
-  );
-
-  test(
-    "scans test-connection success toast state",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, openSearchConfiguredVariables);
-      await mockTestConnection(page, {
-        response: { ok: true, message: "cluster v2.11.0" },
-      });
-
-      await page.getByTestId("db-provider-test-connection").click();
-      await expect(
-        page.getByText("Connection successful — cluster v2.11.0"),
-      ).toBeVisible({ timeout: TIMEOUTS.standard });
-
-      await page.runA11yScan("db-providers-test-connection-success");
-    },
-  );
-
-  test(
-    "scans test-connection failure toast state",
-    { tag: ["@release", "@api"] },
-    async ({ page }) => {
-      await openDbProvidersRoute(page, openSearchConfiguredVariables);
-      await mockTestConnection(page, {
-        response: { ok: false, message: "Authentication failed." },
-      });
-
-      await page.getByTestId("db-provider-test-connection").click();
-      await expect(page.getByText("Connection failed")).toBeVisible({
-        timeout: TIMEOUTS.standard,
-      });
-      await expect(page.getByText("Authentication failed.")).toBeVisible();
-
-      await page.runA11yScan("db-providers-test-connection-failure");
-    },
-  );
+    await page.runA11yScan("db-providers-test-connection-failure");
+  });
 });

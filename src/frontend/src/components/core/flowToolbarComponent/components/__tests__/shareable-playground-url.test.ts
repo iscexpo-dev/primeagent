@@ -9,7 +9,11 @@ describe("buildShareablePlaygroundUrl", () => {
 
   it("should keep the app base path when the app is served under one", () => {
     expect(
-      buildShareablePlaygroundUrl("https://example.com", "/primeagent", "flow-1"),
+      buildShareablePlaygroundUrl(
+        "https://example.com",
+        "/primeagent",
+        "flow-1",
+      ),
     ).toBe("https://example.com/primeagent/playground/flow-1");
     expect(
       buildShareablePlaygroundUrl(

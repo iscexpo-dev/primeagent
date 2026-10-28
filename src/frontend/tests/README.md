@@ -11,13 +11,13 @@ blocks inline. This duplication is the single largest source of boilerplate in
 the suite, so reviewers should flag any hand-rolled copy of a block a helper
 already covers.
 
-| Need | Use | Where |
-| --- | --- | --- |
-| Log in + land on the app | `awaitBootstrapTest(page)` | `utils/await-bootstrap-test.ts` |
-| Open a starter-project template | `openStarterProject(page, name)` | `utils/flow/open-starter-project.ts` |
-| Add a component from the sidebar | `addComponentFromSidebar(page, ...)` | `utils/flow/add-component-from-sidebar.ts` |
-| Send a playground message | `sendPlaygroundMessage(page, msg)` | `utils/playground/send-playground-message.ts` |
-| Mock the deployment API routes | `setupDeploymentMocks(page, ...)` | `utils/deployment-mocks.ts` |
+| Need                             | Use                                  | Where                                         |
+| -------------------------------- | ------------------------------------ | --------------------------------------------- |
+| Log in + land on the app         | `awaitBootstrapTest(page)`           | `utils/await-bootstrap-test.ts`               |
+| Open a starter-project template  | `openStarterProject(page, name)`     | `utils/flow/open-starter-project.ts`          |
+| Add a component from the sidebar | `addComponentFromSidebar(page, ...)` | `utils/flow/add-component-from-sidebar.ts`    |
+| Send a playground message        | `sendPlaygroundMessage(page, msg)`   | `utils/playground/send-playground-message.ts` |
+| Mock the deployment API routes   | `setupDeploymentMocks(page, ...)`    | `utils/deployment-mocks.ts`                   |
 
 ## Tags
 

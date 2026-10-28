@@ -26,6 +26,9 @@ describe("CustomHeaderLogo", () => {
   it("stays hidden from assistive technology", () => {
     const { getByTestId } = render(<CustomHeaderLogo />);
 
-    expect(getByTestId("primeagent-logo")).toHaveAttribute("aria-hidden", "true");
+    expect(getByTestId("primeagent-logo")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
   });
 });

@@ -134,7 +134,9 @@ describe("Where your data goes", () => {
     expect(
       screen.queryByLabelText("Connection address"),
     ).not.toBeInTheDocument();
-    expect(screen.getByText(/db\.internal:5432\/primeagent/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/db\.internal:5432\/primeagent/),
+    ).toBeInTheDocument();
     // Here the knowledge bases go to the store this server reads them from, which is no database of the new instance's.
     expect(
       screen.getByText(
@@ -1609,7 +1611,9 @@ describe("Back up this instance", () => {
       }),
     );
 
-    await waitFor(() => expect(saved).toEqual(["primeagent-backup-20261006.db"]));
+    await waitFor(() =>
+      expect(saved).toEqual(["primeagent-backup-20261006.db"]),
+    );
   });
 
   it("shows a download that did not finish, and keeps waiting for one", async () => {
