@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid5
 
-from typing_extensions import override
 from wfx.log.logger import logger
+from typing_extensions import override
 
 from primeagent.serialization.serialization import serialize
 from primeagent.services.database.models.traces.model import SpanStatus, SpanType
@@ -268,8 +268,38 @@ class NativeTracer(BaseTracer):
             except Exception as e:  # noqa: BLE001
                 logger.debug("Error waiting for flush: %s", e)
 
+    def _finalize_pending_spans(self) -> None:
+        """Force-complete spans that started but never received an end_trace.
+
+        The terminal component's end event can be enqueued as ``end_tracers`` tears the trace
+        worker down, so its end_trace may never run. Without this, that component (e.g. Chat
+        Output) is silently missing from the persisted trace. Flush whatever started.
+        """
+        if not self.spans:
+            return
+        end_time = datetime.now(tz=timezone.utc)
+        for trace_id, span_info in list(self.spans.items()):
+            self.spans.pop(trace_id, None)
+            start_time = span_info["start_time"]
+            self.completed_spans.append(
+                self._build_completed_span(
+                    span_id=trace_id,
+                    name=span_info["name"],
+                    span_type=self._map_trace_type(span_info["trace_type"]),
+                    inputs=span_info["inputs"],
+                    outputs=None,
+                    start_time=start_time,
+                    end_time=end_time,
+                    latency_ms=int((end_time - start_time).total_seconds() * 1000),
+                    error=None,
+                    attributes={},
+                    span_source="component",
+                )
+            )
+
     async def _flush_to_database(self, error: Exception | None = None) -> None:
         """Persist the completed trace and all its spans in a single DB session to minimise round-trips."""
+        self._finalize_pending_spans()
         try:
             from wfx.services.deps import session_scope
 
@@ -295,9 +325,8 @@ class NativeTracer(BaseTracer):
             has_span_errors = any(span.get("status") == SpanStatus.ERROR for span in self.completed_spans)
             trace_status = SpanStatus.ERROR if (error or has_span_errors) else SpanStatus.OK
 
-            # Only sum LangChain spans because component spans already aggregate their children's
-            # tokens — summing both levels would double-count every LLM call.
-            # OTel spec requires deriving total from input+output (no standard total_tokens key)
+            # Only sum LangChain spans (component spans already aggregate their children's
+            # tokens); OTel derives total from input+output as there is no standard total_tokens key.
             from primeagent.services.tracing.formatting import safe_int_tokens
 
             total_tokens = sum(
@@ -321,9 +350,8 @@ class NativeTracer(BaseTracer):
                 )
                 await session.merge(trace)
 
-                # Pre-compute UUIDs and topologically sort so parents are inserted
-                # before children — required by PostgreSQL's immediate FK enforcement
-                # on span.parent_span_id → span.id.
+                # Pre-compute UUIDs and topologically sort so parents are inserted before children
+                # (required by PostgreSQL's immediate FK enforcement on span.parent_span_id → span.id).
                 resolved = resolve_span_uuids(self.completed_spans, self.trace_id)
                 resolved = topological_sort_spans(resolved)
 
@@ -364,9 +392,8 @@ class NativeTracer(BaseTracer):
         from primeagent.services.tracing.native_callback import NativeCallbackHandler
         from primeagent.services.tracing.service import component_context_var
 
-        # Component context is set before add_trace() is called,
-        # so it's available when components call get_langchain_callbacks() during flow execution.
-        # We need to check component_context in case _current_component_id was still None when callbacks were created.
+        # Component context is set before add_trace(), so it's available when components call
+        # get_langchain_callbacks() — checked here in case _current_component_id was None at creation.
         parent_span_id = None
         component_context = component_context_var.get(None)
         if component_context:

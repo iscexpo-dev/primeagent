@@ -28,6 +28,7 @@ from primeagent.services.database.models.memory_base.model import (
     MemoryBaseUpdate,
 )
 from primeagent.services.database.models.message.model import MessageTable
+from wfx.services.authorization.base import ResourceVisibilityScope
 
 # ------------------------------------------------------------------ #
 #  Helpers                                                             #
@@ -90,6 +91,14 @@ def _make_message(
     )
 
 
+def _owner_actor_fields(user_id: uuid.UUID | None = None) -> dict:
+    resolved_user_id = user_id or uuid.uuid4()
+    return {
+        "owner_user_id": resolved_user_id,
+        "actor_user_id": resolved_user_id,
+    }
+
+
 # ------------------------------------------------------------------ #
 #  Model tests                                                         #
 # ------------------------------------------------------------------ #
@@ -119,6 +128,13 @@ class TestInferEmbeddingProvider:
             # Other providers
             ("nomic-embed-text", "Ollama"),
             ("embed-english-v3.0", "Cohere"),
+            # Ollama models with :tag suffix (e.g. from /api/tags).
+            # The tag must be stripped before catalog + pattern matching
+            # so bge-m3:latest resolves to "Ollama", not "OpenAI".
+            ("bge-m3:latest", "Ollama"),
+            ("nomic-embed-text:latest", "Ollama"),
+            ("all-minilm:v2", "Ollama"),
+            ("snowflake-arctic-embed:latest", "Ollama"),
             # Unknown / empty fall back to the safe default.
             ("unknown-model", "OpenAI"),
             ("", "OpenAI"),
@@ -155,8 +171,8 @@ class TestKBIngestionHelperBuildEmbeddings:
     returned by ``get_embedding_model_options``: that catalog is empty
     whenever the per-user credential lookup fails (which can happen
     transparently when the helper runs in a thread bridged from an async
-    event loop). The KB's ``embedding_metadata.json`` is the source of
-    truth — we resolve the embedding class from the static registry.
+    event loop). The KB's ``knowledge_base`` row is the source of truth —
+    we resolve the embedding class from the static registry.
     """
 
     @pytest.mark.asyncio
@@ -179,6 +195,24 @@ class TestKBIngestionHelperBuildEmbeddings:
         assert selected["metadata"]["embedding_class"] == "OpenAIEmbeddings"
         assert selected["metadata"]["model_type"] == "embeddings"
         assert "param_mapping" in selected["metadata"]
+        assert kwargs.get("api_base") is None
+        assert kwargs.get("ollama_base_url") is None
+
+    @pytest.mark.asyncio
+    async def test_builds_embeddings_for_azure_ai_foundry(self):
+        from primeagent.api.utils.kb_helpers import KBIngestionHelper
+
+        with patch("primeagent.api.utils.kb_helpers.EmbeddingModelComponent") as mock_component_cls:
+            mock_component_cls.return_value.build_embeddings.return_value = MagicMock()
+            user = MagicMock(id=uuid.uuid4())
+
+            await KBIngestionHelper.build_embeddings("Azure AI Foundry", "text-embedding-3-small", user)
+
+        kwargs = mock_component_cls.call_args.kwargs
+        selected = kwargs["model"][0]
+        assert selected["provider"] == "Azure AI Foundry"
+        assert selected["metadata"]["embedding_class"] == "OpenAIEmbeddings"
+        assert kwargs.get("api_base") is None
 
     @pytest.mark.asyncio
     async def test_builds_embeddings_for_google_gemini_model(self):
@@ -230,6 +264,54 @@ class TestKBIngestionHelperBuildEmbeddings:
             await KBIngestionHelper.build_embeddings("OpenAI", "text-embedding-3-large", user)
 
         assert mock_component_cls.called
+
+    @pytest.mark.asyncio
+    async def test_ollama_embeddings_honor_configured_base_url(self, monkeypatch):
+        """Ollama KB ingestion must use the configured OLLAMA_BASE_URL, not localhost.
+
+        Regression for https://github.com/khulnasoft-bot/primeagent/issues/13883. The helper
+        builds ``EmbeddingModelComponent`` programmatically; the component's
+        ``ollama_base_url`` ``StrInput`` defaults to ``http://localhost:11434``, and that
+        truthy default used to leak through ``getattr`` and short-circuit the
+        ``OLLAMA_BASE_URL`` global-variable lookup in ``get_embeddings`` — so a KB
+        pointed at a remote Ollama server silently tried localhost and failed with
+        "Failed to connect to Ollama". This test exercises the REAL component (no mock)
+        so the resolution path is covered end to end.
+        """
+        pytest.importorskip("langchain_ollama")
+        from primeagent.api.utils.kb_helpers import KBIngestionHelper
+
+        monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+        monkeypatch.setenv("PRIMEAGENT_SSRF_ALLOWED_HOSTS", "ollama-server")
+        user = MagicMock(id=uuid.uuid4())
+
+        with (
+            patch("wfx.base.models.unified_models.get_api_key_for_provider", return_value=None),
+            patch(
+                "wfx.base.models.unified_models.get_all_variables_for_provider",
+                return_value={"OLLAMA_BASE_URL": "http://ollama-server:11434"},
+            ),
+        ):
+            embeddings = await KBIngestionHelper.build_embeddings("Ollama", "nomic-embed-text", user)
+
+        assert str(embeddings.base_url).rstrip("/") == "http://ollama-server:11434"
+
+    @pytest.mark.asyncio
+    async def test_ollama_embeddings_fall_back_to_localhost_when_unconfigured(self, monkeypatch):
+        """With no OLLAMA_BASE_URL configured, the localhost fallback is preserved."""
+        pytest.importorskip("langchain_ollama")
+        from primeagent.api.utils.kb_helpers import KBIngestionHelper
+
+        monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+        user = MagicMock(id=uuid.uuid4())
+
+        with (
+            patch("wfx.base.models.unified_models.get_api_key_for_provider", return_value=None),
+            patch("wfx.base.models.unified_models.get_all_variables_for_provider", return_value={}),
+        ):
+            embeddings = await KBIngestionHelper.build_embeddings("Ollama", "nomic-embed-text", user)
+
+        assert str(embeddings.base_url).rstrip("/") == "http://localhost:11434"
 
 
 class TestMemoryBaseModel:
@@ -412,8 +494,7 @@ class TestMemoryBaseCreateFlowOwnership:
         with (
             patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(mock_db)),
             patch(
-                "primeagent.services.memory_base.kb_path_helpers.resolve_kb_username",
-                AsyncMock(return_value="testuser"),
+                "primeagent.services.memory_base.kb_path_helpers.resolve_kb_username", AsyncMock(return_value="testuser")
             ),
             patch("primeagent.services.memory_base.kb_path_helpers.initialize_kb", AsyncMock()),
             contextlib.suppress(Exception),
@@ -435,10 +516,11 @@ class TestMemoryBaseCreateFlowOwnership:
         from fastapi import HTTPException
         from primeagent.api.v1.memories import create_memory_base
         from primeagent.services.database.models.user.model import User
+        from primeagent.services.memory_base.provider_scope import MemoryBaseFlowNotFoundError
 
         fake_user = User(id=uuid.uuid4(), username="alice")
         mock_service = MagicMock()
-        mock_service.create = AsyncMock(side_effect=PermissionError("Flow abc not found"))
+        mock_service.create = AsyncMock(side_effect=MemoryBaseFlowNotFoundError("Flow abc not found"))
 
         with (
             patch("primeagent.api.v1.memories.get_memory_base_service", return_value=mock_service),
@@ -450,6 +532,884 @@ class TestMemoryBaseCreateFlowOwnership:
             )
 
         assert exc_info.value.status_code == 404
+
+
+class TestMemoryBaseProviderPolicy:
+    """Provider policy must run before Memory Base filesystem or persistence work."""
+
+    @pytest.fixture
+    def service(self):
+        from primeagent.services.memory_base.service import MemoryBaseService
+
+        return MemoryBaseService()
+
+    @staticmethod
+    def _fake_scope(mock_db):
+        class _FakeCtx:
+            async def __aenter__(self):
+                return mock_db
+
+            async def __aexit__(self, *_args):
+                pass
+
+        scope = MagicMock()
+        scope.return_value = _FakeCtx()
+        return scope
+
+    @staticmethod
+    def _db_returning(value):
+        result = MagicMock()
+        result.first.return_value = value
+        db = AsyncMock()
+        db.exec = AsyncMock(return_value=result)
+        return db
+
+    @pytest.mark.asyncio
+    async def test_create_denied_embedding_provider_stops_before_initialize_or_persist(self, service):
+        from wfx.services.model_provider_policy import ModelProviderPolicyError, ModelProviderPolicyPurpose
+
+        user_id = uuid.uuid4()
+        payload = MemoryBaseCreate(name="mb", flow_id=uuid.uuid4(), embedding_model="denied-embed")
+        db = self._db_returning(object())
+        initialize = AsyncMock()
+        denial = ModelProviderPolicyError("anthropic", ModelProviderPolicyPurpose.CONFIGURE)
+        policy = MagicMock()
+        policy.require.side_effect = denial
+        resolve_policy = AsyncMock(return_value=policy)
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.infer_embedding_provider", return_value="Anthropic"),
+            patch("primeagent.services.memory_base.service.aresolve_model_provider_policy", resolve_policy),
+            patch("primeagent.services.memory_base.service.initialize_kb", initialize),
+            pytest.raises(ModelProviderPolicyError),
+        ):
+            await service.create(payload, user_id=user_id)
+
+        resolve_policy.assert_awaited_once_with(
+            user_id=user_id,
+            providers=["Anthropic"],
+            purpose=ModelProviderPolicyPurpose.CONFIGURE,
+        )
+        policy.require.assert_called_once_with("Anthropic")
+        initialize.assert_not_awaited()
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_denied_preproc_model_is_rejected_even_when_preprocessing_is_disabled(self, service):
+        from wfx.services.model_provider_policy import ModelProviderPolicyError, ModelProviderPolicyPurpose
+
+        user_id = uuid.uuid4()
+        payload = MemoryBaseCreate(
+            name="mb",
+            flow_id=uuid.uuid4(),
+            embedding_model="text-embedding-3-small",
+            preprocessing=False,
+            preproc_model="claude-test",
+        )
+        db = self._db_returning(object())
+        initialize = AsyncMock()
+        denial = ModelProviderPolicyError("anthropic", ModelProviderPolicyPurpose.CONFIGURE)
+
+        def require_provider(provider):
+            if provider == "Anthropic":
+                raise denial
+
+        policy = MagicMock()
+        policy.require.side_effect = require_provider
+        resolve_policy = AsyncMock(return_value=policy)
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.infer_llm_provider", return_value="Anthropic"),
+            patch("primeagent.services.memory_base.service.aresolve_model_provider_policy", resolve_policy),
+            patch("primeagent.services.memory_base.service.initialize_kb", initialize),
+            pytest.raises(ModelProviderPolicyError),
+        ):
+            await service.create(payload, user_id=user_id)
+
+        assert resolve_policy.await_args.kwargs["purpose"] is ModelProviderPolicyPurpose.CONFIGURE
+        assert resolve_policy.await_args.kwargs["providers"][0] == "Anthropic"
+        policy.require.assert_called_once_with("Anthropic")
+        initialize.assert_not_awaited()
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_denied_embedding_precedes_preprocessing_secret_lookup(self, service):
+        """Every supplied provider is authorized before any credential is read."""
+        from wfx.services.model_provider_policy import ModelProviderPolicyError, ModelProviderPolicyPurpose
+
+        owner_user_id = uuid.uuid4()
+        payload = MemoryBaseCreate(
+            name="mb",
+            flow_id=uuid.uuid4(),
+            embedding_model="denied-embed",
+            preprocessing=True,
+            preproc_model="allowed-chat",
+        )
+        db = self._db_returning(object())
+        denial = ModelProviderPolicyError("openai", ModelProviderPolicyPurpose.CONFIGURE)
+
+        def authorize_provider(provider):
+            if provider == "OpenAI":
+                raise denial
+
+        policy = MagicMock()
+        policy.require.side_effect = authorize_provider
+        resolve_policy = AsyncMock(return_value=policy)
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.infer_llm_provider", return_value="Anthropic"),
+            patch("primeagent.services.memory_base.service.infer_embedding_provider", return_value="OpenAI"),
+            patch("primeagent.services.memory_base.service.aresolve_model_provider_policy", resolve_policy),
+            patch("primeagent.services.memory_base.service.get_api_key_for_provider", return_value="owner-secret") as key,
+            patch("primeagent.services.memory_base.service.initialize_kb", AsyncMock()) as initialize,
+            pytest.raises(ModelProviderPolicyError),
+        ):
+            await service.create(payload, user_id=owner_user_id)
+
+        key.assert_not_called()
+        assert resolve_policy.await_args.kwargs["providers"] == ["Anthropic", "OpenAI"]
+        assert [call.args[0] for call in policy.require.call_args_list] == ["Anthropic", "OpenAI"]
+        initialize.assert_not_awaited()
+
+    @pytest.mark.parametrize("actor_is_superuser", [False, True], ids=["delegated-admin", "superadmin"])
+    @pytest.mark.asyncio
+    async def test_update_separates_actor_policy_from_owner_credentials(self, service, actor_is_superuser):
+        """Cross-user writes evaluate the actor while retaining owner-scoped secrets."""
+        from primeagent.services.database.models.flow.model import Flow
+        from wfx.services.model_provider_policy import (
+            ModelProviderPolicyPurpose,
+            current_model_provider_policy_context,
+        )
+
+        owner_user_id = uuid.uuid4()
+        actor_user_id = uuid.uuid4()
+        mb = _make_mb(user_id=owner_user_id, threshold=10)
+        mb.preprocessing = True
+        mb.preproc_model = "allowed-chat"
+        flow = Flow(id=mb.flow_id, user_id=owner_user_id, name="owner flow")
+        mb_result = MagicMock()
+        mb_result.first.return_value = mb
+        flow_result = MagicMock()
+        flow_result.first.return_value = flow
+        db = AsyncMock()
+        db.exec = AsyncMock(side_effect=[mb_result, flow_result])
+        db.add = MagicMock()
+        policy_calls = []
+        policy = MagicMock()
+
+        async def authorize_providers(*, user_id, providers, purpose):
+            context = current_model_provider_policy_context()
+            assert context is not None
+            assert context.user_id == actor_user_id
+            assert context.attributes["is_superuser"] is actor_is_superuser
+            policy_calls.append((user_id, tuple(providers), purpose))
+            return policy
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch(
+                "primeagent.services.memory_base.service.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", mb.embedding_model)),
+            ),
+            patch("primeagent.services.memory_base.service.infer_llm_provider", return_value="Anthropic"),
+            patch(
+                "primeagent.services.memory_base.service.aresolve_model_provider_policy",
+                side_effect=authorize_providers,
+            ),
+            patch(
+                "primeagent.services.memory_base.service.get_api_key_for_provider",
+                return_value="owner-secret",
+            ) as key,
+        ):
+            updated = await service.update(
+                mb.id,
+                owner_user_id=owner_user_id,
+                patch=MemoryBaseUpdate(threshold=99),
+                actor_user_id=actor_user_id,
+                actor_is_superuser=actor_is_superuser,
+            )
+
+        assert updated is mb
+        assert policy_calls == [
+            (actor_user_id, ("Anthropic", "OpenAI"), ModelProviderPolicyPurpose.CONFIGURE),
+        ]
+        assert [call.args[0] for call in policy.require.call_args_list] == ["Anthropic", "OpenAI"]
+        key.assert_called_once_with(owner_user_id, "Anthropic")
+        assert all(call[0] != owner_user_id for call in policy_calls)
+        assert key.call_args.args[0] != actor_user_id
+
+    @pytest.mark.asyncio
+    async def test_update_denied_embedding_provider_stops_before_mutation_or_persist(self, service):
+        from wfx.services.model_provider_policy import ModelProviderPolicyError, ModelProviderPolicyPurpose
+
+        user_id = uuid.uuid4()
+        mb = _make_mb(user_id=user_id, threshold=10)
+        mb.embedding_model = "denied-embed"
+        db = self._db_returning(mb)
+        denial = ModelProviderPolicyError("anthropic", ModelProviderPolicyPurpose.CONFIGURE)
+        policy = MagicMock()
+        policy.require.side_effect = denial
+        resolve_policy = AsyncMock(return_value=policy)
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch(
+                "primeagent.services.memory_base.service.resolve_embedding_selection",
+                AsyncMock(return_value=("Anthropic", mb.embedding_model)),
+            ),
+            patch("primeagent.services.memory_base.service.aresolve_model_provider_policy", resolve_policy),
+            pytest.raises(ModelProviderPolicyError),
+        ):
+            await service.update(
+                mb.id,
+                owner_user_id=user_id,
+                patch=MemoryBaseUpdate(threshold=99),
+                actor_user_id=user_id,
+            )
+
+        resolve_policy.assert_awaited_once_with(
+            user_id=user_id,
+            providers=["Anthropic"],
+            purpose=ModelProviderPolicyPurpose.CONFIGURE,
+        )
+        policy.require.assert_called_once_with("Anthropic")
+        assert mb.threshold == 10
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_uses_stored_project_scope_when_global_access_is_denied(self, service):
+        """A project grant must be evaluated in the stored Flow's current domain."""
+        from primeagent.services.database.models.flow.model import Flow
+        from wfx.services.model_provider_policy import current_model_provider_policy_context
+
+        user_id = uuid.uuid4()
+        flow_id = uuid.uuid4()
+        project_id = uuid.uuid4()
+        workspace_id = uuid.uuid4()
+        flow = Flow(
+            id=flow_id,
+            user_id=user_id,
+            name="scoped flow",
+            folder_id=project_id,
+            workspace_id=workspace_id,
+        )
+        payload = MemoryBaseCreate(name="mb", flow_id=flow_id, embedding_model="text-embedding-3-small")
+
+        flow_result = MagicMock()
+        flow_result.first.return_value = flow
+        missing_result = MagicMock()
+        missing_result.first.return_value = None
+        db = AsyncMock()
+        db.exec = AsyncMock(side_effect=[flow_result, missing_result, missing_result])
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        observed_contexts = []
+
+        async def allow_only_current_project(**_kwargs):
+            context = current_model_provider_policy_context()
+            observed_contexts.append(context)
+            assert context is not None
+            assert context.attributes["project_id"] == project_id
+            assert context.attributes["workspace_id"] == workspace_id
+            assert context.attributes["provider_scope_required"] is True
+            return MagicMock()
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.resolve_kb_username", AsyncMock(return_value="testuser")),
+            patch(
+                "primeagent.services.memory_base.service.aresolve_model_provider_policy",
+                side_effect=allow_only_current_project,
+                create=True,
+            ),
+            patch("primeagent.services.memory_base.service.initialize_kb", AsyncMock()),
+            patch("primeagent.services.memory_base.service._create_kb_record_for_memory_base", AsyncMock()),
+        ):
+            created = await service.create(payload, user_id=user_id)
+
+        assert created.flow_id == flow_id
+        assert observed_contexts
+
+    @pytest.mark.asyncio
+    async def test_update_reloads_moved_flow_and_project_deny_precedes_secrets_and_network(self, service):
+        """A current project denial wins over a stale/global grant before provider work."""
+        from primeagent.services.database.models.flow.model import Flow
+        from wfx.services.model_provider_policy import (
+            ModelProviderPolicyError,
+            ModelProviderPolicyPurpose,
+            current_model_provider_policy_context,
+        )
+
+        user_id = uuid.uuid4()
+        moved_project_id = uuid.uuid4()
+        moved_workspace_id = uuid.uuid4()
+        mb = _make_mb(user_id=user_id, threshold=10)
+        mb.preprocessing = True
+        mb.preproc_model = "gpt-4o-mini"
+        flow = Flow(
+            id=mb.flow_id,
+            user_id=user_id,
+            name="moved flow",
+            folder_id=moved_project_id,
+            workspace_id=moved_workspace_id,
+        )
+        mb_result = MagicMock()
+        mb_result.first.return_value = mb
+        flow_result = MagicMock()
+        flow_result.first.return_value = flow
+        db = AsyncMock()
+        db.exec = AsyncMock(side_effect=[mb_result, flow_result])
+        db.add = MagicMock()
+        denial = ModelProviderPolicyError("openai", ModelProviderPolicyPurpose.CONFIGURE)
+
+        async def deny_current_project(**_kwargs):
+            context = current_model_provider_policy_context()
+            assert context is not None
+            assert context.attributes["project_id"] == moved_project_id
+            assert context.attributes["workspace_id"] == moved_workspace_id
+            raise denial
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch(
+                "primeagent.services.memory_base.service.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", mb.embedding_model)),
+            ),
+            patch(
+                "primeagent.services.memory_base.service.aresolve_model_provider_policy",
+                side_effect=deny_current_project,
+                create=True,
+            ),
+            patch("primeagent.services.memory_base.service.get_api_key_for_provider") as get_api_key,
+            pytest.raises(ModelProviderPolicyError),
+        ):
+            await service.update(
+                mb.id,
+                owner_user_id=user_id,
+                patch=MemoryBaseUpdate(threshold=99),
+                actor_user_id=user_id,
+            )
+
+        assert mb.threshold == 10
+        get_api_key.assert_not_called()
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_missing_stored_flow_fails_before_provider_or_persistence(self, service):
+        user_id = uuid.uuid4()
+        mb = _make_mb(user_id=user_id, threshold=10)
+        mb_result = MagicMock()
+        mb_result.first.return_value = mb
+        missing_flow = MagicMock()
+        missing_flow.first.return_value = None
+        db = AsyncMock()
+        db.exec = AsyncMock(side_effect=[mb_result, missing_flow])
+        db.add = MagicMock()
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.require_model_provider") as require,
+            patch("primeagent.services.memory_base.service.get_api_key_for_provider") as get_api_key,
+            pytest.raises(PermissionError, match=r"Flow .* not found"),
+        ):
+            await service.update(
+                mb.id,
+                owner_user_id=user_id,
+                patch=MemoryBaseUpdate(threshold=99),
+                actor_user_id=user_id,
+            )
+
+        require.assert_not_called()
+        get_api_key.assert_not_called()
+        db.add.assert_not_called()
+        db.commit.assert_not_awaited()
+
+
+class TestMemoryBaseEmbeddingProviderSelection:
+    """The provider the caller selected is authoritative over name-based inference.
+
+    Regression for the OpenAI-Compatible case: those models are discovered
+    per-user, so ``infer_embedding_provider`` cannot see them and defaults them
+    to ``"OpenAI"``. The wrong label was persisted on the backing
+    ``knowledge_base`` row, and ingestion then demanded an OpenAI API key.
+    """
+
+    @pytest.fixture
+    def service(self):
+        from primeagent.services.memory_base.service import MemoryBaseService
+
+        return MemoryBaseService()
+
+    @staticmethod
+    def _fake_scope(mock_db):
+        class _FakeCtx:
+            async def __aenter__(self):
+                return mock_db
+
+            async def __aexit__(self, *_args):
+                pass
+
+        scope = MagicMock()
+        scope.return_value = _FakeCtx()
+        return scope
+
+    @staticmethod
+    def _create_db(flow):
+        flow_result = MagicMock()
+        flow_result.first.return_value = flow
+        missing_result = MagicMock()
+        missing_result.first.return_value = None
+        db = AsyncMock()
+        db.exec = AsyncMock(side_effect=[flow_result, missing_result, missing_result])
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        db.refresh = AsyncMock()
+        return db
+
+    @pytest.mark.asyncio
+    async def test_create_persists_the_selected_provider_without_inferring(self, service):
+        from primeagent.services.database.models.flow.model import Flow
+
+        user_id = uuid.uuid4()
+        flow_id = uuid.uuid4()
+        flow = Flow(id=flow_id, user_id=user_id, name="flow")
+        payload = MemoryBaseCreate(
+            name="mb",
+            flow_id=flow_id,
+            embedding_model="mock-embed-1",
+            embedding_provider="OpenAI Compatible",
+        )
+        db = self._create_db(flow)
+        create_record = AsyncMock()
+        infer = MagicMock(return_value="OpenAI")
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.resolve_kb_username", AsyncMock(return_value="testuser")),
+            patch("primeagent.services.memory_base.service.infer_embedding_provider", infer),
+            patch(
+                "primeagent.services.memory_base.service.aresolve_model_provider_policy",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch("primeagent.services.memory_base.service.initialize_kb", AsyncMock()),
+            patch("primeagent.api.utils.knowledge_base_service.create_record", create_record),
+            # The bundle registers this at startup; unit tests run without extensions loaded.
+            patch.dict(
+                "primeagent.services.memory_base.service.EMBEDDING_PROVIDER_CLASS_MAPPING",
+                {"OpenAI Compatible": "OpenAIEmbeddings"},
+            ),
+        ):
+            await service.create(payload, user_id=user_id)
+
+        assert create_record.await_args.kwargs["model_selection"] == {
+            "name": "mock-embed-1",
+            "provider": "OpenAI Compatible",
+        }
+        infer.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_a_provider_without_embedding_class_before_provisioning(self, service):
+        from primeagent.services.database.models.flow.model import Flow
+        from primeagent.services.memory_base.service import EmbeddingProviderValidationError
+
+        user_id = uuid.uuid4()
+        flow_id = uuid.uuid4()
+        flow = Flow(id=flow_id, user_id=user_id, name="flow")
+        payload = MemoryBaseCreate(
+            name="mb",
+            flow_id=flow_id,
+            embedding_model="text-embedding-3-small",
+            embedding_provider="OpenAl",
+        )
+        db = self._create_db(flow)
+        create_record = AsyncMock()
+        initialize = AsyncMock()
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.resolve_kb_username", AsyncMock(return_value="testuser")),
+            patch(
+                "primeagent.services.memory_base.service.aresolve_model_provider_policy",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch("primeagent.services.memory_base.service.initialize_kb", initialize),
+            patch("primeagent.api.utils.knowledge_base_service.create_record", create_record),
+            pytest.raises(EmbeddingProviderValidationError, match="OpenAl"),
+        ):
+            await service.create(payload, user_id=user_id)
+
+        initialize.assert_not_awaited()
+        create_record.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_without_a_provider_falls_back_to_inference(self, service):
+        from primeagent.services.database.models.flow.model import Flow
+
+        user_id = uuid.uuid4()
+        flow_id = uuid.uuid4()
+        flow = Flow(id=flow_id, user_id=user_id, name="flow")
+        payload = MemoryBaseCreate(name="mb", flow_id=flow_id, embedding_model="text-embedding-3-small")
+        db = self._create_db(flow)
+        create_record = AsyncMock()
+        infer = MagicMock(return_value="OpenAI")
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.resolve_kb_username", AsyncMock(return_value="testuser")),
+            patch("primeagent.services.memory_base.service.infer_embedding_provider", infer),
+            patch(
+                "primeagent.services.memory_base.service.aresolve_model_provider_policy",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch("primeagent.services.memory_base.service.initialize_kb", AsyncMock()),
+            patch("primeagent.api.utils.knowledge_base_service.create_record", create_record),
+        ):
+            await service.create(payload, user_id=user_id)
+
+        infer.assert_called_once_with("text-embedding-3-small")
+        assert create_record.await_args.kwargs["model_selection"] == {
+            "name": "text-embedding-3-small",
+            "provider": "OpenAI",
+        }
+
+    @pytest.mark.asyncio
+    async def test_update_authorizes_the_stored_provider_not_an_inferred_one(self, service):
+        from primeagent.services.database.models.flow.model import Flow
+        from wfx.services.model_provider_policy import ModelProviderPolicyPurpose
+
+        user_id = uuid.uuid4()
+        mb = _make_mb(user_id=user_id, threshold=10)
+        mb.embedding_model = "mock-embed-1"
+        flow = Flow(id=mb.flow_id, user_id=user_id, name="flow")
+        mb_result = MagicMock()
+        mb_result.first.return_value = mb
+        flow_result = MagicMock()
+        flow_result.first.return_value = flow
+        db = AsyncMock()
+        db.exec = AsyncMock(side_effect=[mb_result, flow_result])
+        db.add = MagicMock()
+        policy = MagicMock()
+        resolve_policy = AsyncMock(return_value=policy)
+        infer = MagicMock(return_value="OpenAI")
+        resolve_selection = AsyncMock(return_value=("OpenAI Compatible", "mock-embed-1"))
+
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.resolve_embedding_selection", resolve_selection),
+            patch("primeagent.services.memory_base.service.infer_embedding_provider", infer),
+            patch("primeagent.services.memory_base.service.aresolve_model_provider_policy", resolve_policy),
+        ):
+            await service.update(
+                mb.id,
+                owner_user_id=user_id,
+                patch=MemoryBaseUpdate(threshold=99),
+                actor_user_id=user_id,
+            )
+
+        resolve_selection.assert_awaited_once_with(user_id=user_id, kb_name=mb.kb_name)
+        resolve_policy.assert_awaited_once_with(
+            user_id=user_id,
+            providers=["OpenAI Compatible"],
+            purpose=ModelProviderPolicyPurpose.CONFIGURE,
+        )
+        policy.require.assert_called_once_with("OpenAI Compatible")
+        infer.assert_not_called()
+        assert mb.threshold == 99
+
+
+class TestMemoryBaseGuardPassesRealKbIdentity:
+    """The ID-bearing guards must pass the REAL kb identity, not actor-as-owner.
+
+    Previously the five F20 guards called ensure_knowledge_base_permission with
+    kb_user_id=current_user.id and no kb_id, so the owner-override path always
+    fired (a registered plugin's enforce never ran) and audit rows lacked the kb
+    id. The fix resolves the memory base first (via the owner-scoped service.get)
+    and passes kb_id / kb_user_id (the real owner) / kb_name so owner-override is
+    taken only for genuine owners.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _storage_lookup(self, monkeypatch):
+        """Isolate provider-identity assertions from the separately tested storage gate."""
+        monkeypatch.setattr(
+            "primeagent.api.utils.knowledge_base_service.get_by_user_and_name", AsyncMock(return_value=None)
+        )
+        session = AsyncMock()
+        session.exec.return_value = MagicMock(all=list)
+        context = MagicMock()
+        context.__aenter__.return_value = session
+        monkeypatch.setattr("primeagent.api.v1.memories.session_scope", MagicMock(return_value=context))
+
+    @pytest.mark.asyncio
+    async def test_update_passes_real_kb_identity_to_guard(self):
+        from primeagent.api.v1.memories import update_memory_base
+        from primeagent.services.database.models.user.model import User
+
+        owner_id = uuid.uuid4()
+        mb = _make_mb(user_id=owner_id)
+        actor = User(id=uuid.uuid4(), username="actor")
+
+        mock_service = MagicMock()
+        mock_service.get = AsyncMock(return_value=mb)
+        mock_service.update = AsyncMock(return_value=mb)
+        captured = {}
+
+        async def _capture_guard(_user, _act, **kwargs):
+            captured.update(kwargs)
+
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=mock_service),
+            patch("primeagent.api.v1.memories.ensure_knowledge_base_permission", _capture_guard),
+        ):
+            await update_memory_base(
+                memory_base_id=mb.id,
+                current_user=actor,
+                patch=MemoryBaseUpdate(threshold=99),
+            )
+
+        assert captured["kb_id"] == mb.id
+        assert captured["kb_user_id"] == owner_id, "guard must receive the real owner, not the actor"
+        assert captured["kb_name"] == mb.kb_name
+
+    @pytest.mark.parametrize("actor_is_superuser", [False, True], ids=["delegated-admin", "superadmin"])
+    @pytest.mark.asyncio
+    async def test_update_routes_actor_and_owner_identities_separately(self, actor_is_superuser):
+        from primeagent.api.v1.memories import update_memory_base
+        from primeagent.services.database.models.user.model import User
+
+        owner_id = uuid.uuid4()
+        mb = _make_mb(user_id=owner_id)
+        actor = User(id=uuid.uuid4(), username="actor", is_superuser=actor_is_superuser)
+        patch_payload = MemoryBaseUpdate(threshold=99)
+
+        mock_service = MagicMock()
+        mock_service.get = AsyncMock(return_value=mb)
+        mock_service.update = AsyncMock(return_value=mb)
+
+        async def _allow_guard(*_args, **_kwargs):
+            return None
+
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=mock_service),
+            patch("primeagent.api.v1.memories.ensure_knowledge_base_permission", _allow_guard),
+        ):
+            await update_memory_base(
+                memory_base_id=mb.id,
+                current_user=actor,
+                patch=patch_payload,
+            )
+
+        mock_service.update.assert_awaited_once_with(
+            mb.id,
+            owner_user_id=owner_id,
+            patch=patch_payload,
+            actor_user_id=actor.id,
+            actor_is_superuser=actor_is_superuser,
+        )
+
+    async def test_shared_memory_base_falls_back_to_unscoped_id_lookup(self):
+        from primeagent.api.v1.memories import _get_memory_base_for_action
+        from primeagent.services.authorization import KnowledgeBaseAction
+        from primeagent.services.database.models.user.model import User
+
+        owner_id = uuid.uuid4()
+        mb = _make_mb(user_id=owner_id)
+        actor = User(id=uuid.uuid4(), username="actor")
+        db = AsyncMock()
+        db.get.return_value = mb
+
+        service = MagicMock()
+        service.get = AsyncMock(return_value=None)
+        authz = MagicMock()
+        authz.is_enabled = AsyncMock(return_value=True)
+        authz.supports_cross_user_fetch = AsyncMock(return_value=True)
+        captured = {}
+
+        async def _capture_guard(_user, _act, **kwargs):
+            captured.update(kwargs)
+
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=service),
+            patch("primeagent.api.v1.memories.get_authorization_service", return_value=authz),
+            patch("primeagent.api.v1.memories.ensure_knowledge_base_permission", _capture_guard),
+        ):
+            resolved = await _get_memory_base_for_action(
+                db,
+                memory_base_id=mb.id,
+                current_user=actor,
+                action=KnowledgeBaseAction.READ,
+            )
+
+        assert resolved is mb
+        db.get.assert_awaited_once()
+        assert captured["kb_user_id"] == owner_id
+
+    def test_list_statement_unions_owned_and_visible_memory_bases(self):
+        from primeagent.services.memory_base.service import MemoryBaseService
+
+        actor_id = uuid.uuid4()
+        shared_id = uuid.uuid4()
+        service = MemoryBaseService()
+        concrete_stmt = service.list_for_user_stmt(
+            actor_id,
+            visibility=ResourceVisibilityScope(resource_ids=(shared_id,)),
+        )
+        concrete_sql = str(concrete_stmt.compile(compile_kwargs={"literal_binds": True}))
+
+        assert actor_id.hex in concrete_sql
+        assert shared_id.hex in concrete_sql
+        assert " OR " in concrete_sql
+
+        for domain_only_scope in (
+            ResourceVisibilityScope(workspace_ids=(uuid.uuid4(),)),
+            ResourceVisibilityScope(project_ids=(uuid.uuid4(),)),
+        ):
+            domain_stmt = service.list_for_user_stmt(actor_id, visibility=domain_only_scope)
+            domain_sql = str(domain_stmt.compile(compile_kwargs={"literal_binds": True}))
+
+            assert actor_id.hex in domain_sql
+            assert " OR " not in domain_sql
+
+        global_stmt = service.list_for_user_stmt(
+            actor_id,
+            visibility=ResourceVisibilityScope(all_resources=True),
+        )
+
+        assert not global_stmt._where_criteria
+
+    @pytest.mark.asyncio
+    async def test_delete_passes_real_kb_identity_to_guard(self):
+        from primeagent.api.v1.memories import delete_memory_base
+        from primeagent.services.database.models.user.model import User
+
+        owner_id = uuid.uuid4()
+        mb = _make_mb(user_id=owner_id)
+        actor = User(id=uuid.uuid4(), username="actor")
+
+        mock_service = MagicMock()
+        mock_service.get = AsyncMock(return_value=mb)
+        mock_service.delete = AsyncMock(return_value=True)
+        captured = {}
+
+        async def _capture_guard(_user, _act, **kwargs):
+            captured.update(kwargs)
+
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=mock_service),
+            patch("primeagent.api.v1.memories.ensure_knowledge_base_permission", _capture_guard),
+        ):
+            await delete_memory_base(memory_base_id=mb.id, current_user=actor)
+
+        assert captured["kb_id"] == mb.id
+        assert captured["kb_user_id"] == owner_id
+        assert captured["kb_name"] == mb.kb_name
+
+    @pytest.mark.asyncio
+    async def test_flush_passes_real_kb_identity_to_guard(self):
+        from primeagent.api.v1.memories import FlushRequest, flush_memory_base
+        from primeagent.services.database.models.user.model import User
+
+        owner_id = uuid.uuid4()
+        mb = _make_mb(user_id=owner_id)
+        actor = User(id=uuid.uuid4(), username="actor")
+
+        mock_service = MagicMock()
+        mock_service.get = AsyncMock(return_value=mb)
+        mock_service.trigger_ingestion = AsyncMock(return_value="job-1")
+        captured = {}
+
+        async def _capture_guard(_user, _act, **kwargs):
+            captured.update(kwargs)
+
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=mock_service),
+            patch("primeagent.api.v1.memories.ensure_knowledge_base_permission", _capture_guard),
+        ):
+            await flush_memory_base(
+                memory_base_id=mb.id,
+                current_user=actor,
+                body=FlushRequest(session_id="sess-1"),
+            )
+
+        assert captured["kb_id"] == mb.id
+        assert captured["kb_user_id"] == owner_id
+        assert captured["kb_name"] == mb.kb_name
+        mock_service.trigger_ingestion.assert_awaited_once_with(
+            memory_base_id=mb.id,
+            owner_user_id=owner_id,
+            actor_user_id=actor.id,
+            session_id="sess-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_regenerate_passes_real_kb_identity_to_guard(self):
+        from primeagent.api.v1.memories import regenerate_memory_base
+        from primeagent.services.database.models.user.model import User
+
+        owner_id = uuid.uuid4()
+        mb = _make_mb(user_id=owner_id)
+        actor = User(id=uuid.uuid4(), username="actor")
+
+        mock_service = MagicMock()
+        mock_service.get = AsyncMock(return_value=mb)
+        mock_service.regenerate = AsyncMock(return_value=["job-1"])
+        captured = {}
+
+        async def _capture_guard(_user, _act, **kwargs):
+            captured.update(kwargs)
+
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=mock_service),
+            patch("primeagent.api.v1.memories.ensure_knowledge_base_permission", _capture_guard),
+        ):
+            await regenerate_memory_base(memory_base_id=mb.id, current_user=actor)
+
+        assert captured["kb_id"] == mb.id
+        assert captured["kb_user_id"] == owner_id
+        assert captured["kb_name"] == mb.kb_name
+        mock_service.regenerate.assert_awaited_once_with(
+            memory_base_id=mb.id,
+            owner_user_id=owner_id,
+            actor_user_id=actor.id,
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_returns_404_when_memory_base_not_found(self):
+        """If the resolve lookup returns None, the handler 404s before the guard runs."""
+        from fastapi import HTTPException
+        from primeagent.api.v1.memories import update_memory_base
+        from primeagent.services.database.models.user.model import User
+
+        actor = User(id=uuid.uuid4(), username="actor")
+        mock_service = MagicMock()
+        mock_service.get = AsyncMock(return_value=None)
+        guard_called = False
+
+        async def _guard(*_a, **_k):
+            nonlocal guard_called
+            guard_called = True
+
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=mock_service),
+            patch("primeagent.api.v1.memories.ensure_knowledge_base_permission", _guard),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await update_memory_base(
+                memory_base_id=uuid.uuid4(),
+                current_user=actor,
+                patch=MemoryBaseUpdate(threshold=1),
+            )
+
+        assert exc_info.value.status_code == 404
+        assert not guard_called, "guard must not run for a non-existent memory base"
 
 
 class TestMemoryBaseServiceConcurrency:
@@ -490,18 +1450,28 @@ class TestMemoryBaseServiceConcurrency:
             patch.object(service, "get_memory_base_or_404", AsyncMock(return_value=mb)),
             patch.object(service, "_get_or_create_session", AsyncMock(return_value=mbs)),
             patch(
+                "primeagent.services.memory_base.ingestion.resolve_memory_provider_scope",
+                AsyncMock(return_value=MagicMock(memory_base=mb)),
+            ),
+            patch(
                 "primeagent.services.memory_base.ingestion._get_latest_pending_workflow_job_id",
                 AsyncMock(return_value=uuid.uuid4()),
             ),
             patch("primeagent.services.memory_base.ingestion.resolve_kb_username", AsyncMock(return_value="testuser")),
             patch(
-                "primeagent.services.memory_base.ingestion.resolve_embedding",
-                return_value=("OpenAI", "text-embedding-3-small"),
+                "primeagent.services.memory_base.ingestion.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", "text-embedding-3-small")),
             ),
+            patch("primeagent.services.memory_base.ingestion.preflight_memory_provider_use"),
             patch("primeagent.services.memory_base.ingestion.get_job_service", return_value=mock_job_svc),
             pytest.raises(DuplicateJobError),
         ):
-            await service.trigger_ingestion(mb.id, mb.user_id, "sess-1")
+            await service.trigger_ingestion(
+                memory_base_id=mb.id,
+                owner_user_id=mb.user_id,
+                actor_user_id=mb.user_id,
+                session_id="sess-1",
+            )
 
     @pytest.mark.asyncio
     async def test_trigger_succeeds_when_no_active_job(self, service):
@@ -519,22 +1489,81 @@ class TestMemoryBaseServiceConcurrency:
             patch.object(service, "get_memory_base_or_404", AsyncMock(return_value=mb)),
             patch.object(service, "_get_or_create_session", AsyncMock(return_value=mbs)),
             patch(
+                "primeagent.services.memory_base.ingestion.resolve_memory_provider_scope",
+                AsyncMock(return_value=MagicMock(memory_base=mb)),
+            ),
+            patch(
                 "primeagent.services.memory_base.ingestion._get_latest_pending_workflow_job_id",
                 AsyncMock(return_value=uuid.uuid4()),
             ),
             patch("primeagent.services.memory_base.ingestion.resolve_kb_username", AsyncMock(return_value="testuser")),
             patch(
-                "primeagent.services.memory_base.ingestion.resolve_embedding",
-                return_value=("OpenAI", "text-embedding-3-small"),
+                "primeagent.services.memory_base.ingestion.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", "text-embedding-3-small")),
             ),
+            patch("primeagent.services.memory_base.ingestion.preflight_memory_provider_use"),
             patch("primeagent.services.memory_base.ingestion.get_job_service", return_value=mock_job_svc),
             patch("primeagent.services.memory_base.ingestion.get_task_service", return_value=mock_task_svc),
         ):
-            job_id = await service.trigger_ingestion(mb.id, mb.user_id, "sess-1")
+            job_id = await service.trigger_ingestion(
+                memory_base_id=mb.id,
+                owner_user_id=mb.user_id,
+                actor_user_id=mb.user_id,
+                session_id="sess-1",
+            )
 
         assert isinstance(job_id, str)
         mock_job_svc.create_job.assert_awaited_once()
         mock_task_svc.fire_and_forget_task.assert_awaited_once()
+        request = mock_task_svc.fire_and_forget_task.call_args.kwargs["request"]
+        assert request.owner_user_id == mb.user_id
+        assert request.actor_user_id == mb.user_id
+
+    @pytest.mark.asyncio
+    async def test_manual_trigger_denial_precedes_session_job_secrets_and_network(self, service):
+        from wfx.services.model_provider_policy import ModelProviderPolicyError, ModelProviderPolicyPurpose
+
+        mb = _make_mb()
+        mb.preprocessing = True
+        mb.preproc_model = "claude-test"
+        actor_user_id = uuid.uuid4()
+        mock_db = AsyncMock()
+        get_or_create = AsyncMock()
+        job_service = MagicMock()
+        job_service.create_job = AsyncMock()
+
+        with (
+            patch("primeagent.services.memory_base.ingestion.session_scope", self._fake_scope(mock_db)),
+            patch.object(service, "get_memory_base_or_404", AsyncMock(return_value=mb)),
+            patch.object(service, "_get_or_create_session", get_or_create),
+            patch(
+                "primeagent.services.memory_base.ingestion.resolve_memory_provider_scope",
+                AsyncMock(return_value=MagicMock(memory_base=mb)),
+            ),
+            patch(
+                "primeagent.services.memory_base.ingestion.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", "text-embedding-3-small")),
+            ),
+            patch(
+                "primeagent.services.memory_base.ingestion.preflight_memory_provider_use",
+                AsyncMock(side_effect=ModelProviderPolicyError("anthropic", ModelProviderPolicyPurpose.USE)),
+            ),
+            patch("primeagent.services.memory_base.ingestion.resolve_kb_username") as resolve_username,
+            patch("primeagent.services.memory_base.ingestion.get_job_service", return_value=job_service),
+            patch("primeagent.services.memory_base.ingestion.get_task_service") as task_service,
+            pytest.raises(ModelProviderPolicyError),
+        ):
+            await service.trigger_ingestion(
+                memory_base_id=mb.id,
+                owner_user_id=mb.user_id,
+                actor_user_id=actor_user_id,
+                session_id="sess-1",
+            )
+
+        get_or_create.assert_not_awaited()
+        resolve_username.assert_not_awaited()
+        job_service.create_job.assert_not_awaited()
+        task_service.assert_not_called()
 
 
 class TestMemoryBaseServiceThreshold:
@@ -569,18 +1598,35 @@ class TestMemoryBaseServiceMismatch:
     async def test_mismatch_detected_when_processed_but_empty_store(self, service, tmp_path):
         mb = _make_mb()
 
+        # Backend + embedding resolve from the DB row now; the store reports 0
+        # chunks despite total_processed=10 → mismatch.
+        fake_backend = AsyncMock()
+        fake_backend.count = AsyncMock(return_value=0)
+
         with (
             patch.object(service, "get_memory_base_or_404", AsyncMock(return_value=mb)),
             patch(
-                "primeagent.services.memory_base.ingestion.resolve_kb_username_by_user_id",
+                "primeagent.services.memory_base.kb_path_helpers.resolve_kb_username_by_user_id",
                 AsyncMock(return_value="testuser"),
             ),
             patch("primeagent.services.memory_base.ingestion.session_scope") as mock_scope,
-            patch("primeagent.services.memory_base.ingestion.KBStorageHelper.get_root_path", return_value=tmp_path),
+            patch("primeagent.api.utils.kb_helpers.resolve_local_store_path", return_value=tmp_path),
             patch(
-                "primeagent.services.memory_base.ingestion.KBAnalysisHelper.get_metadata",
-                return_value={"chunks": 0},
+                "primeagent.services.memory_base.ingestion.resolve_backend_selection",
+                AsyncMock(return_value=("chroma", {})),
             ),
+            patch(
+                "primeagent.services.memory_base.ingestion.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", "text-embedding-3-small")),
+            ) as resolve_embedding,
+            patch(
+                "primeagent.api.utils.kb_helpers.KBIngestionHelper.build_embeddings",
+                AsyncMock(return_value=MagicMock()),
+            ) as build_embeddings,
+            patch(
+                "primeagent.services.memory_base.ingestion.backend_for_name",
+                return_value=fake_backend,
+            ) as backend_factory,
         ):
             # Simulate session_scope returns total_processed=10
             mock_db = AsyncMock()
@@ -602,6 +1648,9 @@ class TestMemoryBaseServiceMismatch:
             result = await service.check_mismatch(mb.id, mb.user_id)
 
         assert result is True
+        resolve_embedding.assert_not_awaited()
+        build_embeddings.assert_not_awaited()
+        assert backend_factory.call_args.kwargs["embedding_function"] is None
 
     async def test_no_mismatch_when_nothing_processed(self, service):
         mb = _make_mb()
@@ -627,6 +1676,18 @@ class TestMemoryBaseServiceMismatch:
         assert result is False
 
 
+@pytest.fixture
+def unfenced_memory_runtime(monkeypatch):
+    """Unit orchestration tests bypass storage fencing, covered by real SQLite tests."""
+    from primeagent.services.knowledge_base_storage import runtime
+
+    record = MagicMock(id=uuid.uuid4())
+    record.storage_state = "ready"
+    monkeypatch.setattr(runtime, "resolve_record", AsyncMock(return_value=record))
+    monkeypatch.setattr(runtime, "operation", lambda *_args, **_kwargs: contextlib.nullcontext(record))
+
+
+@pytest.mark.usefixtures("unfenced_memory_runtime")
 class TestMemoryBaseServicePurgeSessionData:
     @pytest.fixture
     def service(self):
@@ -661,7 +1722,7 @@ class TestMemoryBaseServicePurgeSessionData:
         assert result == 0
 
     @pytest.mark.asyncio
-    async def test_purge_deletes_chroma_chunks_and_tracking_rows(self, service, tmp_path):
+    async def test_purge_deletes_vector_chunks_and_tracking_rows(self, service, tmp_path):
         mb = _make_mb()
         mbs = _make_session(memory_base_id=mb.id, session_id="sess-x")
 
@@ -690,9 +1751,7 @@ class TestMemoryBaseServicePurgeSessionData:
         kb_root = tmp_path / "kb"
         (kb_root / "alice" / mb.kb_name).mkdir(parents=True)
 
-        adelete_mock = AsyncMock()
-        fake_chroma = MagicMock()
-        fake_chroma.adelete = adelete_mock
+        fake_backend = AsyncMock()
 
         with (
             patch(
@@ -700,37 +1759,43 @@ class TestMemoryBaseServicePurgeSessionData:
                 side_effect=lambda: FakeCtx(),
             ),
             patch(
-                "primeagent.services.memory_base.ingestion.KBStorageHelper.get_root_path",
+                "primeagent.api.utils.kb_helpers.resolve_local_store_path",
                 return_value=kb_root,
             ),
             patch(
-                "primeagent.services.memory_base.ingestion.KBStorageHelper.get_fresh_chroma_client",
-                return_value=MagicMock(),
-            ),
-            patch("primeagent.services.memory_base.ingestion.KBStorageHelper.release_chroma_resources"),
-            patch(
-                "primeagent.services.memory_base.ingestion.KBIngestionHelper.build_embeddings",
+                "primeagent.api.utils.kb_helpers.KBIngestionHelper.build_embeddings",
                 AsyncMock(return_value=MagicMock()),
+            ) as build_embeddings,
+            patch(
+                "primeagent.services.memory_base.ingestion.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", "text-embedding-3-small")),
+            ) as resolve_embedding,
+            patch(
+                "primeagent.services.memory_base.ingestion.resolve_backend_selection",
+                AsyncMock(return_value=("chroma", {})),
             ),
             patch(
-                "primeagent.services.memory_base.ingestion.resolve_embedding",
-                return_value=("OpenAI", "text-embedding-3-small"),
-            ),
-            patch("primeagent.services.memory_base.ingestion.Chroma", return_value=fake_chroma),
-            patch("primeagent.services.memory_base.ingestion._sync_metrics_after_purge"),
+                "primeagent.services.memory_base.ingestion.backend_for_name",
+                return_value=fake_backend,
+            ) as backend_factory,
+            patch("primeagent.services.memory_base.ingestion._sync_metrics_after_purge", AsyncMock()),
         ):
             result = await service.purge_session_data(mb.user_id, ["sess-x"])
 
         assert result == 1
-        # Chroma was asked to drop chunks for the deleted session using $eq form.
-        adelete_mock.assert_awaited_once_with(where={"session_id": {"$eq": "sess-x"}})
+        # The filter must be the FLAT {key: value} form. Chroma's explicit
+        # {"$eq": ...} operator dict is not portable — a remote backend treats it
+        # as a literal value and silently matches nothing.
+        fake_backend.delete_by.assert_awaited_once_with({"session_id": "sess-x"})
+        resolve_embedding.assert_not_awaited()
+        build_embeddings.assert_not_awaited()
+        assert backend_factory.call_args.kwargs["embedding_function"] is None
         # Tracking-row deletes were committed.
         assert second_db.commit.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_purge_continues_when_chunk_delete_fails(self, service, tmp_path):
-        # Chunk delete failure must not block tracking-row cleanup — the user
-        # already pressed "delete session" and expects bookkeeping to clear.
+    async def test_purge_preserves_tracking_when_chunk_delete_fails(self, service, tmp_path):
+        # Preserve tracking on storage failure so deletion can be retried.
         mb = _make_mb()
         mbs = _make_session(memory_base_id=mb.id, session_id="sess-x")
 
@@ -764,20 +1829,22 @@ class TestMemoryBaseServicePurgeSessionData:
                 side_effect=lambda: FakeCtx(),
             ),
             patch(
-                "primeagent.services.memory_base.ingestion.KBStorageHelper.get_root_path",
+                "primeagent.api.utils.kb_helpers.resolve_local_store_path",
                 return_value=kb_root,
             ),
             patch(
                 "primeagent.services.memory_base.ingestion._delete_chunks_for_session",
                 AsyncMock(side_effect=OSError("boom")),
             ),
+            pytest.raises(OSError, match="boom"),
         ):
-            result = await service.purge_session_data(mb.user_id, ["sess-x"])
+            await service.purge_session_data(mb.user_id, ["sess-x"])
 
-        assert result == 1
-        assert second_db.commit.await_count == 1
+        second_db.exec.assert_not_awaited()
+        second_db.commit.assert_not_awaited()
 
 
+@pytest.mark.usefixtures("unfenced_memory_runtime")
 class TestMemoryBaseServiceRegenerate:
     @pytest.fixture
     def service(self):
@@ -793,13 +1860,25 @@ class TestMemoryBaseServiceRegenerate:
 
         triggered_sessions: list[str] = []
 
-        async def fake_trigger(_mb_id, _user_id, session_id):
+        async def fake_trigger(*, memory_base_id, owner_user_id, actor_user_id, session_id):
+            assert memory_base_id == mb.id
+            assert owner_user_id == mb.user_id
+            assert actor_user_id == mb.user_id
             triggered_sessions.append(session_id)
             return str(uuid.uuid4())
 
         with (
             patch("primeagent.services.memory_base.ingestion.session_scope") as mock_scope,
             patch.object(service, "trigger_ingestion", side_effect=fake_trigger),
+            patch(
+                "primeagent.services.memory_base.ingestion.resolve_memory_provider_scope",
+                AsyncMock(return_value=MagicMock(memory_base=mb)),
+            ),
+            patch(
+                "primeagent.services.memory_base.ingestion.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", "text-embedding-3-small")),
+            ),
+            patch("primeagent.services.memory_base.ingestion.preflight_memory_provider_use"),
         ):
             mock_db = AsyncMock()
             mock_mb_result = MagicMock()
@@ -819,13 +1898,68 @@ class TestMemoryBaseServiceRegenerate:
 
             mock_scope.return_value = FakeCtx()
 
-            job_ids = await service.regenerate(mb.id, mb.user_id)
+            job_ids = await service.regenerate(
+                memory_base_id=mb.id,
+                owner_user_id=mb.user_id,
+                actor_user_id=mb.user_id,
+            )
 
         assert len(job_ids) == 2
         assert set(triggered_sessions) == {"s1", "s2"}
         # Verify cursors were reset
         assert mbs1.cursor_id is None
         assert mbs2.cursor_id is None
+
+    @pytest.mark.asyncio
+    async def test_regenerate_denial_precedes_cursor_and_record_mutation(self, service):
+        from wfx.services.model_provider_policy import ModelProviderPolicyError, ModelProviderPolicyPurpose
+
+        mb = _make_mb()
+        mb.preprocessing = True
+        mb.preproc_model = "claude-test"
+        actor_user_id = uuid.uuid4()
+        session = _make_session(memory_base_id=mb.id, cursor_id=uuid.uuid4())
+        original_cursor = session.cursor_id
+        mock_db = AsyncMock()
+        session_result = MagicMock()
+        session_result.all.return_value = [session]
+        mock_db.exec = AsyncMock(return_value=session_result)
+
+        class FakeCtx:
+            async def __aenter__(self):
+                return mock_db
+
+            async def __aexit__(self, *args):
+                return None
+
+        with (
+            patch("primeagent.services.memory_base.ingestion.session_scope", return_value=FakeCtx()),
+            patch.object(service, "get_memory_base_or_404", AsyncMock(return_value=mb)),
+            patch(
+                "primeagent.services.memory_base.ingestion.resolve_memory_provider_scope",
+                AsyncMock(return_value=MagicMock(memory_base=mb)),
+            ),
+            patch(
+                "primeagent.services.memory_base.ingestion.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", "text-embedding-3-small")),
+            ),
+            patch(
+                "primeagent.services.memory_base.ingestion.preflight_memory_provider_use",
+                AsyncMock(side_effect=ModelProviderPolicyError("anthropic", ModelProviderPolicyPurpose.USE)),
+            ),
+            patch.object(service, "trigger_ingestion", AsyncMock()) as trigger,
+            pytest.raises(ModelProviderPolicyError),
+        ):
+            await service.regenerate(
+                memory_base_id=mb.id,
+                owner_user_id=mb.user_id,
+                actor_user_id=actor_user_id,
+            )
+
+        assert session.cursor_id == original_cursor
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_awaited()
+        trigger.assert_not_awaited()
 
 
 # ------------------------------------------------------------------ #
@@ -834,6 +1968,37 @@ class TestMemoryBaseServiceRegenerate:
 
 
 class TestIngestMemoryTask:
+    @pytest.fixture(autouse=True)
+    def _stored_flow_scope(self, monkeypatch):
+        import primeagent.services.memory_base.task as task_module
+        from primeagent.services.database.models.flow.model import Flow
+        from primeagent.services.database.models.memory_base.model import MemoryBase
+        from primeagent.services.memory_base.provider_scope import MemoryProviderScope
+
+        record = MagicMock(id=uuid.uuid4())
+        monkeypatch.setattr(task_module, "resolve_record", AsyncMock(return_value=record))
+        monkeypatch.setattr(task_module, "operation", lambda *_args, **_kwargs: contextlib.nullcontext(record))
+        # This task unit fixture supplies synthetic scope and history. Its
+        # tracking identity must not depend on another test initializing the DB.
+        monkeypatch.setattr(task_module, "_read_live_session_id", AsyncMock(return_value=None))
+
+        async def resolve_scope(_db, *, memory_base_id, owner_user_id, actor_user_id):
+            flow = Flow(id=uuid.uuid4(), user_id=owner_user_id, name="stored test flow")
+            return MemoryProviderScope(
+                memory_base=MemoryBase(
+                    id=memory_base_id,
+                    name="memory",
+                    flow_id=flow.id,
+                    user_id=owner_user_id,
+                    kb_name="kb",
+                ),
+                flow=flow,
+                actor_user_id=actor_user_id,
+                is_superuser=False,
+            )
+
+        monkeypatch.setattr(task_module, "resolve_memory_provider_scope", resolve_scope)
+
     async def test_no_op_when_no_pending_messages(self, tmp_path):
         from primeagent.services.memory_base.task import IngestionRequest, ingest_memory_task
 
@@ -852,7 +2017,7 @@ class TestIngestMemoryTask:
                 AsyncMock(return_value=[]),
             ),
             patch(
-                "primeagent.services.memory_base.task.KBStorageHelper.get_root_path",
+                "primeagent.services.memory_base.task.resolve_local_store_path",
                 return_value=tmp_path / "kb",
             ),
         ):
@@ -863,7 +2028,7 @@ class TestIngestMemoryTask:
                     flow_id=uuid.uuid4(),
                     kb_name="kb",
                     kb_username="user",
-                    user_id=uuid.uuid4(),
+                    **_owner_actor_fields(),
                     embedding_provider="OpenAI",
                     embedding_model="text-embedding-3-small",
                     cursor_id=None,
@@ -894,6 +2059,7 @@ class TestIngestMemoryTask:
             advance_cursor_called = True
 
         with (
+            patch("primeagent.services.memory_base.task.KBIngestionHelper.cleanup_chroma_chunks_by_job", AsyncMock()),
             patch(
                 "primeagent.services.memory_base.task._acquire_session_lock",
                 AsyncMock(return_value=asyncio.Lock()),
@@ -917,12 +2083,15 @@ class TestIngestMemoryTask:
                 AsyncMock(return_value=MagicMock()),
             ),
             patch(
-                "primeagent.services.memory_base.task.KBStorageHelper.get_fresh_chroma_client",
-                return_value=MagicMock(),
+                "primeagent.services.memory_base.task.resolve_backend_selection",
+                AsyncMock(return_value=("chroma", {})),
             ),
-            patch("primeagent.services.memory_base.task.Chroma"),
             patch(
-                "primeagent.services.memory_base.task.KBIngestionHelper.write_documents_to_chroma",
+                "primeagent.services.memory_base.task.backend_for_name",
+                return_value=AsyncMock(),
+            ),
+            patch(
+                "primeagent.services.memory_base.task.KBIngestionHelper.write_documents_to_backend",
                 AsyncMock(side_effect=RuntimeError("Chroma exploded")),
             ),
             patch(
@@ -930,10 +2099,9 @@ class TestIngestMemoryTask:
                 side_effect=fake_advance_cursor,
             ),
             patch(
-                "primeagent.services.memory_base.task.KBStorageHelper.get_root_path",
+                "primeagent.services.memory_base.task.resolve_local_store_path",
                 return_value=tmp_path / "kb",
             ),
-            patch("primeagent.services.memory_base.task.KBStorageHelper.release_chroma_resources"),
             pytest.raises(RuntimeError, match="Chroma exploded"),
         ):
             await ingest_memory_task(
@@ -943,7 +2111,7 @@ class TestIngestMemoryTask:
                     flow_id=flow_id,
                     kb_name="kb",
                     kb_username="user",
-                    user_id=uuid.uuid4(),
+                    **_owner_actor_fields(),
                     embedding_provider="OpenAI",
                     embedding_model="text-embedding-3-small",
                     cursor_id=old_cursor,
@@ -957,7 +2125,7 @@ class TestIngestMemoryTask:
 
     @pytest.mark.asyncio
     async def test_metadata_synced_on_success(self, tmp_path):
-        """embedding_metadata.json must be updated after a successful ingestion."""
+        """KB row stats must be refreshed after a successful ingestion."""
         from primeagent.services.memory_base.task import IngestionRequest, ingest_memory_task
 
         flow_id = uuid.uuid4()
@@ -967,9 +2135,10 @@ class TestIngestMemoryTask:
 
         sync_called_with: dict = {}
 
-        def fake_sync_kb_metadata(*, kb_path, chroma):
-            sync_called_with["kb_path"] = kb_path
-            sync_called_with["chroma"] = chroma
+        async def fake_sync_kb_stats(*, user_id, kb_name, backend):
+            sync_called_with["user_id"] = user_id
+            sync_called_with["kb_name"] = kb_name
+            sync_called_with["backend"] = backend
 
         with (
             patch(
@@ -995,22 +2164,24 @@ class TestIngestMemoryTask:
                 AsyncMock(return_value=MagicMock()),
             ),
             patch(
-                "primeagent.services.memory_base.task.KBStorageHelper.get_fresh_chroma_client",
-                return_value=MagicMock(),
+                "primeagent.services.memory_base.task.resolve_backend_selection",
+                AsyncMock(return_value=("chroma", {})),
             ),
-            patch("primeagent.services.memory_base.task.Chroma"),
             patch(
-                "primeagent.services.memory_base.task.KBIngestionHelper.write_documents_to_chroma",
+                "primeagent.services.memory_base.task.backend_for_name",
+                return_value=AsyncMock(),
+            ),
+            patch(
+                "primeagent.services.memory_base.task.KBIngestionHelper.write_documents_to_backend",
                 AsyncMock(return_value=1),
             ),
-            patch("primeagent.services.memory_base.task.sync_kb_metadata", side_effect=fake_sync_kb_metadata),
+            patch("primeagent.services.memory_base.task.sync_kb_stats_to_record", side_effect=fake_sync_kb_stats),
             patch("primeagent.services.memory_base.task._mark_messages_ingested", AsyncMock()),
             patch("primeagent.services.memory_base.task._advance_cursor", AsyncMock()),
             patch(
-                "primeagent.services.memory_base.task.KBStorageHelper.get_root_path",
+                "primeagent.services.memory_base.task.resolve_local_store_path",
                 return_value=tmp_path / "kb",
             ),
-            patch("primeagent.services.memory_base.task.KBStorageHelper.release_chroma_resources"),
         ):
             await ingest_memory_task(
                 request=IngestionRequest(
@@ -1019,7 +2190,7 @@ class TestIngestMemoryTask:
                     flow_id=flow_id,
                     kb_name="kb",
                     kb_username="user",
-                    user_id=uuid.uuid4(),
+                    **_owner_actor_fields(),
                     embedding_provider="OpenAI",
                     embedding_model="text-embedding-3-small",
                     cursor_id=None,
@@ -1028,11 +2199,11 @@ class TestIngestMemoryTask:
                 ),
             )
 
-        assert "kb_path" in sync_called_with, "sync_kb_metadata was not called on success"
+        assert "kb_name" in sync_called_with, "sync_kb_stats_to_record was not called on success"
 
     @pytest.mark.asyncio
     async def test_metadata_not_synced_when_cancelled(self, tmp_path):
-        """embedding_metadata.json must NOT be updated when ingestion is cancelled."""
+        """The ``knowledge_base`` row's stats must NOT be updated when ingestion is cancelled."""
         from primeagent.services.memory_base.task import IngestionRequest, ingest_memory_task
 
         flow_id = uuid.uuid4()
@@ -1046,6 +2217,8 @@ class TestIngestMemoryTask:
             sync_called = True
 
         with (
+            pytest.raises(asyncio.CancelledError, match="PRIMEAGENT_USER_CANCELLED"),
+            patch("primeagent.services.memory_base.task.KBIngestionHelper.cleanup_chroma_chunks_by_job", AsyncMock()),
             patch(
                 "primeagent.services.memory_base.task._acquire_session_lock",
                 AsyncMock(return_value=asyncio.Lock()),
@@ -1069,31 +2242,33 @@ class TestIngestMemoryTask:
                 AsyncMock(return_value=MagicMock()),
             ),
             patch(
-                "primeagent.services.memory_base.task.KBStorageHelper.get_fresh_chroma_client",
-                return_value=MagicMock(),
+                "primeagent.services.memory_base.task.resolve_backend_selection",
+                AsyncMock(return_value=("chroma", {})),
             ),
-            patch("primeagent.services.memory_base.task.Chroma"),
-            # write_documents_to_chroma returns fewer docs than sent → cancelled
             patch(
-                "primeagent.services.memory_base.task.KBIngestionHelper.write_documents_to_chroma",
+                "primeagent.services.memory_base.task.backend_for_name",
+                return_value=AsyncMock(),
+            ),
+            # write_documents_to_backend returns fewer docs than sent → cancelled
+            patch(
+                "primeagent.services.memory_base.task.KBIngestionHelper.write_documents_to_backend",
                 AsyncMock(return_value=0),
             ),
-            patch("primeagent.services.memory_base.task.sync_kb_metadata", side_effect=fake_sync),
+            patch("primeagent.services.memory_base.task.sync_kb_stats_to_record", side_effect=fake_sync),
             patch("primeagent.services.memory_base.task._advance_cursor", AsyncMock()),
             patch(
-                "primeagent.services.memory_base.task.KBStorageHelper.get_root_path",
+                "primeagent.services.memory_base.task.resolve_local_store_path",
                 return_value=tmp_path / "kb",
             ),
-            patch("primeagent.services.memory_base.task.KBStorageHelper.release_chroma_resources"),
         ):
-            result = await ingest_memory_task(
+            await ingest_memory_task(
                 request=IngestionRequest(
                     memory_base_id=uuid.uuid4(),
                     session_id="s1",
                     flow_id=flow_id,
                     kb_name="kb",
                     kb_username="user",
-                    user_id=uuid.uuid4(),
+                    **_owner_actor_fields(),
                     embedding_provider="OpenAI",
                     embedding_model="text-embedding-3-small",
                     cursor_id=None,
@@ -1102,8 +2277,7 @@ class TestIngestMemoryTask:
                 ),
             )
 
-        assert not sync_called, "sync_kb_metadata must not be called when ingestion is cancelled"
-        assert "cancelled" in result["message"].lower()
+        assert not sync_called, "KB stats must not be synced when ingestion is cancelled"
 
     @pytest.mark.asyncio
     async def test_cursor_advanced_on_success(self, tmp_path):
@@ -1145,22 +2319,24 @@ class TestIngestMemoryTask:
                 AsyncMock(return_value=MagicMock()),
             ),
             patch(
-                "primeagent.services.memory_base.task.KBStorageHelper.get_fresh_chroma_client",
-                return_value=MagicMock(),
+                "primeagent.services.memory_base.task.resolve_backend_selection",
+                AsyncMock(return_value=("chroma", {})),
             ),
-            patch("primeagent.services.memory_base.task.Chroma"),
             patch(
-                "primeagent.services.memory_base.task.KBIngestionHelper.write_documents_to_chroma",
+                "primeagent.services.memory_base.task.backend_for_name",
+                return_value=AsyncMock(),
+            ),
+            patch(
+                "primeagent.services.memory_base.task.KBIngestionHelper.write_documents_to_backend",
                 AsyncMock(return_value=1),
             ),
-            patch("primeagent.services.memory_base.task.sync_kb_metadata"),
+            patch("primeagent.services.memory_base.task.sync_kb_stats_to_record", AsyncMock()),
             patch("primeagent.services.memory_base.task._mark_messages_ingested", AsyncMock()),
             patch("primeagent.services.memory_base.task._advance_cursor", AsyncMock(side_effect=fake_advance_cursor)),
             patch(
-                "primeagent.services.memory_base.task.KBStorageHelper.get_root_path",
+                "primeagent.services.memory_base.task.resolve_local_store_path",
                 return_value=tmp_path / "kb",
             ),
-            patch("primeagent.services.memory_base.task.KBStorageHelper.release_chroma_resources"),
         ):
             result = await ingest_memory_task(
                 request=IngestionRequest(
@@ -1169,7 +2345,7 @@ class TestIngestMemoryTask:
                     flow_id=flow_id,
                     kb_name="kb",
                     kb_username="user",
-                    user_id=uuid.uuid4(),
+                    **_owner_actor_fields(),
                     embedding_provider="OpenAI",
                     embedding_model="text-embedding-3-small",
                     cursor_id=None,
@@ -1181,47 +2357,6 @@ class TestIngestMemoryTask:
         assert result["ingested"] == 1
         assert advance_kwargs["new_cursor_id"] == msg.id
         assert advance_kwargs["ingested_count"] == 1
-
-    def test_sync_kb_metadata_stamps_is_memory_base(self, tmp_path):
-        """sync_kb_metadata must write is_memory_base: true to the metadata file."""
-        import json
-
-        from primeagent.services.memory_base.document_builders import sync_kb_metadata as _sync_kb_metadata
-
-        kb_path = tmp_path / "test_kb"
-        kb_path.mkdir()
-
-        mock_chroma = MagicMock()
-
-        with (
-            patch(
-                "primeagent.services.memory_base.document_builders.KBAnalysisHelper.get_metadata",
-                return_value={"chunks": 0, "embedding_provider": "OpenAI"},
-            ),
-            patch("primeagent.services.memory_base.document_builders.KBAnalysisHelper.update_text_metrics"),
-            patch(
-                "primeagent.services.memory_base.document_builders.KBStorageHelper.get_directory_size",
-                return_value=1024,
-            ),
-        ):
-            _sync_kb_metadata(kb_path=kb_path, chroma=mock_chroma)
-
-        written = json.loads((kb_path / "embedding_metadata.json").read_text())
-        assert written["is_memory_base"] is True
-        assert "memory" in written.get("source_types", [])
-
-    def test_sync_kb_metadata_failure_does_not_raise(self, tmp_path):
-        """Metadata sync errors must be swallowed so the cursor can still advance."""
-        from primeagent.services.memory_base.document_builders import sync_kb_metadata as _sync_kb_metadata
-
-        kb_path = tmp_path / "no_such_dir"  # does not exist
-
-        with patch(
-            "primeagent.services.memory_base.document_builders.KBAnalysisHelper.get_metadata",
-            side_effect=OSError("disk full"),
-        ):
-            # Must not raise
-            _sync_kb_metadata(kb_path=kb_path, chroma=MagicMock())
 
     def test_build_documents_skips_empty_messages(self):
         from primeagent.services.memory_base.document_builders import (
@@ -1329,14 +2464,16 @@ class TestOnFlowOutputHook:
                 "primeagent.services.memory_base.ingestion._get_latest_pending_workflow_job_id",
                 AsyncMock(return_value=uuid.uuid4()),
             ),
+            patch("primeagent.services.memory_base.ingestion.resolve_kb_username", AsyncMock(return_value="testuser")),
             patch(
-                "primeagent.services.memory_base.kb_path_helpers.resolve_kb_username",
-                AsyncMock(return_value="testuser"),
+                "primeagent.services.memory_base.ingestion.resolve_memory_provider_scope",
+                AsyncMock(return_value=MagicMock(memory_base=mb)),
             ),
             patch(
-                "primeagent.services.memory_base.ingestion.resolve_embedding",
-                return_value=("OpenAI", "text-embedding-3-small"),
+                "primeagent.services.memory_base.ingestion.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", "text-embedding-3-small")),
             ),
+            patch("primeagent.services.memory_base.ingestion.preflight_memory_provider_use"),
             patch("primeagent.services.memory_base.ingestion.get_job_service", return_value=mock_job_svc),
             patch("primeagent.services.memory_base.ingestion.get_task_service", return_value=mock_task_svc),
         ):
@@ -1346,6 +2483,9 @@ class TestOnFlowOutputHook:
 
         mock_job_svc.create_job.assert_awaited_once()
         mock_task_svc.fire_and_forget_task.assert_awaited_once()
+        request = mock_task_svc.fire_and_forget_task.call_args.kwargs["request"]
+        assert request.owner_user_id == mb.user_id
+        assert request.actor_user_id == mb.user_id
 
     @pytest.mark.asyncio
     async def test_on_flow_output_is_silent_on_error(self, service):
@@ -1509,15 +2649,23 @@ class TestMemoriesAPIRouting:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_flush_conflict_returns_409(self, patched_service):
+    async def test_flush_conflict_returns_409(self, patched_service, monkeypatch):
         """trigger_ingestion raising RuntimeError should map to HTTP 409."""
-        from primeagent.api.v1.memories import flush_memory_base
+        monkeypatch.setattr(
+            "primeagent.api.utils.knowledge_base_service.get_by_user_and_name",
+            AsyncMock(return_value=None),
+        )
 
-        patched_service.trigger_ingestion = AsyncMock(side_effect=RuntimeError("already in progress"))
+        from primeagent.api.v1.memories import flush_memory_base
 
         # We call the handler directly to test the error mapping
         mock_user = MagicMock()
         mock_user.id = uuid.uuid4()
+
+        # The guard now resolves the memory base first; let it pass through so the
+        # error mapping under test (trigger_ingestion -> 409) is exercised.
+        patched_service.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
+        patched_service.trigger_ingestion = AsyncMock(side_effect=RuntimeError("already in progress"))
 
         from fastapi import HTTPException
         from primeagent.api.v1.memories import FlushRequest
@@ -1542,6 +2690,18 @@ class TestMemoriesAPIRouting:
 class TestMemoriesAPIHandlers:
     """Call endpoint handlers directly, mocking _service, to test all status-code branches."""
 
+    @pytest.fixture(autouse=True)
+    def _storage_lookup(self, monkeypatch):
+        """Isolate handler result mapping from the separately tested storage gate."""
+        monkeypatch.setattr(
+            "primeagent.api.utils.knowledge_base_service.get_by_user_and_name", AsyncMock(return_value=None)
+        )
+        session = AsyncMock()
+        session.exec.return_value = MagicMock(all=list)
+        context = MagicMock()
+        context.__aenter__.return_value = session
+        monkeypatch.setattr("primeagent.api.v1.memories.session_scope", MagicMock(return_value=context))
+
     @pytest.fixture
     def mock_user(self):
         user = MagicMock()
@@ -1561,11 +2721,84 @@ class TestMemoriesAPIHandlers:
 
         svc = MagicMock()
         svc.create = AsyncMock(return_value=mb)
-        with patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc):
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
+            patch(
+                "primeagent.api.v1.memories.knowledge_base_service.get_backends_for_names",
+                AsyncMock(return_value={mb.kb_name: ("chroma", {})}),
+            ),
+        ):
             result = await create_memory_base(current_user=mock_user, payload=payload)
 
         assert result.id == mb.id
         assert result.user_id == mock_user.id
+
+    @pytest.mark.asyncio
+    async def test_create_surfaces_effective_backend_from_kb_row(self, mock_user):
+        """create() response carries the server-persisted backend type + config."""
+        from primeagent.api.v1.memories import create_memory_base
+
+        mb = _make_mb(user_id=mock_user.id)
+        payload = MemoryBaseCreate(
+            name="mb",
+            flow_id=mb.flow_id,
+            user_id=mock_user.id,
+            kb_name="kb",
+            backend_type="opensearch",
+            backend_config={"url_variable": "OPENSEARCH_URL"},
+        )
+
+        svc = MagicMock()
+        svc.create = AsyncMock(return_value=mb)
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
+            patch(
+                "primeagent.api.v1.memories.knowledge_base_service.get_backends_for_names",
+                AsyncMock(return_value={mb.kb_name: ("opensearch", {"url_variable": "OPENSEARCH_URL"})}),
+            ),
+        ):
+            result = await create_memory_base(current_user=mock_user, payload=payload)
+
+        assert result.backend_type == "opensearch"
+        # Config is surfaced so the UI can tell Chroma Cloud from Chroma Local.
+        assert result.backend_config == {"url_variable": "OPENSEARCH_URL"}
+
+    @pytest.mark.asyncio
+    async def test_get_surfaces_backend_from_kb_row(self, mock_user):
+        """get_memory_base enriches backend type + config from the knowledge_base row."""
+        from primeagent.api.v1 import memories as memories_module
+        from primeagent.api.v1.memories import get_memory_base
+        from primeagent.services.database.models.knowledge_base import KnowledgeBaseRecord
+
+        mb = _make_mb(user_id=mock_user.id)
+        record = KnowledgeBaseRecord(user_id=mb.user_id, name=mb.kb_name, backend_type="opensearch")
+
+        class _FakeCtx:
+            async def __aenter__(self):
+                session = AsyncMock()
+                session.exec.return_value = MagicMock(all=lambda: [record])
+                return session
+
+            async def __aexit__(self, *_a):
+                pass
+
+        with (
+            patch("primeagent.api.v1.memories.session_scope", MagicMock(return_value=_FakeCtx())),
+            patch("primeagent.api.v1.memories._get_memory_base_for_action", AsyncMock(return_value=mb)),
+            patch.object(
+                memories_module.knowledge_base_service,
+                "get_backends_for_names",
+                AsyncMock(return_value={mb.kb_name: ("opensearch", {"index_name": "idx"})}),
+            ) as batch_lookup,
+        ):
+            result = await get_memory_base(memory_base_id=mb.id, current_user=mock_user)
+
+        assert result.backend_type == "opensearch"
+        assert result.backend_config == {"index_name": "idx"}
+        assert result.storage_state == "ready"
+        assert result.storage_kb_id == record.id
+        # Resolved via the single batched lookup (eager), not per-item.
+        batch_lookup.assert_awaited_once_with([mb.kb_name])
 
     @pytest.mark.asyncio
     async def test_create_duplicate_name_returns_409(self, mock_user):
@@ -1583,6 +2816,42 @@ class TestMemoriesAPIHandlers:
             await create_memory_base(current_user=mock_user, payload=payload)
 
         assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_create_storage_routing_override_returns_403(self, mock_user):
+        from fastapi import HTTPException
+        from primeagent.api.v1.memories import create_memory_base
+        from wfx.base.knowledge_bases.backends.naming import StorageRoutingNotAllowedError
+
+        payload = MemoryBaseCreate(name="mb", flow_id=uuid.uuid4(), user_id=mock_user.id, kb_name="kb")
+        svc = MagicMock()
+        svc.create = AsyncMock(side_effect=StorageRoutingNotAllowedError("Only a superuser can set index_name"))
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await create_memory_base(current_user=mock_user, payload=payload)
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_create_provider_policy_denial_returns_404(self, mock_user):
+        from fastapi import HTTPException
+        from primeagent.api.v1.memories import create_memory_base
+        from wfx.services.model_provider_policy import ModelProviderPolicyError, ModelProviderPolicyPurpose
+
+        payload = MemoryBaseCreate(name="mb", flow_id=uuid.uuid4(), user_id=mock_user.id, kb_name="kb")
+        svc = MagicMock()
+        svc.create = AsyncMock(side_effect=ModelProviderPolicyError("anthropic", ModelProviderPolicyPurpose.CONFIGURE))
+
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await create_memory_base(current_user=mock_user, payload=payload)
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Model provider not found"
 
     @pytest.mark.asyncio
     async def test_create_missing_api_key_returns_422(self, mock_user):
@@ -1604,12 +2873,41 @@ class TestMemoriesAPIHandlers:
         assert "API key" in exc_info.value.detail
 
     @pytest.mark.asyncio
+    async def test_create_unusable_embedding_provider_returns_422(self, mock_user):
+        from fastapi import HTTPException
+        from primeagent.api.v1.memories import create_memory_base
+        from primeagent.services.memory_base.service import EmbeddingProviderValidationError
+
+        payload = MemoryBaseCreate(
+            name="mb",
+            flow_id=uuid.uuid4(),
+            user_id=mock_user.id,
+            kb_name="kb",
+            embedding_model="text-embedding-3-small",
+            embedding_provider="OpenAl",
+        )
+
+        svc = MagicMock()
+        svc.create = AsyncMock(
+            side_effect=EmbeddingProviderValidationError("Embedding provider 'OpenAl' is not available for embeddings.")
+        )
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await create_memory_base(current_user=mock_user, payload=payload)
+
+        assert exc_info.value.status_code == 422
+        assert "OpenAl" in exc_info.value.detail
+
+    @pytest.mark.asyncio
     async def test_update_missing_api_key_returns_403(self, mock_user):
         from fastapi import HTTPException
         from primeagent.api.v1.memories import update_memory_base
         from primeagent.services.memory_base.service import PreprocessingValidationError
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.update = AsyncMock(side_effect=PreprocessingValidationError("No API key found for provider 'OpenAI'"))
         with (
             patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
@@ -1636,7 +2934,13 @@ class TestMemoriesAPIHandlers:
 
         svc = MagicMock()
         svc.get = AsyncMock(return_value=mb)
-        with patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc):
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
+            patch(
+                "primeagent.api.v1.memories.knowledge_base_service.get_backends_for_names",
+                AsyncMock(return_value={mb.kb_name: ("chroma", {})}),
+            ),
+        ):
             result = await get_memory_base(memory_base_id=mb.id, current_user=mock_user)
 
         assert result.id == mb.id
@@ -1667,6 +2971,7 @@ class TestMemoriesAPIHandlers:
         mb = _make_mb(user_id=mock_user.id, threshold=99)
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=mb)
         svc.update = AsyncMock(return_value=mb)
         with patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc):
             result = await update_memory_base(
@@ -1683,6 +2988,7 @@ class TestMemoriesAPIHandlers:
         from primeagent.api.v1.memories import update_memory_base
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.update = AsyncMock(return_value=None)
         with (
             patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
@@ -1705,6 +3011,7 @@ class TestMemoriesAPIHandlers:
         from primeagent.api.v1.memories import delete_memory_base
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.delete = AsyncMock(return_value=True)
         with patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc):
             result = await delete_memory_base(memory_base_id=uuid.uuid4(), current_user=mock_user)
@@ -1717,6 +3024,7 @@ class TestMemoriesAPIHandlers:
         from primeagent.api.v1.memories import delete_memory_base
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.delete = AsyncMock(return_value=False)
         with (
             patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
@@ -1737,6 +3045,7 @@ class TestMemoriesAPIHandlers:
         job_id = str(uuid.uuid4())
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.trigger_ingestion = AsyncMock(return_value=job_id)
         with patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc):
             result = await flush_memory_base(
@@ -1748,11 +3057,17 @@ class TestMemoriesAPIHandlers:
         assert result == {"job_id": job_id}
 
     @pytest.mark.asyncio
-    async def test_flush_value_error_raises_404(self, mock_user):
+    async def test_flush_value_error_raises_404(self, mock_user, monkeypatch):
+        monkeypatch.setattr(
+            "primeagent.api.utils.knowledge_base_service.get_by_user_and_name",
+            AsyncMock(return_value=None),
+        )
+
         from fastapi import HTTPException
         from primeagent.api.v1.memories import FlushRequest, flush_memory_base
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.trigger_ingestion = AsyncMock(side_effect=ValueError("memory base not found"))
         with (
             patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
@@ -1773,6 +3088,7 @@ class TestMemoriesAPIHandlers:
         from primeagent.services.jobs import DuplicateJobError
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.trigger_ingestion = AsyncMock(side_effect=DuplicateJobError("already running"))
         with (
             patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
@@ -1795,6 +3111,7 @@ class TestMemoriesAPIHandlers:
         from primeagent.api.v1.memories import check_mismatch
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.check_mismatch = AsyncMock(return_value=True)
         with patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc):
             result = await check_mismatch(memory_base_id=uuid.uuid4(), current_user=mock_user)
@@ -1806,6 +3123,7 @@ class TestMemoriesAPIHandlers:
         from primeagent.api.v1.memories import check_mismatch
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.check_mismatch = AsyncMock(return_value=False)
         with patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc):
             result = await check_mismatch(memory_base_id=uuid.uuid4(), current_user=mock_user)
@@ -1818,6 +3136,7 @@ class TestMemoriesAPIHandlers:
         from primeagent.api.v1.memories import check_mismatch
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.check_mismatch = AsyncMock(side_effect=ValueError("not found"))
         with (
             patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
@@ -1838,6 +3157,7 @@ class TestMemoriesAPIHandlers:
         job_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.regenerate = AsyncMock(return_value=job_ids)
         with patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc):
             result = await regenerate_memory_base(memory_base_id=uuid.uuid4(), current_user=mock_user)
@@ -1850,6 +3170,7 @@ class TestMemoriesAPIHandlers:
         from primeagent.api.v1.memories import regenerate_memory_base
 
         svc = MagicMock()
+        svc.get = AsyncMock(return_value=_make_mb(user_id=mock_user.id))
         svc.regenerate = AsyncMock(side_effect=ValueError("not found"))
         with (
             patch("primeagent.api.v1.memories.get_memory_base_service", return_value=svc),
@@ -1898,15 +3219,15 @@ class TestMemoriesAPIHandlers:
     # ---------------------------------------------------------------- #
 
     @pytest.mark.asyncio
-    async def test_list_memory_base_messages_not_found_raises_404(self, mock_user):
+    async def test_list_memory_base_messages_not_found_raises_404(self, active_user):
         from fastapi import HTTPException
         from fastapi_pagination import Params
         from primeagent.api.v1.memories import list_memory_base_messages
 
         mock_db = AsyncMock()
-        result_mock = MagicMock()
-        result_mock.first = MagicMock(return_value=None)
-        mock_db.exec = AsyncMock(return_value=result_mock)
+        memory_base_id = uuid.uuid4()
+        service = MagicMock(get=AsyncMock(return_value=None))
+        authz = MagicMock(is_enabled=AsyncMock(return_value=False))
 
         class FakeCtx:
             async def __aenter__(self):
@@ -1917,27 +3238,31 @@ class TestMemoriesAPIHandlers:
 
         with (
             patch("primeagent.api.v1.memories.session_scope", return_value=FakeCtx()),
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=service),
+            patch("primeagent.api.v1.memories.get_authorization_service", return_value=authz),
             pytest.raises(HTTPException) as exc_info,
         ):
             await list_memory_base_messages(
-                memory_base_id=uuid.uuid4(),
+                memory_base_id=memory_base_id,
                 session_id="s1",
-                current_user=mock_user,
+                current_user=active_user,
                 params=Params(),
             )
 
         assert exc_info.value.status_code == 404
+        service.get.assert_awaited_once_with(memory_base_id, user_id=active_user.id)
+        mock_db.get.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_list_memory_base_messages_without_session_id_not_found_raises_404(self, mock_user):
+    async def test_list_memory_base_messages_without_session_id_not_found_raises_404(self, active_user):
         from fastapi import HTTPException
         from fastapi_pagination import Params
         from primeagent.api.v1.memories import list_memory_base_messages
 
         mock_db = AsyncMock()
-        result_mock = MagicMock()
-        result_mock.first = MagicMock(return_value=None)
-        mock_db.exec = AsyncMock(return_value=result_mock)
+        memory_base_id = uuid.uuid4()
+        service = MagicMock(get=AsyncMock(return_value=None))
+        authz = MagicMock(is_enabled=AsyncMock(return_value=False))
 
         class FakeCtx:
             async def __aenter__(self):
@@ -1948,15 +3273,19 @@ class TestMemoriesAPIHandlers:
 
         with (
             patch("primeagent.api.v1.memories.session_scope", return_value=FakeCtx()),
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=service),
+            patch("primeagent.api.v1.memories.get_authorization_service", return_value=authz),
             pytest.raises(HTTPException) as exc_info,
         ):
             await list_memory_base_messages(
-                memory_base_id=uuid.uuid4(),
-                current_user=mock_user,
+                memory_base_id=memory_base_id,
+                current_user=active_user,
                 params=Params(),
             )
 
         assert exc_info.value.status_code == 404
+        service.get.assert_awaited_once_with(memory_base_id, user_id=active_user.id)
+        mock_db.get.assert_not_awaited()
 
     def test_session_raw_messages_stmt_omits_session_filter_when_none(self):
         from primeagent.services.memory_base.service import MemoryBaseService
@@ -2072,6 +3401,48 @@ class TestPreprocessingApiKeyValidation:
             # Should not raise.
             _validate_preprocessing_api_key(uuid.uuid4(), "gpt-4o")
 
+    def test_passes_for_credentialless_provider_without_key_lookup(self):
+        from primeagent.services.memory_base.service import _validate_preprocessing_api_key
+
+        with (
+            patch(
+                "primeagent.services.memory_base.service.infer_llm_provider",
+                return_value="AmbientAuthCo",
+            ),
+            patch(
+                "primeagent.services.memory_base.service.is_api_key_optional",
+                return_value=True,
+            ),
+            patch("primeagent.services.memory_base.service.get_api_key_for_provider") as key_lookup,
+        ):
+            _validate_preprocessing_api_key(uuid.uuid4(), "ambient-chat")
+
+        key_lookup.assert_not_called()
+
+    def test_policy_denial_happens_before_api_key_lookup(self):
+        from primeagent.services.memory_base.service import _validate_preprocessing_api_key
+        from wfx.services.model_provider_policy import ModelProviderPolicyError, ModelProviderPolicyPurpose
+
+        key_lookup = MagicMock()
+        user_id = uuid.uuid4()
+        with (
+            patch("primeagent.services.memory_base.service.infer_llm_provider", return_value="Anthropic"),
+            patch(
+                "primeagent.services.memory_base.service.require_model_provider",
+                side_effect=ModelProviderPolicyError("anthropic", ModelProviderPolicyPurpose.CONFIGURE),
+            ) as require,
+            patch("primeagent.services.memory_base.service.get_api_key_for_provider", key_lookup),
+            pytest.raises(ModelProviderPolicyError),
+        ):
+            _validate_preprocessing_api_key(user_id, "claude-test")
+
+        require.assert_called_once_with(
+            user_id=user_id,
+            provider="Anthropic",
+            purpose=ModelProviderPolicyPurpose.CONFIGURE,
+        )
+        key_lookup.assert_not_called()
+
     def test_raises_when_provider_unknown(self):
         from primeagent.services.memory_base.service import (
             PreprocessingValidationError,
@@ -2169,6 +3540,10 @@ class TestPreprocessingApiKeyValidation:
         with (
             patch("primeagent.services.memory_base.service.session_scope", fake_scope),
             patch(
+                "primeagent.services.memory_base.service.resolve_embedding_selection",
+                AsyncMock(return_value=("OpenAI", mb.embedding_model)),
+            ),
+            patch(
                 "primeagent.services.memory_base.service.infer_llm_provider",
                 return_value="OpenAI",
             ),
@@ -2180,8 +3555,9 @@ class TestPreprocessingApiKeyValidation:
         ):
             await service.update(
                 mb.id,
-                user_id,
-                MemoryBaseUpdate(threshold=10),
+                owner_user_id=user_id,
+                patch=MemoryBaseUpdate(threshold=10),
+                actor_user_id=user_id,
             )
 
 
@@ -2221,7 +3597,12 @@ class TestMemoryBaseSecurityAdversarial:
         exec_result.first.return_value = None
         mock_db.exec = AsyncMock(return_value=exec_result)
         with patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(mock_db)):
-            result = await service.update(mb.id, user_b, MemoryBaseUpdate(threshold=5))
+            result = await service.update(
+                mb.id,
+                owner_user_id=user_b,
+                patch=MemoryBaseUpdate(threshold=5),
+                actor_user_id=user_b,
+            )
         assert result is None
 
     @pytest.mark.asyncio
@@ -2247,7 +3628,11 @@ class TestMemoryBaseSecurityAdversarial:
             patch("primeagent.services.memory_base.ingestion.session_scope", self._fake_scope(mock_db)),
             pytest.raises(ValueError, match="not found"),
         ):
-            await service.regenerate(mb_id, user_b)
+            await service.regenerate(
+                memory_base_id=mb_id,
+                owner_user_id=user_b,
+                actor_user_id=user_b,
+            )
 
     @pytest.mark.asyncio
     async def test_check_mismatch_rejects_unowned_memory_base(self, service):
@@ -2304,3 +3689,317 @@ class TestMemoryBaseBodyValidation:
         """POST /memories with no body -> 422 (not 500); same root cause as flush."""
         response = await client.post("api/v1/memories", headers=logged_in_headers)
         assert response.status_code == 422, response.text
+
+
+class TestMemoryBaseCreateAtomicity:
+    """create() must not leak an orphaned knowledge_base row + collection.
+
+    The three create steps (provision collection, insert knowledge_base row,
+    insert memory_base row) span independent sessions with no overall
+    transaction, so a duplicate name or IntegrityError after provisioning must
+    (a) be caught before provisioning where possible, and (b) trigger
+    compensating cleanup otherwise.
+    """
+
+    @pytest.fixture
+    def service(self):
+        from primeagent.services.memory_base.service import MemoryBaseService
+
+        return MemoryBaseService()
+
+    def _fake_scope(self, mock_db):
+        class _FakeCtx:
+            async def __aenter__(self):
+                return mock_db
+
+            async def __aexit__(self, *a):
+                pass
+
+        scope = MagicMock()
+        scope.return_value = _FakeCtx()
+        return scope
+
+    @pytest.mark.asyncio
+    async def test_duplicate_name_rejected_before_provisioning(self, service):
+        """A duplicate name is caught by the pre-check — nothing is provisioned."""
+        user_id = uuid.uuid4()
+        payload = MemoryBaseCreate(name="dup", flow_id=uuid.uuid4(), embedding_model="text-embedding-3-small")
+
+        flow_exec = MagicMock()
+        flow_exec.first.return_value = object()  # flow ownership passes
+        precheck_exec = MagicMock()
+        precheck_exec.first.return_value = _make_mb(user_id=user_id)  # name already taken
+        db = AsyncMock()
+        db.exec = AsyncMock(side_effect=[flow_exec, precheck_exec])
+
+        initialize = AsyncMock()
+        create_row = AsyncMock()
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.infer_embedding_provider", return_value="OpenAI"),
+            patch("primeagent.services.memory_base.service.require_model_provider", MagicMock()),
+            patch("primeagent.services.memory_base.service.resolve_kb_username", AsyncMock(return_value="testuser")),
+            patch("primeagent.services.memory_base.service.initialize_kb", initialize),
+            patch("primeagent.services.memory_base.service._create_kb_record_for_memory_base", create_row),
+            pytest.raises(ValueError, match="already exists"),
+        ):
+            await service.create(payload, user_id=user_id)
+
+        # Nothing provisioned for a name that was going to be rejected.
+        initialize.assert_not_awaited()
+        create_row.assert_not_awaited()
+        db.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_insert_race_rolls_back_provisioned_kb(self, service):
+        """A concurrent create winning the unique-name race triggers cleanup.
+
+        The pre-check passes, provisioning + the knowledge_base row are created,
+        then the in-insert re-check finds the name taken. The orphaned collection
+        and row must be rolled back rather than leaked.
+        """
+        user_id = uuid.uuid4()
+        payload = MemoryBaseCreate(name="racy", flow_id=uuid.uuid4(), embedding_model="text-embedding-3-small")
+
+        flow_exec = MagicMock()
+        flow_exec.first.return_value = object()  # flow ownership passes
+        precheck_exec = MagicMock()
+        precheck_exec.first.return_value = None  # pre-check sees no duplicate
+        recheck_exec = MagicMock()
+        recheck_exec.first.return_value = _make_mb(user_id=user_id)  # race: now taken
+        db = AsyncMock()
+        db.exec = AsyncMock(side_effect=[flow_exec, precheck_exec, recheck_exec])
+
+        created_kb_id = uuid.uuid4()
+        row_cleanup = AsyncMock()
+        disk_cleanup = AsyncMock()
+        with (
+            patch("primeagent.services.memory_base.service.session_scope", self._fake_scope(db)),
+            patch("primeagent.services.memory_base.service.infer_embedding_provider", return_value="OpenAI"),
+            patch("primeagent.services.memory_base.service.require_model_provider", MagicMock()),
+            patch("primeagent.services.memory_base.service.resolve_kb_username", AsyncMock(return_value="testuser")),
+            patch("primeagent.services.memory_base.service.initialize_kb", AsyncMock()),
+            patch(
+                "primeagent.services.memory_base.service._create_kb_record_for_memory_base",
+                AsyncMock(return_value=created_kb_id),
+            ),
+            patch("primeagent.api.utils.knowledge_base_service.delete_record", row_cleanup),
+            patch("primeagent.services.memory_base.service.delete_kb", disk_cleanup),
+            pytest.raises(ValueError, match="already exists"),
+        ):
+            await service.create(payload, user_id=user_id)
+
+        # Compensating cleanup ran for the provisioned-but-orphaned KB.
+        row_cleanup.assert_awaited_once_with(created_kb_id)
+        disk_cleanup.assert_awaited_once()
+
+
+class TestInitializeKbConnectivity:
+    """initialize_kb surfaces remote-backend misconfig; local Chroma stays lazy."""
+
+    @pytest.mark.parametrize(
+        ("name", "expected_prefix"),
+        [
+            ("catálogo memória", "catlogo_memria"),
+            ("ação", "ao"),
+            ("José", "jos"),
+            ("日本語 base", "base"),
+            ("日本語", "memory"),
+            ("R&D docs", "rd_docs"),
+            ("___private", "private"),
+        ],
+    )
+    def test_memory_base_name_is_sanitized_to_chroma_safe_ascii(self, name, expected_prefix):
+        from primeagent.services.memory_base.kb_path_helpers import sanitize_kb_name
+        from wfx.base.knowledge_bases.validation import validate_collection_name
+
+        prefix = sanitize_kb_name(name)
+
+        assert prefix == expected_prefix
+        validate_collection_name(f"{prefix}_deadbeef", local=True)
+
+    def test_memory_base_name_is_capped_for_local_chroma(self):
+        from primeagent.services.memory_base.kb_path_helpers import sanitize_kb_name
+        from wfx.base.knowledge_bases.validation import MAX_LOCAL_COLLECTION_NAME_LENGTH, validate_collection_name
+
+        generated_name = f"{sanitize_kb_name('a' * 1000)}_deadbeef"
+
+        assert len(generated_name) == MAX_LOCAL_COLLECTION_NAME_LENGTH
+        validate_collection_name(generated_name, local=True)
+
+    @pytest.mark.asyncio
+    async def test_unreachable_remote_backend_raises(self, tmp_path):
+        from primeagent.services.memory_base.kb_path_helpers import BackendProvisioningError, initialize_kb
+        from wfx.base.knowledge_bases.backends.base import TestConnectionResult
+
+        backend = AsyncMock()
+        backend.test_connection = AsyncMock(return_value=TestConnectionResult(ok=False, message="connection refused"))
+        backend.teardown = AsyncMock()
+
+        with (
+            patch("primeagent.services.memory_base.kb_path_helpers.KBStorageHelper.get_root_path", return_value=tmp_path),
+            patch("primeagent.services.memory_base.kb_path_helpers.create_backend", MagicMock(return_value=backend)),
+            pytest.raises(BackendProvisioningError, match="connection refused"),
+        ):
+            await initialize_kb(
+                kb_name="mb_kb",
+                kb_username="testuser",
+                user_id=uuid.uuid4(),
+                backend_type="opensearch",
+                backend_config={"url_variable": "OPENSEARCH_URL"},
+            )
+        backend.teardown.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_endpoint_maps_backend_provisioning_error_to_422(self):
+        from fastapi import HTTPException
+        from primeagent.api.v1.memories import create_memory_base
+        from primeagent.services.database.models.user.model import User
+        from primeagent.services.memory_base.kb_path_helpers import BackendProvisioningError
+
+        fake_user = User(id=uuid.uuid4(), username="alice")
+        mock_service = MagicMock()
+        mock_service.create = AsyncMock(side_effect=BackendProvisioningError("bad opensearch url"))
+
+        with (
+            patch("primeagent.api.v1.memories.get_memory_base_service", return_value=mock_service),
+            patch("primeagent.api.v1.memories.ensure_knowledge_base_permission", AsyncMock()),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await create_memory_base(
+                current_user=fake_user,
+                payload=MemoryBaseCreate(name="mb", flow_id=uuid.uuid4()),
+            )
+        assert exc_info.value.status_code == 422
+
+
+class TestMemoryBaseDBDriven:
+    """DB-driven resolution for Memory Bases.
+
+    Embedding, backend, stats, and lifecycle come from the ``knowledge_base`` row,
+    never the on-disk sidecar — so a Memory Base works on a cloud/replica whose
+    local disk never held the KB directory.
+    """
+
+    def _fake_scope(self, mock_db):
+        class _FakeCtx:
+            async def __aenter__(self):
+                return mock_db
+
+            async def __aexit__(self, *a):
+                pass
+
+        scope = MagicMock()
+        scope.return_value = _FakeCtx()
+        return scope
+
+    @pytest.mark.asyncio
+    async def test_resolve_embedding_selection_prefers_row(self):
+        """Embedding provider/model come from the row's model_selection, no disk."""
+        from primeagent.api.utils.kb_helpers import resolve_embedding_selection
+
+        record = MagicMock(model_selection={"name": "text-embedding-3-large", "provider": "OpenAI"})
+        with patch(
+            "primeagent.api.utils.knowledge_base_service.get_by_user_and_name",
+            AsyncMock(return_value=record),
+        ):
+            provider, model = await resolve_embedding_selection(user_id=uuid.uuid4(), kb_name="mb_kb")
+        assert (provider, model) == ("OpenAI", "text-embedding-3-large")
+
+    @pytest.mark.asyncio
+    async def test_resolve_embedding_selection_defaults_without_row_or_sidecar(self):
+        """No knowledge_base row falls back to the safe default embedding."""
+        from primeagent.api.utils.kb_helpers import resolve_embedding_selection
+
+        with patch(
+            "primeagent.api.utils.knowledge_base_service.get_by_user_and_name",
+            AsyncMock(return_value=None),
+        ):
+            provider, model = await resolve_embedding_selection(user_id=uuid.uuid4(), kb_name="mb_kb")
+        assert provider == "OpenAI"
+        assert model == "text-embedding-3-small"
+
+    @pytest.mark.asyncio
+    async def test_backfill_creates_row_for_orphan_memory_base(self):
+        """Startup backfill creates a knowledge_base row from the memory_base table."""
+        from primeagent.api.utils import knowledge_base_service
+
+        orphan = MagicMock(
+            kb_name="mymemory_ab12cd34",
+            user_id=uuid.uuid4(),
+            embedding_model="text-embedding-3-small",
+        )
+        exec_result = MagicMock()
+        exec_result.all.return_value = [orphan]
+        mock_session = AsyncMock()
+        mock_session.exec = AsyncMock(return_value=exec_result)
+
+        create_row = AsyncMock()
+        with (
+            patch("primeagent.api.utils.knowledge_base_service.session_scope", self._fake_scope(mock_session)),
+            patch("primeagent.api.utils.knowledge_base_service.create_record", create_row),
+        ):
+            inserted = await knowledge_base_service.backfill_memory_base_rows()
+
+        assert inserted == 1
+        create_row.assert_awaited_once()
+        kwargs = create_row.await_args.kwargs
+        assert kwargs["user_id"] == orphan.user_id
+        assert kwargs["name"] == "mymemory_ab12cd34"
+        assert kwargs["backend_type"] == "chroma"
+        assert kwargs["source_types"] == ["memory"]
+        assert kwargs["model_selection"]["name"] == "text-embedding-3-small"
+
+
+class TestSelectEmbeddingProvider:
+    """``_select_embedding_provider`` persists exactly the key downstream lookups use.
+
+    The policy layer matches providers case- and alias-insensitively, but
+    ``EMBEDDING_PROVIDER_CLASS_MAPPING`` is matched verbatim, so a variant that
+    is authorized but persisted as-is would create a Memory Base that can never
+    embed. The ``"Unknown"`` sentinel from ``get_embedding_provider`` must fall
+    back to inference instead of being authorized as a provider name.
+    """
+
+    @pytest.mark.parametrize(
+        ("supplied", "expected"),
+        [
+            ("OpenAI", "OpenAI"),
+            ("openai", "OpenAI"),
+            ("  OpenAI  ", "OpenAI"),
+            ("IBM watsonx.ai", "IBM WatsonX"),
+        ],
+    )
+    def test_supplied_provider_is_canonicalized(self, supplied, expected):
+        from primeagent.services.memory_base.service import _select_embedding_provider
+
+        assert _select_embedding_provider(supplied, "text-embedding-3-small") == expected
+
+    def test_unregistered_provider_is_kept_for_policy_to_reject(self):
+        from primeagent.services.memory_base.service import _select_embedding_provider
+
+        assert _select_embedding_provider("Not A Provider", "some-model") == "Not A Provider"
+
+    @pytest.mark.parametrize("provider", ["OpenAl", "Not A Provider", "Anthropic"])
+    def test_provider_without_embedding_class_is_rejected(self, provider):
+        """Typos, unknown names, and chat-only providers fail fast instead of breaking ingestion later."""
+        from primeagent.services.memory_base.service import EmbeddingProviderValidationError, _require_embedding_class
+
+        with pytest.raises(EmbeddingProviderValidationError, match=provider):
+            _require_embedding_class(provider)
+
+    @pytest.mark.parametrize("supplied", [None, "", "   ", "Unknown"])
+    def test_missing_or_unknown_provider_falls_back_to_inference(self, supplied):
+        from primeagent.services.memory_base import service as service_module
+
+        with patch.object(service_module, "infer_embedding_provider", return_value="Inferred") as infer:
+            assert service_module._select_embedding_provider(supplied, "text-embedding-3-small") == "Inferred"
+        infer.assert_called_once_with("text-embedding-3-small")
+
+
+@pytest.mark.parametrize("mode", ["local", "cloud"])
+async def test_retired_chroma_cannot_provision_memory_base(mode):
+    from primeagent.services.memory_base.kb_path_helpers import BackendProvisioningError, initialize_kb
+
+    with pytest.raises(BackendProvisioningError, match="Chroma is retired"):
+        await initialize_kb(kb_name="legacy", kb_username="owner", backend_type="chroma", backend_config={"mode": mode})

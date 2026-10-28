@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from typer.testing import CliRunner
 from wfx.__main__ import app
 from wfx.interface.components import component_cache
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -83,6 +83,23 @@ class TestExecuteRealFlows:
         assert output["success"] is True
         assert "result" in output
         assert "Hello from test!" in output["result"]
+
+    def test_run_exported_code_as_lines(self, simple_chat_json, tmp_path):
+        """Downloaded flows execute with code stored as source lines."""
+        flow = json.loads(simple_chat_json.read_text(encoding="utf-8"))
+        for node in flow["data"]["nodes"]:
+            for field in node["data"]["node"]["template"].values():
+                if isinstance(field, dict) and field.get("type") == "code":
+                    field["value"] = field["value"].split("\n")
+        exported = tmp_path / "exported.json"
+        exported.write_text(json.dumps(flow), encoding="utf-8")
+
+        result = runner.invoke(app, ["run", str(exported), "Exported flow echo"])
+
+        assert result.exit_code == 0, result.stdout
+        output = json.loads(result.stdout)
+        assert output["success"] is True
+        assert "Exported flow echo" in output["result"]
 
     def test_run_json_flow_verbose(self, simple_chat_json):
         """Test executing with verbose output."""
@@ -226,7 +243,7 @@ class TestExecuteRealFlows:
                 return_value=settings_service,
             ),
             patch(
-                "wfx.utils.flow_validation.ensure_component_hash_lookups_loaded",
+                "wfx.load.load.ensure_component_hash_lookups_loaded",
                 new=AsyncMock(return_value=_builtin_hashes_from_flow(flow)),
             ),
             patch.object(component_cache, "type_to_current_hash", _builtin_hashes_from_flow(flow)),

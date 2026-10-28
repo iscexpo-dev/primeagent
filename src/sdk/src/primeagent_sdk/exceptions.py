@@ -35,7 +35,7 @@ class PrimeagentConnectionError(PrimeagentError):
 class PrimeagentTimeoutError(PrimeagentError):
     """A background job or polling operation exceeded its timeout.
 
-    Adapted from ``PrimeagentV2TimeoutError`` in khulnasoft/sdk PR #1
+    Adapted from ``PrimeagentV2TimeoutError`` in khulnasoft-bot/sdk PR #1
     (Janardan Singh Kavia, IBM Corp., Apache 2.0).
     """
 

@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import type { handleOnNewValueType } from "@/CustomNodes/hooks/use-handle-new-value";
 import CodeAreaComponent from "@/components/core/parameterRenderComponent/components/codeAreaComponent";
+import DataDisplayComponent from "@/components/core/parameterRenderComponent/components/dataDisplayComponent";
 import DBProviderInputComponent from "@/components/core/parameterRenderComponent/components/dbProviderInputComponent";
 import ModelInputComponent from "@/components/core/parameterRenderComponent/components/modelInputComponent";
 import SliderComponent from "@/components/core/parameterRenderComponent/components/sliderComponent";
@@ -8,12 +9,17 @@ import TableNodeComponent from "@/components/core/parameterRenderComponent/compo
 import TabComponent from "@/components/core/parameterRenderComponent/components/tabComponent";
 import { TEXT_FIELD_TYPES } from "@/constants/constants";
 import CustomConnectionComponent from "@/customization/components/custom-connectionComponent";
+import CustomConnectionRefComponent from "@/customization/components/custom-connectionRefComponent";
 import CustomInputFileComponent from "@/customization/components/custom-input-file";
 import CustomLinkComponent from "@/customization/components/custom-linkComponent";
 import { ENABLE_INSPECTION_PANEL } from "@/customization/feature-flags";
 import type { APIClassType, InputFieldType } from "@/types/api";
+import { CONNECTION_REF_FIELD_TYPE } from "@/utils/connection-ref-gate";
+import { templateInputValues } from "@/utils/connection-scopes";
 import AccordionPromptComponent from "./components/accordionPromptComponent";
+import ActionPickerComponent from "./components/actionPickerComponent";
 import DictComponent from "./components/dictComponent";
+import DurationComponent from "./components/durationComponent";
 import { EmptyParameterComponent } from "./components/emptyParameterComponent";
 import FloatComponent from "./components/floatComponent";
 import InputListComponent from "./components/inputListComponent";
@@ -45,6 +51,7 @@ export function ParameterRenderComponent({
   placeholder,
   isToolMode,
   nodeInformationMetadata,
+  ariaLabelledBy,
 }: {
   handleOnNewValue:
     | handleOnNewValueType
@@ -54,14 +61,15 @@ export function ParameterRenderComponent({
   templateData: Partial<InputFieldType>;
   templateValue: unknown;
   editNode: boolean;
-  showParameter?: boolean;
-  inspectionPanel?: boolean;
+  showParameter: boolean;
+  inspectionPanel: boolean;
   handleNodeClass: (value: unknown, code?: string, type?: string) => void;
   nodeClass: APIClassType;
   disabled: boolean;
   placeholder?: string;
   isToolMode?: boolean;
   nodeInformationMetadata?: NodeInfoType;
+  ariaLabelledBy?: string;
 }) {
   const { t } = useTranslation();
   const id = (
@@ -89,6 +97,7 @@ export function ParameterRenderComponent({
       hasRefreshButton: templateData.refresh_button,
       showParameter,
       inspectionPanel,
+      ariaLabelledBy,
     };
 
     if (TEXT_FIELD_TYPES.includes(templateData.type ?? "")) {
@@ -257,7 +266,7 @@ export function ParameterRenderComponent({
         return (
           <SliderComponent
             {...baseInputProps}
-            value={templateValue as string[] | number[]}
+            value={templateValue}
             rangeSpec={templateData.rangeSpec ?? templateData.range_spec}
             minLabel={templateData?.min_label}
             maxLabel={templateData?.max_label}
@@ -266,6 +275,8 @@ export function ParameterRenderComponent({
             sliderButtons={templateData?.slider_buttons}
             sliderButtonsOptions={templateData?.slider_buttons_options}
             sliderInput={templateData?.slider_input}
+            valueInverted={templateData?.value_inverted}
+            sliderColor={templateData?.slider_color}
             id={`slider_${id}`}
           />
         );
@@ -279,6 +290,27 @@ export function ParameterRenderComponent({
             searchCategory={templateData?.search_category}
             limit={templateData?.limit}
             id={`sortablelist_${id}`}
+          />
+        );
+      case "duration":
+        return (
+          <DurationComponent
+            {...baseInputProps}
+            options={
+              Array.isArray(templateData.options) ? templateData.options : []
+            }
+            id={`duration_${id}`}
+          />
+        );
+      case "actionPicker":
+        return (
+          <ActionPickerComponent
+            {...baseInputProps}
+            options={
+              Array.isArray(templateData.options) ? templateData.options : []
+            }
+            combobox={templateData.combobox}
+            id={`actionpicker_${id}`}
           />
         );
       case "connect": {
@@ -303,6 +335,21 @@ export function ParameterRenderComponent({
           />
         );
       }
+      case CONNECTION_REF_FIELD_TYPE:
+        return (
+          <CustomConnectionRefComponent
+            {...baseInputProps}
+            id={`connectionref_${id}`}
+            value={typeof templateValue === "string" ? templateValue : ""}
+            provider={templateData?.provider}
+            requiredScopes={templateData?.required_scopes ?? []}
+            conditionalScopes={templateData?.conditional_scopes ?? []}
+            inputValues={templateInputValues(nodeClass?.template)}
+            capabilities={templateData?.capabilities ?? []}
+            identityKind={templateData?.identity_kind}
+            ownershipMode={templateData?.ownership_mode}
+          />
+        );
       case "tab":
         return (
           <TabComponent
@@ -347,10 +394,27 @@ export function ParameterRenderComponent({
             id={`dbprovider_${id}`}
           />
         );
+      case "data_display":
+        return (
+          <DataDisplayComponent
+            {...baseInputProps}
+            buttonText={templateData?.button_text}
+            buttonIcon={templateData?.button_icon}
+            id={`data_display_${id}`}
+          />
+        );
       default:
         return <EmptyParameterComponent {...baseInputProps} />;
     }
   };
 
+  // No wrapping role="group" here: a screen reader announces a group's own
+  // name on entry, then the focused control's name right after — since
+  // every widget that actually applies ariaLabelledBy composes the same
+  // field label into its own accessible name, a wrapper would double up
+  // ("Model Name" from the group, then "Model Name gpt-4" from the
+  // combobox). Widgets that don't yet apply it themselves get nothing from
+  // wrapping either way — role="group" doesn't propagate a name to a
+  // focused descendant control, only to the group boundary itself.
   return renderComponent();
 }

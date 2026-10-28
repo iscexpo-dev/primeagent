@@ -1,10 +1,13 @@
+from pathlib import Path, PureWindowsPath
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlmodel import apaginate
-from sqlmodel import col, delete, select
+from wfx.utils.file_path_security import LocalFileAccessError, enforce_local_file_access, enforce_storage_key_scope
+from sqlalchemy.orm.exc import StaleDataError
+from sqlmodel import col, delete, func, select
 
 from primeagent.api.utils import DbSession, custom_params
 from primeagent.api.utils.flow_utils import compute_virtual_flow_id
@@ -12,14 +15,19 @@ from primeagent.schema.message import MessageResponse
 from primeagent.services.auth.utils import get_current_active_superuser, get_current_active_user
 from primeagent.services.authorization import FlowAction, ensure_flow_permission
 from primeagent.services.authorization.fetch import authorized_or_owner_scoped
-from primeagent.services.database.models.flow.model import Flow
+from primeagent.services.database.models.flow.model import Flow, is_virtual_flow_id, persisted_flow_history_filter
 from primeagent.services.database.models.message.crud import (
     delete_messages_for_user,
     delete_messages_for_user_by_session,
     get_message_for_user,
     get_messages_for_user_by_session,
 )
-from primeagent.services.database.models.message.model import MessageRead, MessageTable, MessageUpdate
+from primeagent.services.database.models.message.model import (
+    ALLOWED_MESSAGE_ORDER_FIELDS,
+    MessageRead,
+    MessageTable,
+    MessageUpdate,
+)
 from primeagent.services.database.models.transactions.crud import transform_transaction_table_for_logs
 from primeagent.services.database.models.transactions.model import TransactionLogsResponse, TransactionTable
 from primeagent.services.database.models.user.model import User
@@ -28,7 +36,9 @@ from primeagent.services.database.models.vertex_builds.crud import (
     get_vertex_builds_by_flow_id,
 )
 from primeagent.services.database.models.vertex_builds.model import VertexBuildMapModel
-from primeagent.services.deps import get_memory_base_service, get_tracing_service
+from primeagent.services.deps import get_memory_base_service, get_settings_service, get_tracing_service
+from primeagent.services.knowledge_base_storage.runtime import StorageUnavailableError
+from primeagent.services.memory_base.ingestion import session_storage_operation
 from primeagent.services.tracing.langfuse import (
     delete_feedback_score,
     langfuse_is_configured,
@@ -37,6 +47,99 @@ from primeagent.services.tracing.langfuse import (
 )
 
 router = APIRouter(prefix="/monitor", tags=["Monitor"])
+
+MESSAGE_UPDATE_FAILED = "Could not update the message."
+
+
+def _validate_message_attachment_scopes(files: list[str] | None, scope_ids: tuple[object, ...]) -> None:
+    """Keep edited attachments inside the authenticated user's message storage namespaces."""
+    scopes = tuple(scope for scope in scope_ids if scope is not None)
+    try:
+        for attachment in files or ():
+            file = attachment
+            path = Path(file)
+            if ".." in file.replace("\\", "/").split("/"):
+                msg = "Message attachments cannot contain parent traversal."
+                raise LocalFileAccessError(msg)
+            if path.is_absolute():
+                settings = get_settings_service().settings
+                if settings.storage_type == "s3":
+                    msg = "Object-storage attachments must use uploaded-file keys."
+                    raise LocalFileAccessError(msg)
+                # Normal component execution stores resolved local paths. Retain those
+                # references on edits, but authorize them against trusted route scopes.
+                resolved = enforce_local_file_access(path, scope_ids=scopes)
+                file = resolved.relative_to(Path(settings.config_dir).resolve()).as_posix()
+            elif PureWindowsPath(file).drive:
+                msg = "Message attachments must use uploaded-file keys."
+                raise LocalFileAccessError(msg)
+            enforce_storage_key_scope(file, scopes)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Message attachment is outside the permitted storage scope."
+        ) from exc
+
+
+# Message-history reads must never return an entire table: the editor polls
+# this endpoint every few seconds, so an unbounded default serializes the full
+# history on every request and freezes the UI on flows with large histories
+# (issue #15023). The session-list endpoints share the bounds for the same
+# reason (issue #15463). Values match the list-endpoint defaults used by the
+# authz routers (_LIST_DEFAULT_LIMIT / _LIST_MAX_LIMIT).
+_MESSAGES_DEFAULT_LIMIT = 100
+_MESSAGES_MAX_LIMIT = 200
+
+
+def _paged_session_ids_stmt(stmt, *, limit: int | None, offset: int | None):
+    """Group a session_id select into distinct sessions, newest activity first, and page it.
+
+    A flow can hold ~10k sessions and the editor lists them on load, so the list
+    must be bounded (issue #15463). Ordering by latest message (not first) keeps
+    active sessions on the first page; session_id breaks timestamp ties so
+    offset paging is stable.
+    """
+    effective_limit = _MESSAGES_DEFAULT_LIMIT if not limit else min(limit, _MESSAGES_MAX_LIMIT)
+    return (
+        stmt.where(col(MessageTable.session_id).isnot(None))
+        .group_by(MessageTable.session_id)
+        .order_by(func.max(MessageTable.timestamp).desc(), col(MessageTable.session_id).desc())
+        .offset(offset or 0)
+        .limit(effective_limit)
+    )
+
+
+def _sorted_for_display(messages: list[MessageTable], *, order_by: str | None, descending: bool) -> list[MessageTable]:
+    """Re-order an already-bounded window into the caller's requested display order."""
+    if not order_by:
+        return messages
+    if order_by == "timestamp":
+        return messages if descending else messages[::-1]
+    # Text is nullable in storage; preserve stable ordering within equal values.
+    return sorted(
+        messages,
+        key=lambda message: (getattr(message, order_by) is None, getattr(message, order_by) or ""),
+        reverse=descending,
+    )
+
+
+def _message_history_response(message: MessageTable) -> MessageResponse:
+    """Represent legacy NULL text as empty text in the existing response schema."""
+    if message.text is None:
+        return MessageResponse.model_validate(message.model_dump() | {"text": ""})
+    return MessageResponse.model_validate(message, from_attributes=True)
+
+
+def _message_update_response(message: MessageTable) -> MessageRead:
+    """Represent legacy NULL text in update responses without changing storage."""
+    if message.text is None:
+        return MessageRead.model_validate(message.model_dump() | {"text": ""})
+    return MessageRead.model_validate(message, from_attributes=True)
+
+
+async def _log_message_update_failure(error: Exception) -> None:
+    from wfx.log.logger import logger
+
+    await logger.aerror("Message update failed", error_type=type(error).__name__)
 
 
 @router.get("/job_queue", dependencies=[Depends(get_current_active_superuser)])
@@ -98,6 +201,8 @@ async def _ensure_flow_action_or_404(
     action: FlowAction,
 ) -> Flow | None:
     """Load a flow (share-aware), enforce permission, return None if missing."""
+    if is_virtual_flow_id(flow_id):
+        return None
     flow = await authorized_or_owner_scoped(
         session,
         Flow,
@@ -119,28 +224,10 @@ async def _ensure_flow_action_or_404(
     return flow
 
 
-async def _purge_memory_base_session_data(user_id: UUID, session_ids: list[str]) -> None:
-    """Best-effort: drop ingested chunks for the deleted sessions from each MB.
-
-    Failures here are logged but never abort the message-delete response — the
-    user expects "delete this session" to succeed even if KB cleanup hits an
-    issue. The follow-up consequence (ghost chunks) is logged for ops to fix.
-    """
-    if not session_ids:
-        return
-    try:
-        await get_memory_base_service().purge_session_data(user_id=user_id, session_ids=session_ids)
-    except Exception:  # noqa: BLE001
-        # Lazy import to avoid pulling logger into the module-import path for
-        # an endpoint that doesn't need it on the happy path.
-        from wfx.log.logger import logger
-
-        await logger.aerror(
-            "Memory Base session purge failed for user=%s sessions=%d",
-            user_id,
-            len(session_ids),
-            exc_info=True,
-        )
+async def _purge_memory_base_session_data(user_id: UUID, session_ids: list[str], *, db=None) -> None:
+    """Purge vectors before committing message deletion, preserving retry on failure."""
+    if session_ids:
+        await get_memory_base_service().purge_session_data(user_id=user_id, session_ids=session_ids, db=db)
 
 
 @router.get("/builds", dependencies=[Depends(get_current_active_user)])
@@ -187,6 +274,8 @@ async def get_message_sessions(
     session: DbSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
     flow_id: Annotated[UUID | None, Query()] = None,
+    limit: Annotated[int | None, Query(ge=0)] = None,
+    offset: Annotated[int | None, Query(ge=0)] = None,
 ) -> list[str]:
     try:
         # When a flow_id is provided, gate on flow READ permission so a viewer
@@ -197,20 +286,16 @@ async def get_message_sessions(
             flow = await _ensure_flow_action_or_404(session, flow_id=flow_id, user=current_user, action=FlowAction.READ)
             if flow is None:
                 return []
-            stmt = select(MessageTable.session_id).distinct()
-            stmt = stmt.where(MessageTable.flow_id == flow_id)
-            stmt = stmt.where(col(MessageTable.session_id).isnot(None))
+            stmt = select(MessageTable.session_id).where(MessageTable.flow_id == flow_id)
             stmt = stmt.where(~col(MessageTable.session_id).startswith("agentic_"))
-            session_ids = await session.exec(stmt)
+            session_ids = await session.exec(_paged_session_ids_stmt(stmt, limit=limit, offset=offset))
             return list(session_ids)
 
-        stmt = select(MessageTable.session_id).distinct()
-        stmt = stmt.join(Flow, MessageTable.flow_id == Flow.id)
-        stmt = stmt.where(col(MessageTable.session_id).isnot(None))
+        stmt = select(MessageTable.session_id).join(Flow, MessageTable.flow_id == Flow.id)
         stmt = stmt.where(~col(MessageTable.session_id).startswith("agentic_"))
-        stmt = stmt.where(Flow.user_id == current_user.id)
+        stmt = stmt.where(Flow.user_id == current_user.id, persisted_flow_history_filter())
 
-        session_ids = await session.exec(stmt)
+        session_ids = await session.exec(_paged_session_ids_stmt(stmt, limit=limit, offset=offset))
         return list(session_ids)
     except HTTPException:
         raise
@@ -224,9 +309,13 @@ async def get_messages(
     current_user: Annotated[User, Depends(get_current_active_user)],
     flow_id: Annotated[UUID | None, Query()] = None,
     session_id: Annotated[str | None, Query()] = None,
+    end_user_id: Annotated[str | None, Query()] = None,
     sender: Annotated[str | None, Query()] = None,
     sender_name: Annotated[str | None, Query()] = None,
     order_by: Annotated[str | None, Query()] = "timestamp",
+    order: Annotated[str, Query()] = "ASC",
+    limit: Annotated[int | None, Query(ge=0)] = None,
+    offset: Annotated[int | None, Query(ge=0)] = None,
 ) -> list[MessageResponse]:
     try:
         # When a flow_id is provided, gate on flow READ permission first; the
@@ -239,7 +328,7 @@ async def get_messages(
 
         # Use JOIN instead of subquery for better performance
         stmt = select(MessageTable)
-        stmt = stmt.join(Flow, MessageTable.flow_id == Flow.id)
+        stmt = stmt.join(Flow, MessageTable.flow_id == Flow.id).where(persisted_flow_history_filter())
         if flow_id is None:
             stmt = stmt.where(Flow.user_id == current_user.id)
 
@@ -250,15 +339,39 @@ async def get_messages(
 
             decoded_session_id = unquote(session_id)
             stmt = stmt.where(MessageTable.session_id == decoded_session_id)
+        if end_user_id:
+            # Serving-plane: pull one end user's messages by the indexed owner column. Derive the
+            # raw id to the same UUID the write stamped (D6 / resolve_message_owner_id) so the
+            # predicate matches. Optional + off by default -> existing callers are unchanged (BC).
+            from wfx.memory.flow_context import derive_message_owner_uuid
+
+            stmt = stmt.where(MessageTable.user_id == derive_message_owner_uuid(end_user_id))
         if sender:
             stmt = stmt.where(MessageTable.sender == sender)
         if sender_name:
             stmt = stmt.where(MessageTable.sender_name == sender_name)
-        if order_by:
-            order_col = getattr(MessageTable, order_by).asc()
-            stmt = stmt.order_by(order_col)
-        messages = await session.exec(stmt)
-        return [MessageResponse.model_validate(d, from_attributes=True) for d in messages]
+        normalized_order = order.upper()
+        if normalized_order not in {"ASC", "DESC"}:
+            raise HTTPException(status_code=400, detail=f"Invalid order direction: {order}")
+        if order_by and order_by not in ALLOWED_MESSAGE_ORDER_FIELDS:
+            raise HTTPException(status_code=400, detail=f"Invalid order_by field: {order_by}")
+        # Always select the newest window by timestamp DESC (anchored at the most
+        # recent row): the editor polls with flow_id only, and an unbounded default
+        # serializes the whole history on every poll (issue #15023). Selecting by
+        # timestamp keeps offset paging aligned with history age even when the
+        # caller sorts by a non-timestamp field. A falsy limit (None/0) falls back
+        # to the default, matching the previous `if limit:` behavior where 0 meant
+        # "no limit".
+        effective_limit = _MESSAGES_DEFAULT_LIMIT if not limit else min(limit, _MESSAGES_MAX_LIMIT)
+        stmt = stmt.order_by(col(MessageTable.timestamp).desc(), col(MessageTable.id).desc())
+        if offset:
+            stmt = stmt.offset(offset)
+        stmt = stmt.limit(effective_limit)
+        window = list(await session.exec(stmt))
+        window = _sorted_for_display(window, order_by=order_by, descending=normalized_order == "DESC")
+        return [_message_history_response(message) for message in window]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -269,6 +382,7 @@ async def delete_messages(
     session: DbSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> None:
+    """Delete authorized messages after fencing associated Memory storage and tracking data."""
     try:
         # Ownership guard lives in the CRUD layer: only messages belonging to
         # current_user are selected and deleted; foreign IDs are ignored.
@@ -276,7 +390,22 @@ async def delete_messages(
         # Practical effect:
         # - Mixed lists (owned + foreign IDs) only delete owned rows.
         # - Pure foreign lists keep endpoint idempotent with 204 and no changes.
-        await delete_messages_for_user(session, current_user.id, message_ids)
+        owned_sessions = list(
+            await session.exec(
+                select(MessageTable.session_id)
+                .distinct()
+                .join(Flow, MessageTable.flow_id == Flow.id)
+                .where(Flow.user_id == current_user.id)
+                .where(col(MessageTable.id).in_(message_ids))
+                .where(col(MessageTable.session_id).isnot(None))
+            )
+        )
+        async with session_storage_operation(user_id=current_user.id, session_ids=owned_sessions):
+            await delete_messages_for_user(session, current_user.id, message_ids)
+            await session.commit()
+    except StorageUnavailableError as e:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -289,13 +418,18 @@ async def update_message(
     background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
+    """Update an owned message after authorizing its flow and attachment namespaces."""
+    # Rollback expires ORM state, so keep the ownership key as a stable scalar
+    # for the post-race lookup.
+    current_user_id = current_user.id
     try:
         # Fetch is scoped by user ownership. A foreign message ID resolves to
         # None so callers receive the same 404 as a non-existent message.
         # This avoids leaking whether another user's message exists.
-        db_message = await get_message_for_user(session, current_user.id, message_id)
+        db_message = await get_message_for_user(session, current_user_id, message_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        await _log_message_update_failure(e)
+        raise HTTPException(status_code=500, detail=MESSAGE_UPDATE_FAILED) from e
 
     if not db_message:
         # Intentionally return 404 for both "not found" and "not owned".
@@ -304,9 +438,13 @@ async def update_message(
     # Bind the parent flow's authorization to message writes so a viewer-role
     # user cannot edit messages on a flow they only have READ on.
     if db_message.flow_id is not None:
-        await _ensure_flow_action_or_404(
+        db_flow = await _ensure_flow_action_or_404(
             session, flow_id=db_message.flow_id, user=current_user, action=FlowAction.WRITE
         )
+        if db_flow is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+    _validate_message_attachment_scopes(message.files, (current_user.id, db_message.flow_id))
 
     try:
         previous_positive_feedback = _get_positive_feedback_value(db_message)
@@ -318,8 +456,23 @@ async def update_message(
         session.add(db_message)
         await session.flush()
         await session.refresh(db_message)
+    except StaleDataError as e:
+        # A flow/session cleanup can delete the row after the ownership lookup.
+        # Recover the failed transaction, then re-check through the same
+        # owner-scoped query so missing and foreign IDs remain indistinguishable.
+        try:
+            await session.rollback()
+            current_db_message = await get_message_for_user(session, current_user_id, message_id)
+        except Exception as recheck_error:
+            await _log_message_update_failure(recheck_error)
+            raise HTTPException(status_code=500, detail=MESSAGE_UPDATE_FAILED) from recheck_error
+        if current_db_message is None:
+            raise HTTPException(status_code=404, detail="Message not found") from e
+        await _log_message_update_failure(e)
+        raise HTTPException(status_code=500, detail=MESSAGE_UPDATE_FAILED) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        await _log_message_update_failure(e)
+        raise HTTPException(status_code=500, detail=MESSAGE_UPDATE_FAILED) from e
 
     current_positive_feedback = _get_positive_feedback_value(db_message)
     langfuse_trace_id = _resolve_langfuse_trace_id(db_message)
@@ -343,7 +496,7 @@ async def update_message(
                 sender=db_message.sender,
                 positive_feedback=current_positive_feedback,
             )
-    return db_message
+    return _message_update_response(db_message)
 
 
 @router.patch(
@@ -397,18 +550,19 @@ async def delete_messages_session(
     Only deletes messages from sessions belonging to flows owned by the current user.
     """
     try:
-        # Keep endpoint idempotent (204) while enforcing ownership in CRUD.
-        # If the session belongs to another user, this becomes a safe no-op.
-        # This preserves existing client behavior while blocking cross-user deletes.
-        await delete_messages_for_user_by_session(session, current_user.id, session_id)
-        await session.commit()
+        # Memory tracking is owner-scoped independently of message rows. It
+        # must still be purged when the last message was deleted earlier.
+        owned_sessions = [session_id]
+        async with session_storage_operation(user_id=current_user.id, session_ids=owned_sessions):
+            await _purge_memory_base_session_data(current_user.id, owned_sessions, db=session)
+            await delete_messages_for_user_by_session(session, current_user.id, session_id)
+            await session.commit()
+    except StorageUnavailableError as e:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=str(e)) from e
-
-    # Purge ingested chunks AFTER the message rows are committed so a chunk-delete
-    # failure can never roll back the user-visible message delete.
-    await _purge_memory_base_session_data(current_user.id, [session_id])
 
     return {"message": "Messages deleted successfully"}
 
@@ -450,39 +604,49 @@ async def delete_messages_sessions(
         # First, get distinct session IDs that have messages belonging to the user's flows
         session_stmt = select(MessageTable.session_id).distinct()
         session_stmt = session_stmt.join(Flow, MessageTable.flow_id == Flow.id)
-        session_stmt = session_stmt.where(Flow.user_id == current_user.id)
+        session_stmt = session_stmt.where(Flow.user_id == current_user.id, persisted_flow_history_filter())
         session_stmt = session_stmt.where(col(MessageTable.session_id).in_(session_ids))
 
         result = await session.exec(session_stmt)
-        affected_session_ids = list(result)
+        from primeagent.services.database.models.memory_base.model import MemoryBase, MemoryBaseSession
+
+        tracked = await session.exec(
+            select(MemoryBaseSession.session_id)
+            .join(MemoryBase, MemoryBaseSession.memory_base_id == MemoryBase.id)
+            .where(MemoryBase.user_id == current_user.id)
+            .where(col(MemoryBaseSession.session_id).in_(session_ids))
+        )
+        affected_session_ids = sorted(set(result).union(tracked))
         affected_count = len(affected_session_ids)
 
         if not affected_session_ids:
             # No messages found for this user's flows with these session_ids
             return {"message": "No sessions to delete", "deleted_count": 0}
 
-        # Get message IDs to delete
-        msg_stmt = select(MessageTable.id)
-        msg_stmt = msg_stmt.join(Flow, MessageTable.flow_id == Flow.id)
-        msg_stmt = msg_stmt.where(Flow.user_id == current_user.id)
-        msg_stmt = msg_stmt.where(col(MessageTable.session_id).in_(affected_session_ids))
+        async with session_storage_operation(user_id=current_user.id, session_ids=affected_session_ids):
+            await _purge_memory_base_session_data(current_user.id, affected_session_ids, db=session)
+            # Get message IDs to delete
+            msg_stmt = select(MessageTable.id)
+            msg_stmt = msg_stmt.join(Flow, MessageTable.flow_id == Flow.id)
+            msg_stmt = msg_stmt.where(Flow.user_id == current_user.id, persisted_flow_history_filter())
+            msg_stmt = msg_stmt.where(col(MessageTable.session_id).in_(affected_session_ids))
 
-        msg_result = await session.exec(msg_stmt)
-        message_ids = list(msg_result)
+            msg_result = await session.exec(msg_stmt)
+            message_ids = list(msg_result)
 
-        # Delete only the messages that belong to the user
-        await session.exec(
-            delete(MessageTable)
-            .where(col(MessageTable.id).in_(message_ids))
-            .execution_options(synchronize_session="fetch")
-        )
-        await session.commit()
+            # Delete only the messages that belong to the user
+            await session.exec(
+                delete(MessageTable)
+                .where(col(MessageTable.id).in_(message_ids))
+                .execution_options(synchronize_session="fetch")
+            )
+            await session.commit()
+    except StorageUnavailableError as e:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=str(e)) from e
-
-    # Purge ingested chunks AFTER the messages are committed; same reasoning as above.
-    await _purge_memory_base_session_data(current_user.id, list(affected_session_ids))
 
     return {
         "message": f"Messages deleted successfully for {affected_count} session{'s' if affected_count != 1 else ''}",
@@ -490,24 +654,30 @@ async def delete_messages_sessions(
     }
 
 
+def _compute_shared_message_flow_id(user_id: UUID, source_flow_id: UUID) -> UUID:
+    """Derive the authenticated user's virtual flow ID for shared-message storage."""
+    return compute_virtual_flow_id(user_id, source_flow_id, principal_type="user")
+
+
 @router.get("/messages/shared/sessions")
 async def get_shared_message_sessions(
     session: DbSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
     source_flow_id: Annotated[UUID, Query(description="The original public flow ID")],
+    limit: Annotated[int | None, Query(ge=0)] = None,
+    offset: Annotated[int | None, Query(ge=0)] = None,
 ) -> list[str]:
     """Get session IDs for a shared/public flow, scoped to the authenticated user.
 
     Uses a deterministic virtual flow_id derived from the user's ID and the
-    original flow ID. Only messages stored under this virtual flow_id are returned.
+    original flow ID. Only messages stored under this virtual flow_id are returned,
+    most recently active session first, bounded by ``limit``/``offset``.
     """
     try:
-        virtual_flow_id = compute_virtual_flow_id(current_user.id, source_flow_id)
-        stmt = select(MessageTable.session_id).distinct()
-        stmt = stmt.where(MessageTable.flow_id == virtual_flow_id)
-        stmt = stmt.where(col(MessageTable.session_id).isnot(None))
+        virtual_flow_id = _compute_shared_message_flow_id(current_user.id, source_flow_id)
+        stmt = select(MessageTable.session_id).where(MessageTable.flow_id == virtual_flow_id)
 
-        session_ids = await session.exec(stmt)
+        session_ids = await session.exec(_paged_session_ids_stmt(stmt, limit=limit, offset=offset))
         return list(session_ids)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -520,6 +690,9 @@ async def get_shared_messages(
     source_flow_id: Annotated[UUID, Query(description="The original public flow ID")],
     session_id: Annotated[str | None, Query()] = None,
     order_by: Annotated[str | None, Query()] = "timestamp",
+    order: Annotated[str, Query()] = "ASC",
+    limit: Annotated[int | None, Query(ge=0)] = None,
+    offset: Annotated[int | None, Query(ge=0)] = None,
 ) -> list[MessageResponse]:
     """Get messages for a shared/public flow, scoped to the authenticated user.
 
@@ -527,7 +700,7 @@ async def get_shared_messages(
     original flow ID. Only messages stored under this virtual flow_id are returned.
     """
     try:
-        virtual_flow_id = compute_virtual_flow_id(current_user.id, source_flow_id)
+        virtual_flow_id = _compute_shared_message_flow_id(current_user.id, source_flow_id)
         stmt = select(MessageTable)
         stmt = stmt.where(MessageTable.flow_id == virtual_flow_id)
 
@@ -536,15 +709,20 @@ async def get_shared_messages(
 
             decoded_session_id = unquote(session_id)
             stmt = stmt.where(MessageTable.session_id == decoded_session_id)
-        allowed_order_fields = {"timestamp", "sender", "sender_name", "session_id", "text"}
-        if order_by:
-            if order_by not in allowed_order_fields:
-                raise HTTPException(status_code=400, detail=f"Invalid order_by field: {order_by}")
-            order_col = getattr(MessageTable, order_by).asc()
-            stmt = stmt.order_by(order_col)
-
-        messages = await session.exec(stmt)
-        return [MessageResponse.model_validate(d, from_attributes=True) for d in messages]
+        normalized_order = order.upper()
+        if normalized_order not in {"ASC", "DESC"}:
+            raise HTTPException(status_code=400, detail=f"Invalid order direction: {order}")
+        if order_by and order_by not in ALLOWED_MESSAGE_ORDER_FIELDS:
+            raise HTTPException(status_code=400, detail=f"Invalid order_by field: {order_by}")
+        # Select the newest window by timestamp DESC, mirroring get_messages (issue #15023).
+        effective_limit = _MESSAGES_DEFAULT_LIMIT if not limit else min(limit, _MESSAGES_MAX_LIMIT)
+        stmt = stmt.order_by(col(MessageTable.timestamp).desc(), col(MessageTable.id).desc())
+        if offset:
+            stmt = stmt.offset(offset)
+        stmt = stmt.limit(effective_limit)
+        window = list(await session.exec(stmt))
+        window = _sorted_for_display(window, order_by=order_by, descending=normalized_order == "DESC")
+        return [_message_history_response(message) for message in window]
     except HTTPException:
         raise
     except Exception as e:
@@ -560,7 +738,7 @@ async def delete_shared_messages_session(
 ):
     """Delete messages for a session on a shared/public flow, scoped to the authenticated user."""
     try:
-        virtual_flow_id = compute_virtual_flow_id(current_user.id, source_flow_id)
+        virtual_flow_id = _compute_shared_message_flow_id(current_user.id, source_flow_id)
         stmt = (
             delete(MessageTable)
             .where(MessageTable.flow_id == virtual_flow_id)
@@ -582,7 +760,7 @@ async def update_shared_message(
 ):
     """Update a message on a shared/public flow, scoped to the authenticated user."""
     try:
-        virtual_flow_id = compute_virtual_flow_id(current_user.id, source_flow_id)
+        virtual_flow_id = _compute_shared_message_flow_id(current_user.id, source_flow_id)
         db_message = (
             await session.exec(
                 select(MessageTable).where(
@@ -597,6 +775,8 @@ async def update_shared_message(
     if not db_message:
         raise HTTPException(status_code=404, detail="Message not found")
 
+    _validate_message_attachment_scopes(message.files, (current_user.id, virtual_flow_id, source_flow_id))
+
     try:
         message_dict = message.model_dump(exclude_unset=True, exclude_none=True)
         if "text" in message_dict and message_dict["text"] != db_message.text:
@@ -607,7 +787,7 @@ async def update_shared_message(
         await session.refresh(db_message)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
-    return db_message
+    return _message_update_response(db_message)
 
 
 @router.patch("/messages/shared/session/{old_session_id}")
@@ -620,7 +800,7 @@ async def rename_shared_session(
 ) -> list[MessageResponse]:
     """Rename a session on a shared/public flow, scoped to the authenticated user."""
     try:
-        virtual_flow_id = compute_virtual_flow_id(current_user.id, source_flow_id)
+        virtual_flow_id = _compute_shared_message_flow_id(current_user.id, source_flow_id)
         stmt = select(MessageTable).where(
             MessageTable.flow_id == virtual_flow_id,
             MessageTable.session_id == old_session_id,

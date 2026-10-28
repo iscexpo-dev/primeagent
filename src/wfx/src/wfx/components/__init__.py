@@ -42,7 +42,6 @@ if TYPE_CHECKING:
         embeddings,
         exa,
         files_ingestion,
-        firecrawl,
         git,
         glean,
         google,
@@ -77,6 +76,7 @@ if TYPE_CHECKING:
         perplexity,
         pgvector,
         pinecone,
+        plivo,
         processing,
         prototypes,
         qdrant,
@@ -90,6 +90,7 @@ if TYPE_CHECKING:
         textsplitters,
         toolkits,
         tools,
+        triggers,
         twelvelabs,
         unstructured,
         upstash,
@@ -143,7 +144,6 @@ _dynamic_imports = {
     "embeddings": "__module__",
     "exa": "__module__",
     "FAISS": "__module__",
-    "firecrawl": "__module__",
     "files_ingestion": "__module__",
     "git": "__module__",
     "glean": "__module__",
@@ -180,6 +180,7 @@ _dynamic_imports = {
     "perplexity": "__module__",
     "pgvector": "__module__",
     "pinecone": "__module__",
+    "plivo": "__module__",
     "processing": "__module__",
     "prototypes": "__module__",
     "qdrant": "__module__",
@@ -193,6 +194,7 @@ _dynamic_imports = {
     "textsplitters": "__module__",
     "toolkits": "__module__",
     "tools": "__module__",
+    "triggers": "__module__",
     "twelvelabs": "__module__",
     "unstructured": "__module__",
     "upstash": "__module__",
@@ -214,7 +216,14 @@ _discovered_modules = set()
 
 
 def _discover_components_from_module(module_name):
-    """Discover individual components from a specific module on-demand."""
+    """Discover individual components from a specific module on-demand.
+
+    Importing a component module executes third-party integration code, which is allowed to fail in
+    ways that have nothing to do with this package (a missing optional dependency, an import-time
+    write to a read-only ``$HOME``, a network probe). Discovery is best-effort by design, so any
+    failure here only removes that module's components from the lookup table -- it must never abort
+    the import that triggered the scan.
+    """
     if module_name in _discovered_modules or module_name == "Notion":
         return
 
@@ -232,9 +241,13 @@ def _discover_components_from_module(module_name):
 
         _discovered_modules.add(module_name)
 
-    except (ImportError, AttributeError):
+    except Exception as exc:  # noqa: BLE001 - see docstring: discovery must not break the caller
         # If import fails, mark as discovered to avoid retrying
         _discovered_modules.add(module_name)
+        # Imported lazily so the failure path is the only thing that pulls in the logger.
+        from wfx.log.logger import logger
+
+        logger.debug(f"Skipping component discovery for '{module_name}': {exc!r}")
 
 
 # Static base __all__ with module names
@@ -274,7 +287,6 @@ __all__ = [
     "embeddings",
     "exa",
     "files_ingestion",
-    "firecrawl",
     "git",
     "glean",
     "google",
@@ -309,6 +321,7 @@ __all__ = [
     "perplexity",
     "pgvector",
     "pinecone",
+    "plivo",
     "processing",
     "prototypes",
     "qdrant",
@@ -322,6 +335,7 @@ __all__ = [
     "textsplitters",
     "toolkits",
     "tools",
+    "triggers",
     "twelvelabs",
     "unstructured",
     "upstash",

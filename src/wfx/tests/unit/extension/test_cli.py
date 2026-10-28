@@ -6,8 +6,8 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
-from typer.testing import CliRunner
 from wfx.__main__ import app
+from typer.testing import CliRunner
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -352,3 +352,72 @@ def test_reload_id_not_in_local_discovery_errors_clean(runner: CliRunner, monkey
     msg = result.stderr or result.stdout
     assert "wfx-not-installed" in msg
     assert "--bundle" in msg
+
+
+def test_reload_multi_bundle_extension_requires_explicit_bundle(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed = tmp_path / "seed"
+    extension = seed / "wfx_datastax"
+    extension.mkdir(parents=True)
+    manifest = {
+        **_BASE_MANIFEST,
+        "id": "wfx-datastax",
+        "bundles": [
+            {"name": "datastax", "path": "datastax"},
+            {"name": "cassandra", "path": "cassandra"},
+        ],
+    }
+    for bundle in manifest["bundles"]:
+        (extension / bundle["path"]).mkdir()
+    (extension / "extension.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setenv("PRIMEAGENT_SEED_DIR", str(seed))
+    monkeypatch.setattr(
+        "wfx.cli._extension_commands._post_reload",
+        lambda **_kwargs: pytest.fail("should not POST an ambiguous bundle"),
+    )
+
+    result = runner.invoke(app, ["extension", "reload", "wfx-datastax"])
+
+    assert result.exit_code == 1
+    message = result.stderr or result.stdout
+    assert "cassandra, datastax" in message
+    assert "--bundle" in message
+
+
+def test_reload_all_posts_every_bundle_in_multi_bundle_extension(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wfx.cli._extension_reload_client import ReloadHttpResponse
+
+    seed = tmp_path / "seed"
+    extension = seed / "wfx_datastax"
+    extension.mkdir(parents=True)
+    manifest = {
+        **_BASE_MANIFEST,
+        "id": "wfx-datastax",
+        "bundles": [
+            {"name": "datastax", "path": "datastax"},
+            {"name": "cassandra", "path": "cassandra"},
+        ],
+    }
+    for bundle in manifest["bundles"]:
+        (extension / bundle["path"]).mkdir()
+    (extension / "extension.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setenv("PRIMEAGENT_SEED_DIR", str(seed))
+    posted: list[tuple[str, str]] = []
+
+    def _record_post(**kwargs: str | None) -> ReloadHttpResponse:
+        posted.append((str(kwargs["extension_id"]), str(kwargs["bundle_name"])))
+        return ReloadHttpResponse(status=200, ok=True, payload={"ok": True})
+
+    monkeypatch.setattr("wfx.cli._extension_commands._post_reload", _record_post)
+
+    result = runner.invoke(app, ["extension", "reload", "--all", "--format", "json"])
+
+    assert result.exit_code == 0, result.stderr or result.stdout
+    assert posted == [("wfx-datastax", "datastax"), ("wfx-datastax", "cassandra")]

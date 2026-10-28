@@ -6,13 +6,13 @@ try:
     from wfx.components.input_output import ChatInput, ChatOutput, TextOutputComponent
     from wfx.components.input_output.text import TextInputComponent
     from wfx.components.logic.conditional_router import ConditionalRouterComponent
-    from wfx.components.openai.openai_chat_model import OpenAIModelComponent
     from wfx.components.processing import PromptComponent
     from wfx.custom.custom_component.component import Component
     from wfx.graph.graph.base import Graph
     from wfx.graph.graph.utils import find_cycle_vertices
     from wfx.io import MessageTextInput, Output
     from wfx.schema.message import Message
+    from wfx_openai.components.openai.openai_chat_model import OpenAIModelComponent
 except Exception as e:
     pytest.skip(f"Failed to import components in tests. Exception: {e}", allow_module_level=True)
 

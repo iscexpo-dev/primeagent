@@ -9,32 +9,85 @@ from urllib.parse import quote
 
 from fastapi import Depends, HTTPException, Path, Query
 from fastapi_pagination import Params
-from sqlmodel.ext.asyncio.session import AsyncSession
 from wfx.log.logger import logger
 from wfx.services.deps import injectable_session_scope, injectable_session_scope_readonly
+from wfx.utils import flow_code as _flow_code
 from wfx.utils.validate_cloud import raise_error_if_astra_cloud_disable_component
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from primeagent.services.auth.utils import get_current_active_user, get_current_active_user_mcp
 from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.database.models.user.model import User
 from primeagent.services.store.utils import get_lf_version_from_pypi
+from primeagent.utils import flow_secrets as _flow_secrets
 from primeagent.utils.constants import PRIMEAGENT_GLOBAL_VAR_HEADER_PREFIX
 
 if TYPE_CHECKING:
     from primeagent.services.store.schema import StoreComponentCreate
 
 
-API_WORDS = ["api", "key", "token"]
+API_WORDS = _flow_secrets.API_WORDS
+normalize_code_for_import = _flow_code.normalize_code_for_import
+has_api_terms = _flow_secrets.has_api_terms
+remove_api_keys = _flow_secrets.remove_api_keys
+strip_flow_secrets = _flow_secrets.strip_flow_secrets
+strip_secret_field_values = _flow_secrets.strip_secret_field_values
+strip_secret_field_values_in_place = _flow_secrets.strip_secret_field_values_in_place
 
 MAX_PAGE_SIZE = 50
 MIN_PAGE_SIZE = 1
+# Mirrors the `le` ceiling fastapi_pagination.Params puts on `size`; MAX_PAGE_SIZE (50) stays the
+# default when size is absent, not a bound.
+PARAMS_MAX_PAGE_SIZE = 100
+
+# Bounds are declared on the query because a bound violated inside the dependency (when Params is
+# built) escapes the route's try/except and reaches the app-wide Exception handler as a 500;
+# declaring it here lets FastAPI reject it as 422 like routes that depend on Params directly.
+PageQuery = Annotated[int | None, Query(ge=MIN_PAGE_SIZE)]
+SizeQuery = Annotated[int | None, Query(ge=MIN_PAGE_SIZE, le=PARAMS_MAX_PAGE_SIZE)]
 
 CurrentActiveUser = Annotated[User, Depends(get_current_active_user)]
 CurrentActiveMCPUser = Annotated[User, Depends(get_current_active_user_mcp)]
-# DbSession with auto-commit for write operations
-DbSession = Annotated[AsyncSession, Depends(injectable_session_scope)]
-# DbSessionReadOnly for read-only operations (no auto-commit, reduces lock contention)
+# DbSession with auto-commit for write operations.
+# ``scope="function"`` is load-bearing: a dependency with yield defaults to
+# request scope, whose exit stack FastAPI unwinds *after* the response has been
+# sent to the client. The auto-commit lives in that teardown, so at request
+# scope a handler answers 201 with a row id that is not committed yet and a
+# client that immediately reads it back can get a 404. Function scope runs the
+# teardown right after the endpoint returns and before the response is sent, so
+# the write is durable by the time the caller holds the id.
+# Every Depends(injectable_session_scope) site must carry the same scope: the
+# scope is part of FastAPI's dependency cache key, so a mixed set would resolve
+# two distinct sessions per request instead of one shared session.
+#
+# Consequence to respect when writing a streaming route: the session is closed
+# once the handler returns, so anything running later -- a StreamingResponse
+# body, a BackgroundTask -- must open its own ``session_scope()`` rather than
+# capture this one. ORM objects loaded during the request (``current_user``
+# included) are detached by then; reading already-loaded columns is safe because
+# the session maker sets ``expire_on_commit=False``, but touching a relationship
+# raises DetachedInstanceError.
+DbSession = Annotated[AsyncSession, Depends(injectable_session_scope, scope="function")]
+# DbSessionReadOnly for read-only operations (no auto-commit, reduces lock contention).
+# Deliberately left at the default request scope: it never commits, so there is no
+# write-visibility window to close, and keeping it request-scoped avoids detaching
+# ORM objects that read-only streaming routes may still be reading from.
 DbSessionReadOnly = Annotated[AsyncSession, Depends(injectable_session_scope_readonly)]
+
+
+async def release_db_transaction(session: AsyncSession) -> None:
+    """End the session's current transaction before long-running work.
+
+    A handler that awaits a model, tool, or workflow after its DB reads must
+    not keep the transaction from those reads open for the wait: the session
+    would pin a pooled connection for the whole run (on Postgres as
+    ``idle in transaction``, which a nonzero
+    ``idle_in_transaction_session_timeout`` kills mid-run). Committing ends
+    the transaction and returns the connection to the pool; any later DB work
+    on the same session begins a fresh short transaction, and the dependency
+    teardown's final commit becomes a no-op.
+    """
+    await session.commit()
 
 
 def _get_validated_path_segment(value: str, *, label: str = "name") -> str:
@@ -68,10 +121,6 @@ class EventDeliveryType(str, Enum):
     POLLING = "polling"
 
 
-def has_api_terms(word: str):
-    return "api" in word and ("key" in word or ("token" in word and "tokens" not in word))
-
-
 def _get_provider_from_template(template: dict) -> str | None:
     """Return provider name from template's model field, if any."""
     model_field = template.get("model")
@@ -81,25 +130,6 @@ def _get_provider_from_template(template: dict) -> str | None:
     if isinstance(raw, list) and len(raw) > 0 and isinstance(raw[0], dict):
         return raw[0].get("provider")
     return None
-
-
-def remove_api_keys(flow: dict):
-    """Remove api keys from flow data."""
-    for node in flow.get("data", {}).get("nodes", []):
-        node_data = node.get("data")
-        if not isinstance(node_data, dict):
-            continue
-        node_inner = node_data.get("node")
-        if not isinstance(node_inner, dict):
-            continue
-        template = node_inner.get("template")
-        if not isinstance(template, dict):
-            continue
-        for value in template.values():
-            if isinstance(value, dict) and "name" in value and has_api_terms(value["name"]) and value.get("password"):
-                value["value"] = None
-
-    return flow
 
 
 # ---------------------------------------------------------------------------
@@ -138,25 +168,6 @@ def _split_code_to_lines(flow: dict) -> None:
                     field_data["value"] = value.split("\n")
 
 
-def _join_code_from_lines(flow: dict) -> None:
-    """In-place: rejoin code template line arrays back to strings.
-
-    Inverse of :func:`_split_code_to_lines`.  Safe to call on flows that
-    already use the string format — ``isinstance`` guard means it's a no-op.
-    """
-    for node in flow.get("data", {}).get("nodes", []):
-        template = node.get("data", {}).get("node", {}).get("template", {})
-        if not isinstance(template, dict):
-            continue
-        for field_data in template.values():
-            if not isinstance(field_data, dict):
-                continue
-            if field_data.get("type") == "code":
-                value = field_data.get("value")
-                if isinstance(value, list):
-                    field_data["value"] = "\n".join(value)
-
-
 def normalize_flow_for_export(flow: dict) -> dict:
     """Return a git-friendly, deterministic copy of a flow dict.
 
@@ -191,20 +202,6 @@ def normalize_flow_for_export(flow: dict) -> dict:
     # Code → line arrays
     _split_code_to_lines(flow)
 
-    return flow
-
-
-def normalize_code_for_import(flow: dict) -> dict:
-    """Rejoin code-as-lines back to strings for backward-compatible import.
-
-    Accepts both the list format produced by :func:`normalize_flow_for_export`
-    and the legacy single-string format, so this function is safe to call
-    unconditionally on every uploaded flow.
-    """
-    import copy
-
-    flow = copy.deepcopy(flow)
-    _join_code_from_lines(flow)
     return flow
 
 
@@ -312,8 +309,18 @@ def format_syntax_error_message(exc: SyntaxError) -> str:
 
 
 def get_causing_exception(exc: BaseException) -> BaseException:
-    """Get the causing exception from an exception."""
-    if hasattr(exc, "__cause__") and exc.__cause__:
+    """Get the causing exception from an exception.
+
+    Walks the ``__cause__`` chain to the root, but stops at a bundle-shim
+    ``ModuleNotFoundError`` whose curated "components moved to ..." message is
+    raised ``from`` the raw ``No module named '<x>'`` it wraps, so the curated
+    message wins instead of unwrapping past it to the bare cause underneath.
+    """
+    # A raw import error reads "No module named '<x>'"; anything else is a
+    # curated message (e.g. a bundle shim) that should win over its cause.
+    if isinstance(exc, ModuleNotFoundError) and not str(exc).startswith("No module named"):
+        return exc
+    if getattr(exc, "__cause__", None):
         return get_causing_exception(exc.__cause__)
     return exc
 
@@ -322,9 +329,14 @@ def format_exception_message(exc: Exception) -> str:
     """Format an exception message for returning to the frontend."""
     # We need to check if the __cause__ is a SyntaxError
     # If it is, we need to return the message of the SyntaxError
+    from wfx.utils.exceptions import module_not_found_hint
+
     causing_exception = get_causing_exception(exc)
     if isinstance(causing_exception, SyntaxError):
         return format_syntax_error_message(causing_exception)
+    hint = module_not_found_hint(causing_exception)
+    if hint is not None:
+        return hint
     return str(exc)
 
 
@@ -391,10 +403,7 @@ def parse_value(value: Any, input_type: str) -> Any:
     return value
 
 
-def custom_params(
-    page: int | None = Query(None),
-    size: int | None = Query(None),
-):
+def custom_params(page: PageQuery = None, size: SizeQuery = None):
     if page is None and size is None:
         return None
     return Params(page=page or MIN_PAGE_SIZE, size=size or MAX_PAGE_SIZE)

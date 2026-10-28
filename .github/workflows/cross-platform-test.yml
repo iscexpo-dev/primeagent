@@ -12,11 +12,11 @@ on:
     inputs:
       base-artifact-name:
         description: "Name of the base package artifact"
-        required: true
+        required: false
         type: string
       main-artifact-name:
         description: "Name of the main package artifact"
-        required: true
+        required: false
         type: string
       wfx-artifact-name:
         description: "Name of the WFX package artifact"
@@ -49,10 +49,11 @@ jobs:
       bundles-artifact-name: ${{ steps.set-names.outputs.bundles-artifact-name }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Setup Environment
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.0.0
         with:
+          version: latest-known
           enable-cache: true
           cache-dependency-glob: "uv.lock"
           python-version: "3.13"
@@ -71,8 +72,10 @@ jobs:
           mv dist/primeagent_base*.whl src/backend/base/dist/
       - name: Build WFX package
         run: |
+          uv run --no-sync python scripts/ci/release_auth_defaults.py prepare
           cd src/wfx
           uv build --wheel --out-dir dist
+          uv run --no-sync python ../../scripts/ci/release_auth_defaults.py verify dist/*.whl
       - name: Build SDK package
         run: |
           cd src/sdk
@@ -99,28 +102,28 @@ jobs:
           echo "bundles-found=1" >> $GITHUB_OUTPUT
           ls -la bundles-dist/
       - name: Upload wfx artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: adhoc-dist-wfx
           path: src/wfx/dist
       - name: Upload SDK artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: adhoc-dist-sdk
           path: src/sdk/dist
       - name: Upload base artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: adhoc-dist-base
           path: src/backend/base/dist
       - name: Upload main artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: adhoc-dist-main
           path: dist
       - name: Upload bundles artifact
         if: steps.build-bundles.outputs.bundles-found == '1'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: adhoc-dist-bundles
           path: bundles-dist
@@ -139,8 +142,13 @@ jobs:
 
   test-installation-stable:
     name: Install & Run - ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.python-version }}
+    env:
+      PRIMEAGENT_SUPERUSER_PASSWORD: ci-startup-only-password  # pragma: allowlist secret
     needs: [build-if-needed]
-    if: always() && (needs.build-if-needed.result == 'success' || needs.build-if-needed.result == 'skipped')
+    if: |
+      always() &&
+      (needs.build-if-needed.result == 'success' || needs.build-if-needed.result == 'skipped') &&
+      (inputs.primeagent-version != '' || inputs.main-artifact-name != '' || needs.build-if-needed.outputs.main-artifact-name != '')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -197,11 +205,21 @@ jobs:
             python-version: "3.13"
 
     steps:
+      - name: Checkout authentication smoke check
+        uses: actions/checkout@v7
+        with:
+          path: auth-smoke
+          sparse-checkout: scripts/ci/check_authentication.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Determine install method
         id: install-method
+        env:
+          PRIMEAGENT_VERSION: ${{ inputs.primeagent-version }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -n "${{ inputs.primeagent-version }}" ]; then
+            if [ -n "$PRIMEAGENT_VERSION" ]; then
               echo "method=pypi" >> $GITHUB_OUTPUT
             else
               echo "method=wheel" >> $GITHUB_OUTPUT
@@ -213,14 +231,15 @@ jobs:
         shell: bash
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           architecture: ${{ matrix.arch == 'amd64' && 'x64' || matrix.arch }}
 
       - name: Setup UV
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.0.0
         with:
+          version: latest-known
           enable-cache: false
           ignore-empty-workdir: true
 
@@ -237,35 +256,35 @@ jobs:
       # Download artifacts for wheel installation
       - name: Download primeagent-sdk package artifact
         if: steps.install-method.outputs.method == 'wheel' && (inputs.sdk-artifact-name != '' || needs.build-if-needed.outputs.sdk-artifact-name != '')
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.sdk-artifact-name || needs.build-if-needed.outputs.sdk-artifact-name || 'adhoc-dist-sdk' }}
           path: ./sdk-dist
 
       - name: Download WFX package artifact
         if: steps.install-method.outputs.method == 'wheel' && (inputs.wfx-artifact-name != '' || needs.build-if-needed.outputs.wfx-artifact-name != '')
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.wfx-artifact-name || needs.build-if-needed.outputs.wfx-artifact-name || 'adhoc-dist-wfx' }}
           path: ./wfx-dist
 
       - name: Download base package artifact
-        if: steps.install-method.outputs.method == 'wheel'
-        uses: actions/download-artifact@v7
+        if: steps.install-method.outputs.method == 'wheel' && (inputs.base-artifact-name != '' || needs.build-if-needed.outputs.base-artifact-name != '')
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.base-artifact-name || needs.build-if-needed.outputs.base-artifact-name || 'adhoc-dist-base' }}
           path: ./base-dist
 
       - name: Download main package artifact
-        if: steps.install-method.outputs.method == 'wheel'
-        uses: actions/download-artifact@v7
+        if: steps.install-method.outputs.method == 'wheel' && (inputs.main-artifact-name != '' || needs.build-if-needed.outputs.main-artifact-name != '')
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.main-artifact-name || needs.build-if-needed.outputs.main-artifact-name || 'adhoc-dist-main' }}
           path: ./main-dist
 
       - name: Download bundles package artifact
         if: steps.install-method.outputs.method == 'wheel' && (inputs.bundles-artifact-name != '' || needs.build-if-needed.outputs.bundles-artifact-name != '')
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.bundles-artifact-name || needs.build-if-needed.outputs.bundles-artifact-name }}
           path: ./bundles-dist
@@ -321,7 +340,9 @@ jobs:
           fi
 
           BASE_WHEELS=(./base-dist/*.whl)
-          install_wheels "base" "${BASE_WHEELS[@]}"
+          if [ ${#BASE_WHEELS[@]} -gt 0 ]; then
+            install_wheels "base" "${BASE_WHEELS[@]}"
+          fi
 
           if [ -d ./bundles-dist ]; then
             BUNDLE_WHEELS=(./bundles-dist/*.whl)
@@ -343,9 +364,11 @@ jobs:
       # PyPI installation steps
       - name: Install primeagent from PyPI (Windows)
         if: steps.install-method.outputs.method == 'pypi' && matrix.os == 'windows'
+        env:
+          PRIMEAGENT_VERSION: ${{ inputs.primeagent-version }}
         run: |
-          if [ -n "${{ inputs.primeagent-version }}" ]; then
-            uv pip install --python ./test-env/Scripts/python.exe primeagent==${{ inputs.primeagent-version }}
+          if [ -n "$PRIMEAGENT_VERSION" ]; then
+            uv pip install --python ./test-env/Scripts/python.exe "primeagent==$PRIMEAGENT_VERSION"
           else
             uv pip install --python ./test-env/Scripts/python.exe primeagent
           fi
@@ -353,9 +376,11 @@ jobs:
 
       - name: Install primeagent from PyPI (Unix)
         if: steps.install-method.outputs.method == 'pypi' && matrix.os != 'windows'
+        env:
+          PRIMEAGENT_VERSION: ${{ inputs.primeagent-version }}
         run: |
-          if [ -n "${{ inputs.primeagent-version }}" ]; then
-            uv pip install --python ./test-env/bin/python primeagent==${{ inputs.primeagent-version }}
+          if [ -n "$PRIMEAGENT_VERSION" ]; then
+            uv pip install --python ./test-env/bin/python "primeagent==$PRIMEAGENT_VERSION"
           else
             uv pip install --python ./test-env/bin/python primeagent
           fi
@@ -387,52 +412,18 @@ jobs:
           uv run --python ./test-env/bin/python python -m primeagent --help
         shell: bash
 
-      - name: Test server startup (Windows)
+      - name: Test installed release authentication (Windows)
         if: matrix.os == 'windows'
         timeout-minutes: 5
-        run: |
-          # Start server in background
-          $serverProcess = Start-Process -FilePath ".\test-env\Scripts\python.exe" -ArgumentList "-m", "primeagent", "run", "--host", "localhost", "--port", "7860", "--backend-only" -PassThru -WindowStyle Hidden
-
-          # Wait for server to be ready (GitHub Actions will timeout after 5 minutes)
-          do {
-            try {
-              $response = Invoke-WebRequest -Uri "http://localhost:7860/health_check" -UseBasicParsing -TimeoutSec 5
-              if ($response.StatusCode -eq 200) {
-                Write-Host "✅ Server is ready on ${{ matrix.os }}-${{ matrix.arch }}"
-                break
-              }
-            } catch {
-              Start-Sleep -Seconds 5
-            }
-          } while ($true)
-
-          # Stop the server process
-          Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+        run: .\test-env\Scripts\python.exe auth-smoke/scripts/ci/check_authentication.py --start-server
         shell: powershell
 
-      - name: Test server startup (Unix)
+      - name: Test installed release authentication (Unix)
         if: matrix.os != 'windows'
         timeout-minutes: 5
         env:
           OBJC_DISABLE_INITIALIZE_FORK_SAFETY: YES
-        run: |
-          # Start server in background
-          ./test-env/bin/python -m primeagent run --host localhost --port 7860 --backend-only &
-          SERVER_PID=$!
-
-          # Wait for server to be ready (GitHub Actions will timeout after 5 minutes)
-          while true; do
-            if curl -f http://localhost:7860/health_check >/dev/null 2>&1; then
-              echo "✅ Server is ready on ${{ matrix.os }}-${{ matrix.arch }}"
-              break
-            fi
-            sleep 5
-          done
-
-          # Clean shutdown
-          kill $SERVER_PID 2>/dev/null || true
-          sleep 5
+        run: ./test-env/bin/python auth-smoke/scripts/ci/check_authentication.py --start-server
         shell: bash
 
       - name: Test import in Python (Windows)
@@ -463,8 +454,13 @@ jobs:
 
   test-installation-experimental:
     name: Install & Run - ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.python-version }} (Experimental)
+    env:
+      PRIMEAGENT_SUPERUSER_PASSWORD: ci-startup-only-password  # pragma: allowlist secret
     needs: [build-if-needed]
-    if: always() && (needs.build-if-needed.result == 'success' || needs.build-if-needed.result == 'skipped')
+    if: |
+      always() &&
+      (needs.build-if-needed.result == 'success' || needs.build-if-needed.result == 'skipped') &&
+      (inputs.primeagent-version != '' || inputs.main-artifact-name != '' || needs.build-if-needed.outputs.main-artifact-name != '')
     runs-on: ${{ matrix.runner }}
     continue-on-error: true
     strategy:
@@ -493,11 +489,21 @@ jobs:
             python-version: "3.14"
 
     steps:
+      - name: Checkout authentication smoke check
+        uses: actions/checkout@v7
+        with:
+          path: auth-smoke
+          sparse-checkout: scripts/ci/check_authentication.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Determine install method
         id: install-method
+        env:
+          PRIMEAGENT_VERSION: ${{ inputs.primeagent-version }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -n "${{ inputs.primeagent-version }}" ]; then
+            if [ -n "$PRIMEAGENT_VERSION" ]; then
               echo "method=pypi" >> $GITHUB_OUTPUT
             else
               echo "method=wheel" >> $GITHUB_OUTPUT
@@ -509,14 +515,15 @@ jobs:
         shell: bash
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           architecture: ${{ matrix.arch == 'amd64' && 'x64' || matrix.arch }}
 
       - name: Setup UV
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.0.0
         with:
+          version: latest-known
           enable-cache: false
           ignore-empty-workdir: true
 
@@ -533,35 +540,35 @@ jobs:
       # Download artifacts for wheel installation
       - name: Download primeagent-sdk package artifact
         if: steps.install-method.outputs.method == 'wheel' && (inputs.sdk-artifact-name != '' || needs.build-if-needed.outputs.sdk-artifact-name != '')
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.sdk-artifact-name || needs.build-if-needed.outputs.sdk-artifact-name || 'adhoc-dist-sdk' }}
           path: ./sdk-dist
 
       - name: Download WFX package artifact
         if: steps.install-method.outputs.method == 'wheel' && (inputs.wfx-artifact-name != '' || needs.build-if-needed.outputs.wfx-artifact-name != '')
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.wfx-artifact-name || needs.build-if-needed.outputs.wfx-artifact-name || 'adhoc-dist-wfx' }}
           path: ./wfx-dist
 
       - name: Download base package artifact
-        if: steps.install-method.outputs.method == 'wheel'
-        uses: actions/download-artifact@v7
+        if: steps.install-method.outputs.method == 'wheel' && (inputs.base-artifact-name != '' || needs.build-if-needed.outputs.base-artifact-name != '')
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.base-artifact-name || needs.build-if-needed.outputs.base-artifact-name || 'adhoc-dist-base' }}
           path: ./base-dist
 
       - name: Download main package artifact
-        if: steps.install-method.outputs.method == 'wheel'
-        uses: actions/download-artifact@v7
+        if: steps.install-method.outputs.method == 'wheel' && (inputs.main-artifact-name != '' || needs.build-if-needed.outputs.main-artifact-name != '')
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.main-artifact-name || needs.build-if-needed.outputs.main-artifact-name || 'adhoc-dist-main' }}
           path: ./main-dist
 
       - name: Download bundles package artifact
         if: steps.install-method.outputs.method == 'wheel' && (inputs.bundles-artifact-name != '' || needs.build-if-needed.outputs.bundles-artifact-name != '')
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.bundles-artifact-name || needs.build-if-needed.outputs.bundles-artifact-name }}
           path: ./bundles-dist
@@ -613,7 +620,9 @@ jobs:
           fi
 
           BASE_WHEELS=(./base-dist/*.whl)
-          install_wheels "base" "${BASE_WHEELS[@]}"
+          if [ ${#BASE_WHEELS[@]} -gt 0 ]; then
+            install_wheels "base" "${BASE_WHEELS[@]}"
+          fi
 
           if [ -d ./bundles-dist ]; then
             BUNDLE_WHEELS=(./bundles-dist/*.whl)
@@ -637,7 +646,7 @@ jobs:
         run: |
           # Expose the local wheel dirs so dependency re-resolution (the
           # pre-release path below drops --no-deps) can find the local
-          # pre-release wfx/base wheels. Without these, uv re-resolves
+          # pre-release SDK/WFX/base wheels. Without these, uv re-resolves
           # primeagent-base's `wfx>=X.Y.Zrc0` constraint against PyPI only, where
           # the matching rc/dev wheel is not published yet, and fails with
           # "No solution found when resolving dependencies".
@@ -671,7 +680,7 @@ jobs:
           fi
 
           # Reinstall base
-          BASE_WHEEL=$(find ./base-dist -name "*.whl" -type f | head -1)
+          BASE_WHEEL=$(find ./base-dist -name "*.whl" -type f 2>/dev/null | head -1 || true)
           if [ -n "$BASE_WHEEL" ]; then
             echo "Force reinstalling primeagent-base: $BASE_WHEEL"
             INSTALL_WHEELS=("$BASE_WHEEL")
@@ -705,7 +714,7 @@ jobs:
         run: |
           # Expose the local wheel dirs so dependency re-resolution (the
           # pre-release path below drops --no-deps) can find the local
-          # pre-release wfx/base wheels. Without these, uv re-resolves
+          # pre-release SDK/WFX/base wheels. Without these, uv re-resolves
           # primeagent-base's `wfx>=X.Y.Zrc0` constraint against PyPI only, where
           # the matching rc/dev wheel is not published yet, and fails with
           # "No solution found when resolving dependencies".
@@ -739,7 +748,7 @@ jobs:
           fi
 
           # Reinstall base
-          BASE_WHEEL=$(find ./base-dist -name "*.whl" -type f | head -1)
+          BASE_WHEEL=$(find ./base-dist -name "*.whl" -type f 2>/dev/null | head -1 || true)
           if [ -n "$BASE_WHEEL" ]; then
             echo "Force reinstalling primeagent-base: $BASE_WHEEL"
             INSTALL_WHEELS=("$BASE_WHEEL")
@@ -771,9 +780,11 @@ jobs:
       # PyPI installation steps
       - name: Install primeagent from PyPI (Windows)
         if: steps.install-method.outputs.method == 'pypi' && matrix.os == 'windows'
+        env:
+          PRIMEAGENT_VERSION: ${{ inputs.primeagent-version }}
         run: |
-          if [ -n "${{ inputs.primeagent-version }}" ]; then
-            uv pip install --python ./test-env/Scripts/python.exe primeagent==${{ inputs.primeagent-version }}
+          if [ -n "$PRIMEAGENT_VERSION" ]; then
+            uv pip install --python ./test-env/Scripts/python.exe "primeagent==$PRIMEAGENT_VERSION"
           else
             uv pip install --python ./test-env/Scripts/python.exe primeagent
           fi
@@ -781,9 +792,11 @@ jobs:
 
       - name: Install primeagent from PyPI (Unix)
         if: steps.install-method.outputs.method == 'pypi' && matrix.os != 'windows'
+        env:
+          PRIMEAGENT_VERSION: ${{ inputs.primeagent-version }}
         run: |
-          if [ -n "${{ inputs.primeagent-version }}" ]; then
-            uv pip install --python ./test-env/bin/python primeagent==${{ inputs.primeagent-version }}
+          if [ -n "$PRIMEAGENT_VERSION" ]; then
+            uv pip install --python ./test-env/bin/python "primeagent==$PRIMEAGENT_VERSION"
           else
             uv pip install --python ./test-env/bin/python primeagent
           fi
@@ -815,52 +828,18 @@ jobs:
           uv run --python ./test-env/bin/python python -m primeagent --help
         shell: bash
 
-      - name: Test server startup (Windows)
+      - name: Test installed release authentication (Windows)
         if: matrix.os == 'windows'
         timeout-minutes: 5
-        run: |
-          # Start server in background
-          $serverProcess = Start-Process -FilePath ".\test-env\Scripts\python.exe" -ArgumentList "-m", "primeagent", "run", "--host", "localhost", "--port", "7860", "--backend-only" -PassThru -WindowStyle Hidden
-
-          # Wait for server to be ready (GitHub Actions will timeout after 5 minutes)
-          do {
-            try {
-              $response = Invoke-WebRequest -Uri "http://localhost:7860/health_check" -UseBasicParsing -TimeoutSec 5
-              if ($response.StatusCode -eq 200) {
-                Write-Host "✅ Server is ready on ${{ matrix.os }}-${{ matrix.arch }}"
-                break
-              }
-            } catch {
-              Start-Sleep -Seconds 5
-            }
-          } while ($true)
-
-          # Stop the server process
-          Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
+        run: .\test-env\Scripts\python.exe auth-smoke/scripts/ci/check_authentication.py --start-server
         shell: powershell
 
-      - name: Test server startup (Unix)
+      - name: Test installed release authentication (Unix)
         if: matrix.os != 'windows'
         timeout-minutes: 5
         env:
           OBJC_DISABLE_INITIALIZE_FORK_SAFETY: YES
-        run: |
-          # Start server in background
-          ./test-env/bin/python -m primeagent run --host localhost --port 7860 --backend-only &
-          SERVER_PID=$!
-
-          # Wait for server to be ready (GitHub Actions will timeout after 5 minutes)
-          while true; do
-            if curl -f http://localhost:7860/health_check >/dev/null 2>&1; then
-              echo "✅ Server is ready on ${{ matrix.os }}-${{ matrix.arch }}"
-              break
-            fi
-            sleep 5
-          done
-
-          # Clean shutdown
-          kill $SERVER_PID 2>/dev/null || true
-          sleep 5
+        run: ./test-env/bin/python auth-smoke/scripts/ci/check_authentication.py --start-server
         shell: bash
 
       - name: Test import in Python (Windows)
@@ -889,25 +868,169 @@ jobs:
           "
         shell: bash
 
+  test-base-runtime:
+    name: Base Distribution Wheel - Linux Python 3.14
+    needs: [build-if-needed]
+    if: |
+      always() &&
+      inputs.primeagent-version == '' &&
+      (needs.build-if-needed.result == 'success' || needs.build-if-needed.result == 'skipped') &&
+      (inputs.base-artifact-name != '' || needs.build-if-needed.outputs.base-artifact-name != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout authentication smoke check
+        uses: actions/checkout@v7
+        with:
+          path: auth-smoke
+          sparse-checkout: scripts/ci/check_authentication.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Setup UV
+        uses: astral-sh/setup-uv@v10.0.0
+        with:
+          version: latest-known
+          enable-cache: false
+          python-version: "3.14"
+
+      - name: Download primeagent-sdk package artifact
+        if: inputs.sdk-artifact-name != '' || needs.build-if-needed.outputs.sdk-artifact-name != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.sdk-artifact-name || needs.build-if-needed.outputs.sdk-artifact-name || 'adhoc-dist-sdk' }}
+          path: ./sdk-dist
+
+      - name: Download WFX package artifact
+        if: inputs.wfx-artifact-name != '' || needs.build-if-needed.outputs.wfx-artifact-name != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.wfx-artifact-name || needs.build-if-needed.outputs.wfx-artifact-name || 'adhoc-dist-wfx' }}
+          path: ./wfx-dist
+
+      - name: Download base package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.base-artifact-name || needs.build-if-needed.outputs.base-artifact-name || 'adhoc-dist-base' }}
+          path: ./base-dist
+
+      - name: Install only the base dependency chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          SDK_WHEELS=(./sdk-dist/*.whl)
+          WFX_WHEELS=(./wfx-dist/*.whl)
+          BASE_WHEELS=(./base-dist/*.whl)
+          [ ${#SDK_WHEELS[@]} -le 1 ] || { echo "Expected at most one SDK wheel"; exit 1; }
+          [ ${#WFX_WHEELS[@]} -le 1 ] || { echo "Expected at most one WFX wheel"; exit 1; }
+          [ ${#BASE_WHEELS[@]} -eq 1 ] || { echo "Expected one base wheel"; exit 1; }
+
+          FIND_LINKS=()
+          for directory in sdk-dist wfx-dist base-dist; do
+            if [ -d "$directory" ]; then
+              FIND_LINKS+=(--find-links "./$directory")
+            fi
+          done
+          uv venv base-test-env --seed --python 3.14
+          uv pip install --python base-test-env/bin/python \
+            --prerelease=if-necessary-or-explicit \
+            "${FIND_LINKS[@]}" "${SDK_WHEELS[@]}" "${WFX_WHEELS[@]}" "${BASE_WHEELS[0]}"
+          uv pip check --python base-test-env/bin/python
+
+      - name: Verify base boundary and indexed imports
+        shell: bash
+        run: |
+          base-test-env/bin/python - <<'PY'
+          import importlib
+          import re
+          import sys
+          from importlib.metadata import distributions, entry_points, metadata, requires
+          from pathlib import Path
+
+          from wfx.interface.components import _read_component_index
+
+          normalize = lambda value: re.sub(r"[-_.]+", "-", value).lower()
+          installed = {normalize(dist.metadata["Name"]) for dist in distributions() if dist.metadata["Name"]}
+          assert {"primeagent-base", "primeagent-sdk", "wfx"} <= installed, installed
+          forbidden = installed & {"primeagent", "primeagent-core", "torch", "torchvision"}
+          forbidden |= {name for name in installed if name.startswith("wfx-")}
+          assert not forbidden, f"Forbidden base distributions: {sorted(forbidden)}"
+          for group in ("wfx.bundles", "primeagent.extensions", "primeagent.plugins"):
+              assert not entry_points(group=group), f"Extension entry points registered in {group}"
+
+          scripts = Path(sys.executable).parent
+          # Must track [project.scripts] in src/backend/base/pyproject.toml. On the
+          # 1.12 line #14339 renamed this entry point back to `primeagent`; asserting
+          # `primeagent-base` here is only correct on branches that predate it.
+          assert (scripts / "primeagent").is_file(), f"primeagent console script missing from {scripts}"
+          assert not (scripts / "primeagent-base").exists(), "primeagent-base console script is not part of the 1.12 base distribution"
+          provided_extras = set(metadata("primeagent-base").get_all("Provides-Extra", []))
+          assert {"complete", "all"} <= provided_extras
+          compatibility_requirements = [
+              requirement for requirement in (requires("primeagent-base") or [])
+              if 'extra == "complete"' in requirement or 'extra == "all"' in requirement
+          ]
+          assert not compatibility_requirements, compatibility_requirements
+
+          index = _read_component_index()
+          assert index is not None, "Installed WFX rejected its bundled component index"
+          for category, components in index["entries"]:
+              for component_name, component in components.items():
+                  module_path = component.get("metadata", {}).get("module")
+                  assert module_path, f"{category}.{component_name} has no module"
+                  module_name, class_name = module_path.rsplit(".", 1)
+                  getattr(importlib.import_module(module_name), class_name)
+          PY
+
+      - name: Test installed base authentication
+        shell: bash
+        timeout-minutes: 5
+        env:
+          PRIMEAGENT_SUPERUSER_PASSWORD: ci-startup-only-password  # pragma: allowlist secret
+        run: base-test-env/bin/python auth-smoke/scripts/ci/check_authentication.py --start-server
+
   test-summary:
     name: Cross-Platform Test Summary
-    needs: [test-installation-stable, test-installation-experimental]
+    needs: [build-if-needed, test-installation-stable, test-installation-experimental, test-base-runtime]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check test results
+        env:
+          PRIMEAGENT_VERSION: ${{ inputs.primeagent-version }}
+          EXPECT_BASE_RUNTIME: ${{ inputs.base-artifact-name != '' || needs.build-if-needed.outputs.base-artifact-name != '' }}
         run: |
           stable_result="${{ needs.test-installation-stable.result }}"
           experimental_result="${{ needs.test-installation-experimental.result }}"
+          base_result="${{ needs.test-base-runtime.result }}"
 
           echo "Stable platforms result: $stable_result"
           echo "Experimental platforms result: $experimental_result"
+          echo "Base runtime result: $base_result"
+
+          if [ "$stable_result" = "skipped" ] && [ "$base_result" = "skipped" ]; then
+            echo "✅ No Primeagent application distribution was selected; package build tests passed"
+            exit 0
+          fi
+
+          if [ "$EXPECT_BASE_RUNTIME" = "true" ] && [ -z "$PRIMEAGENT_VERSION" ] && [ "$base_result" != "success" ]; then
+            echo "❌ Base runtime wheel test failed: $base_result"
+            exit 1
+          fi
+
+          if [ "$stable_result" = "skipped" ] && [ "$base_result" = "success" ]; then
+            echo "✅ Base-only wheel installation tests passed"
+            exit 0
+          fi
 
           # Stable platforms must succeed, experimental can fail
           if [ "$stable_result" = "success" ]; then
             if [ "$experimental_result" = "success" ]; then
               if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-                if [ -n "${{ inputs.primeagent-version }}" ]; then
+                if [ -n "$PRIMEAGENT_VERSION" ]; then
                   echo "✅ All PyPI installation tests passed (including Python 3.14)"
                 else
                   echo "✅ All source build and installation tests passed (including Python 3.14)"
@@ -917,7 +1040,7 @@ jobs:
               fi
             else
               if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-                if [ -n "${{ inputs.primeagent-version }}" ]; then
+                if [ -n "$PRIMEAGENT_VERSION" ]; then
                   echo "✅ PyPI installation tests passed (Python 3.14 experimental failures are acceptable)"
                 else
                   echo "✅ Source build and installation tests passed (Python 3.14 experimental failures are acceptable)"

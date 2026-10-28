@@ -1,9 +1,9 @@
 {
   "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
   "id": "wfx-ibm",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "name": "IBM",
-  "description": "IBM components (Db2 Vector Store + watsonx.ai LLM and embeddings) as a standalone Primeagent Extension Bundle.",
+  "description": "IBM components (Db2 Vector Store, watsonx.ai LLM and embeddings, watsonx.data Presto and MCP) as a standalone Primeagent Extension Bundle.",
   "wfx": {
     "compat": ["1"]
   },

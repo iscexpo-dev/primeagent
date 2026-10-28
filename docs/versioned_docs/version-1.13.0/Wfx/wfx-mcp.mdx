@@ -1,0 +1,174 @@
+---
+title: Build flows with the WFX MCP server
+slug: /wfx-mcp
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Icon from "@site/src/components/icon";
+
+Use `wfx-mcp` to connect a coding agent to a running Primeagent instance, and then build, validate, and run flows from your terminal.
+
+Your MCP client starts `wfx-mcp` as a local standard stdio subprocess.
+The server calls the Primeagent REST API, so flows that the agent creates appear in the Primeagent UI.
+
+`wfx-mcp` differs from these other MCP options:
+
+* [Use Primeagent as an MCP server](./mcp-server): Expose existing flows as tools that clients can call.
+* [Use Primeagent as an MCP client](./mcp-client): Call MCP servers from components on the canvas.
+
+For Bob (IBM) and Claude Code, you can also use the guided setup in Primeagent under **Settings** → <Icon name="Terminal" aria-hidden="true" /> **Primeagent MCP Client**.
+For more information, see [Primeagent MCP Client for coding agents](./primeagent-mcp-client).
+
+## Prerequisites
+
+* A running Primeagent instance
+* A [Primeagent API key](./api-keys-and-authentication)
+* An LLM provider API key available in Primeagent, typically as a [global variable](./configuration-global-variables)
+* [`uv`](https://docs.astral.sh/uv/getting-started/installation/), or `wfx` installed with `uv pip install wfx`
+* [Claude Code](https://docs.anthropic.com/en/docs/claude-code), or another MCP client that supports stdio servers
+
+## Connect an agent and build a flow
+
+To connect an agent and create a flow on your Primeagent server, follow these steps:
+
+1. Add `wfx-mcp` to your MCP client.
+
+    Use `uvx --from wfx wfx-mcp`.
+    There is no standalone `wfx-mcp` package on PyPI; the binary ships inside the `wfx` package.
+
+    To add the server in Claude Code, run:
+
+    ```bash
+    claude mcp add primeagent \
+      -e PRIMEAGENT_SERVER_URL=http://localhost:7860 \
+      -e PRIMEAGENT_API_KEY=<YOUR_PRIMEAGENT_API_KEY> \
+      -- uvx --from wfx wfx-mcp
+    ```
+
+    To add the server in Claude Desktop or another stdio client, create an MCP server entry that runs `wfx-mcp` and sets the same environment variables:
+
+    <Tabs>
+    <TabItem value="uvx" label="uvx (recommended)" default>
+
+    ```json
+    {
+      "mcpServers": {
+        "primeagent": {
+          "command": "uvx",
+          "args": ["--from", "wfx", "wfx-mcp"],
+          "env": {
+            "PRIMEAGENT_SERVER_URL": "http://localhost:7860",
+            "PRIMEAGENT_API_KEY": "<YOUR_PRIMEAGENT_API_KEY>"
+          }
+        }
+      }
+    }
+    ```
+
+    </TabItem>
+    <TabItem value="installed" label="wfx installed">
+
+    ```json
+    {
+      "mcpServers": {
+        "primeagent": {
+          "command": "wfx-mcp",
+          "env": {
+            "PRIMEAGENT_SERVER_URL": "http://localhost:7860",
+            "PRIMEAGENT_API_KEY": "<YOUR_PRIMEAGENT_API_KEY>"
+          }
+        }
+      }
+    }
+    ```
+
+    </TabItem>
+    </Tabs>
+
+    On macOS, Claude Desktop stores this configuration in `~/Library/Application Support/Claude/claude_desktop_config.json`.
+
+    | Variable | Description | Default |
+    | --- | --- | --- |
+    | `PRIMEAGENT_SERVER_URL` | URL of your Primeagent instance | `http://localhost:7860` |
+    | `PRIMEAGENT_API_KEY` | Primeagent API key | None |
+
+    If you omit `PRIMEAGENT_API_KEY`, the agent can call the `login` tool with your Primeagent username and password.
+
+2. Confirm that the server is registered.
+
+    ```bash
+    claude mcp list
+    ```
+
+    The output includes an entry similar to the following:
+
+    ```
+    primeagent: uvx --from wfx wfx-mcp
+    ```
+
+3. Start the agent, and then ask it to build a flow.
+
+    ```bash
+    claude
+    ```
+
+    Enter a prompt such as the following:
+
+    ```text
+    Create a simple agent chatbot flow in Primeagent using OpenAI, validate the flow,
+    and then run it with the message "What is Primeagent?"
+    ```
+
+    The agent usually does the following:
+
+    1. Discovers component types with `search_component_types` or `describe_component_type`
+    2. Creates the flow in one request with `create_flow_from_spec`
+    3. Validates connections with `validate_flow`
+    4. Runs the flow with `run_flow`, and then returns the response
+
+    The new flow appears in the Primeagent UI at your server URL.
+
+    The `create_flow_from_spec` tool accepts a compact text specification for nodes, edges, and configuration:
+
+    ```text
+    name: My Chatbot
+    description: A simple chatbot
+
+    nodes:
+      A: ChatInput
+      B: OpenAIModel
+      C: ChatOutput
+
+    edges:
+      A.message -> B.input_value
+      B.text_output -> C.input_value
+
+    config:
+      B.model_name: gpt-4o-mini
+    ```
+
+    To confirm type names and input and output names before you write edges, use `describe_component_type`.
+    Connecting through `component_as_tool` enables tool mode for agent tool wiring.
+
+    The MCP client discovers the full tool list from the server.
+    In addition to building and running flows, agents can do the following:
+
+    * List, duplicate, rename, export, and delete flows
+    * Create flows from starter projects
+    * Batch several tool calls with `$N.field` references between steps
+    * Call `notify_done` when edits are finished so that the Primeagent UI refreshes
+
+The connected agent can also send the flow building task to Primeagent Assistant by calling the `run_assistant` tool.
+The `run_assistant` tool sends one instruction to Primeagent Assistant, and Primeagent Assistant builds a complete flow by choosing and connecting components.
+
+For more information, see [Call Primeagent Assistant with `wfx-mcp`](/primeagent-assistant#call-primeagent-assistant-with-wfx-mcp).
+
+## See also
+
+* [Primeagent MCP Client for coding agents](./primeagent-mcp-client)
+* [Build flows and components with Primeagent Assistant](/primeagent-assistant)
+* [Use Primeagent as an MCP server](./mcp-server)
+* [Use Primeagent as an MCP client](./mcp-client)
+* [About WFX](./wfx-overview)
+* [Install WFX](./wfx-install)

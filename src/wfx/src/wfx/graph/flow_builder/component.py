@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import secrets
 import string
+from numbers import Real
 from typing import Any
 
 import yaml
 
+from wfx.field_typing.conditional_options import resolve_conditional_options
+from wfx.graph.edge.base import TYPE_MIGRATIONS
 from wfx.graph.flow_builder._utils import node_id as _node_id
 
 # Canvas type for user-authored code components. The frontend resolves this in
@@ -24,7 +28,9 @@ from wfx.graph.flow_builder._utils import node_id as _node_id
 # (componentsToIgnoreUpdate). User overlay entries are keyed by class name in
 # the registry so the agent can reference them, but their canvas node must wear
 # this type or the frontend flags them as a missing/outdated component.
-_CUSTOM_COMPONENT_TYPE = "CustomComponent"
+CUSTOM_COMPONENT_CANVAS_TYPE = "CustomComponent"
+FLOW_BUILDER_REGISTRY_TYPE_KEY = "_flow_builder_registry_type"
+FLOW_BUILDER_UNTRUSTED_CUSTOM_KEY = "_flow_builder_untrusted_custom"
 
 
 def _generate_id(component_type: str) -> str:
@@ -87,21 +93,92 @@ def _make_node(
     # the internal marker and label the canvas node as CustomComponent so the
     # frontend treats it like any user-authored component (no spurious
     # "Update available" badge). Built-ins keep their own type.
-    is_custom = bool(node_data.pop("custom", False))
-    node_type = _CUSTOM_COMPONENT_TYPE if is_custom else component_type
+    is_custom = node_data.pop("custom", False) is True
+    node_type = CUSTOM_COMPONENT_CANVAS_TYPE if is_custom else component_type
+    data = {
+        "id": cid,
+        "type": node_type,
+        "node": node_data,
+        "showNode": True,
+    }
+    if is_custom:
+        # Keep provenance outside the user-authored component template. The
+        # canvas type must remain CustomComponent, but policy checks also need
+        # the original registry key after this node is stored and revisited.
+        data[FLOW_BUILDER_REGISTRY_TYPE_KEY] = component_type
+        data[FLOW_BUILDER_UNTRUSTED_CUSTOM_KEY] = True
 
     return {
         "id": cid,
         "type": "genericNode",
         "position": {"x": 0, "y": 0},
         "selected": False,
-        "data": {
-            "id": cid,
-            "type": node_type,
-            "node": node_data,
-            "showNode": True,
-        },
+        "data": data,
     }
+
+
+def sync_dropdown_selected_outputs(flow: dict) -> None:
+    """Pin dropdown-style source nodes to the output their edges actually use.
+
+    A component whose outputs are a single-active dropdown (multiple outputs,
+    none ``group_outputs``) renders one handle at a time. When a built node
+    carries no ``selected_output``, the canvas auto-selects its FIRST output on
+    mount, which clears the other outputs' ``selected`` flag and makes
+    ``cleanEdges`` drop any edge wired from a non-first output (e.g. a loop
+    feedback edge from ``TypeConverter.data_output``). Recording
+    ``selected_output`` = the wired output stops that auto-flip so the edge
+    survives and the node renders the correct handle. Only applied when every
+    outgoing edge of the node uses the same output (no ambiguity). Idempotent.
+    """
+    edges = flow.get("data", {}).get("edges", [])
+    used_outputs: dict[str, set[str]] = {}
+    for edge in edges:
+        source_id = edge.get("source")
+        name = (edge.get("data") or {}).get("sourceHandle", {}).get("name")
+        if source_id and name:
+            used_outputs.setdefault(source_id, set()).add(name)
+
+    for node in flow.get("data", {}).get("nodes", []):
+        wired = used_outputs.get(_node_id(node))
+        if not wired or len(wired) != 1:
+            continue
+        node_config = node.get("data", {}).get("node", {})
+        outputs = node_config.get("outputs")
+        if not isinstance(outputs, list):
+            continue
+        non_group = [o for o in outputs if isinstance(o, dict) and not o.get("group_outputs")]
+        if len(non_group) <= 1:
+            continue
+        wired_name = next(iter(wired))
+        if any(o.get("name") == wired_name for o in non_group):
+            node["data"]["selected_output"] = wired_name
+            _sync_output_type_tab(node_config, non_group, wired_name)
+
+
+def _sync_output_type_tab(node_config: dict, outputs: list[dict], wired_name: str) -> None:
+    """Align a node's ``output_type`` tab with its wired output.
+
+    Components like TypeConverter rebuild ``outputs`` from the tab value on
+    hydration (``update_outputs``), so a tab left on another type deletes the
+    wired output and dangles its edges as soon as the flow reloads. Only
+    overwrites when the current value clearly selects a different output;
+    unknown values (e.g. spec-configured aliases) are left untouched.
+    """
+    tab = node_config.get("template", {}).get("output_type")
+    if not isinstance(tab, dict) or tab.get("type") != "tab":
+        return
+    options = tab.get("options") or []
+    wired = next((o for o in outputs if o.get("name") == wired_name), None)
+    if wired is None:
+        return
+    match = next((opt for opt in options if opt in (wired.get("types") or [])), None)
+    if match is None or tab.get("value") == match:
+        return
+    selects_other_output = any(
+        tab.get("value") in (o.get("types") or []) for o in outputs if o.get("name") != wired_name
+    )
+    if selects_other_output:
+        tab["value"] = match
 
 
 def add_component(
@@ -202,12 +279,96 @@ def _coerce_model_value(value: Any) -> Any:
     return value
 
 
+def _is_scalar_option_value(value: Any) -> bool:
+    """Return whether a registry value can participate in direct option matching."""
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+# Field types whose ``options`` are scalar but whose value is structured
+# (DurationInput: unit options, ``{"unit", "value"}`` value). Gated by type, not
+# by the current value, so the decision cannot flip after a write.
+_STRUCTURED_VALUE_TYPES = frozenset({"duration"})
+
+
+def _validate_configured_value(field_name: str, field: dict[str, Any], value: Any, *, allow_zero: bool = False) -> None:
+    """Validate closed options and numeric bounds before mutating a flow."""
+    if value is None:
+        return
+
+    options = field.get("options")
+    # Model selectors and sortable lists carry dict options and keep their
+    # existing structured semantics; duration keeps its structured value.
+    has_scalar_options = (
+        isinstance(options, list)
+        and all(_is_scalar_option_value(option) for option in options)
+        and field.get("type") not in _STRUCTURED_VALUE_TYPES
+    )
+    # A list field with an options list (even an empty, open one such as an
+    # action picker) always takes a list. Checked before the re-set shortcut so
+    # an already malformed scalar cannot be re-affirmed.
+    if has_scalar_options and field.get("list") and not isinstance(value, list):
+        msg = f"Invalid value for parameter '{field_name}': {value!r}. Expected a list"
+        raise ValueError(msg)
+
+    if not field.get("conditional_options") and value == field.get("value"):
+        # Re-setting what the field already holds is always acceptable, including
+        # shipped defaults that sit outside their own range_spec (max_tokens=0).
+        return
+
+    has_direct_options = has_scalar_options and (bool(options) or bool(field.get("conditional_options")))
+    if has_direct_options and not field.get("combobox"):
+        values = value if field.get("list") and isinstance(value, list) else [value]
+        accepted_values = list(options)
+        if field.get("type") == "tab":
+            # TabInput accepts an empty selection in addition to its options.
+            accepted_values.append("")
+            # Saved flows may still carry the pre-migration type names; accept
+            # them the same way edge type checks do.
+            for alias, canonical in TYPE_MIGRATIONS.items():
+                if canonical in options:
+                    accepted_values.append(alias)
+        invalid_values = [item for item in values if item not in accepted_values]
+        if invalid_values:
+            msg = f"Invalid value for parameter '{field_name}': {invalid_values[0]!r}. Expected one of: {options!r}"
+            raise ValueError(msg)
+
+    range_spec = field.get("range_spec")
+    if not isinstance(range_spec, dict):
+        return
+
+    if not isinstance(value, Real) or isinstance(value, bool):
+        msg = f"Invalid value for parameter '{field_name}': {value!r}. Expected a number"
+        raise ValueError(msg)  # noqa: TRY004
+
+    # Integers are always finite; converting a very large int to float can overflow.
+    if not isinstance(value, int) and not math.isfinite(value):
+        msg = f"Invalid value for parameter '{field_name}': {value!r}. Expected a finite number"
+        raise ValueError(msg)
+
+    if allow_zero and value == 0:
+        # Older saved Agent/LanguageModel templates have min=1, although their
+        # runtime has always used zero to mean no explicit token limit.
+        return
+
+    minimum = range_spec.get("min")
+    maximum = range_spec.get("max")
+    if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+        bounds = f"{minimum}..{maximum}" if minimum is not None and maximum is not None else "the configured range"
+        msg = f"Invalid value for parameter '{field_name}': {value!r}. Expected a value in {bounds}"
+        raise ValueError(msg)
+
+
 def configure_component(
     flow: dict,
     component_id: str,
     params: dict[str, Any],
 ) -> None:
     """Set parameters on a component (pure version — no server calls).
+
+    Every parameter is validated first (known field, closed ``options``,
+    ``range_spec`` bounds, numeric type) and only then applied, so a
+    rejected call raises ``ValueError`` and leaves the flow, including
+    ``load_from_db`` flags, exactly as it was.
 
     Model-typed fields (``template[field].type == "model"``) accept the
     canonical ``[{"provider": X, "name": Y}]`` shape. Some flow-builder
@@ -226,8 +387,9 @@ def configure_component(
         msg = f"Component not found: {component_id}"
         raise ValueError(msg)
 
-    template = node["data"].setdefault("node", {}).setdefault("template", {})
-    for key, value in params.items():
+    template = node["data"].get("node", {}).get("template", {})
+    normalized_params: dict[str, Any] = {}
+    for key, raw_value in params.items():
         if key not in template:
             available = [k for k in template if isinstance(template[k], dict)]
             msg = f"Unknown parameter '{key}' on component '{component_id}'. Available: {available}"
@@ -244,12 +406,43 @@ def configure_component(
             # error (see sibling check + test_configure_unknown_field_raises);
             # callers catch ValueError. TypeError would break that contract.
             raise ValueError(msg)  # noqa: TRY004
+        value = raw_value
         if template[key].get("type") == "model":
-            coerced = _coerce_model_value(value)
-            params[key] = coerced
-            template[key]["value"] = coerced
-        else:
-            template[key]["value"] = value
+            value = _coerce_model_value(value)
+        normalized_params[key] = value
+
+    candidate_values = {key: field.get("value") for key, field in template.items() if isinstance(field, dict)}
+    candidate_values.update(normalized_params)
+    resolved_options = {
+        key: resolve_conditional_options(field, candidate_values)
+        for key, field in template.items()
+        if isinstance(field, dict) and field.get("conditional_options")
+    }
+    # Use the whole proposed configuration regardless of parameter order, but
+    # preserve the existing contract of validating only explicitly supplied values.
+    for key in normalized_params:
+        field = template[key]
+        if key in resolved_options:
+            field = {**field, "options": resolved_options[key]}
+        _validate_configured_value(
+            key,
+            field,
+            candidate_values[key],
+            allow_zero=key == "max_tokens" and node["data"].get("type") in {"Agent", "LanguageModelComponent"},
+        )
+
+    # Validate every parameter before changing either the flow or caller's params.
+    params.update(normalized_params)
+    for key, options in resolved_options.items():
+        template[key]["options"] = options
+    for key, value in normalized_params.items():
+        template[key]["value"] = value
+        # Values supplied through the configure API are explicit literals, just
+        # like values set through Component.set_input_value(). Do not reinterpret
+        # them as global-variable names merely because the field defaults to
+        # load_from_db=True (notably SecretStrInput credentials).
+        if "load_from_db" in template[key]:
+            template[key]["load_from_db"] = False
 
 
 def get_component(flow: dict, component_id: str) -> dict:

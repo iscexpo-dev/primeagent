@@ -8,7 +8,7 @@ export const useBarControls = (
   setSoundDetected?,
 ) => {
   const animationFrameRef = useRef<number | null>(null);
-  const timeDataRef = useRef<Uint8Array | null>(null);
+  const timeDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const baseHeightsRef = useRef<number[]>([]);
   const lastRandomizeTimeRef = useRef<number>(0);
   const minHeightRef = useRef<number>(20);
@@ -97,9 +97,7 @@ export const useBarControls = (
             timeDataRef.current = new Uint8Array(analyser.fftSize);
           }
 
-          analyser.getByteTimeDomainData(
-            timeDataRef.current as Uint8Array<ArrayBuffer>,
-          );
+          analyser.getByteTimeDomainData(timeDataRef.current);
 
           let sum = 0;
           let max = 0;

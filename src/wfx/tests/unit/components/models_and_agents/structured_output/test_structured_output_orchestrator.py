@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
 from wfx.components.models_and_agents.structured_output.structured_output_orchestrator import (
     orchestrate_structured_output,
 )
+from pydantic import BaseModel
 
 
 class _StructuredRunnable:

@@ -1,6 +1,5 @@
 import pytest
 from wfx.components.models_and_agents import PromptComponent
-from wfx.components.openai.openai_chat_model import OpenAIModelComponent
 from wfx.components.processing import OutputParserComponent
 
 from tests.integration.utils import ComponentInputHandle, run_single_component
@@ -8,6 +7,7 @@ from tests.integration.utils import ComponentInputHandle, run_single_component
 
 @pytest.mark.api_key_required
 async def test_csv_output_parser_openai():
+    openai_model_component = pytest.importorskip("wfx_openai.components.openai.openai_chat_model").OpenAIModelComponent
     format_instructions_ = ComponentInputHandle(
         clazz=OutputParserComponent,
         inputs={},
@@ -30,7 +30,7 @@ async def test_csv_output_parser_openai():
     from tests.api_keys import get_openai_api_key
 
     outputs = await run_single_component(
-        OpenAIModelComponent,
+        openai_model_component,
         inputs={
             "api_key": get_openai_api_key(),
             "output_parser": output_parser_handle,

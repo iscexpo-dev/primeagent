@@ -1,11 +1,11 @@
 from uuid import UUID
 
+from wfx.utils.async_helpers import run_until_complete
 from sqlalchemy import delete
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
-from wfx.utils.async_helpers import run_until_complete
 
-from primeagent.services.database.models.flow.model import Flow
+from primeagent.services.database.models.flow.model import Flow, persisted_flow_history_filter
 from primeagent.services.database.models.message.model import MessageTable, MessageUpdate
 from primeagent.services.deps import session_scope
 
@@ -14,7 +14,11 @@ def _messages_for_user_stmt(user_id: UUID):
     # Centralized ownership filter used by read/update flows in monitor API.
     # Joining through Flow is the source of truth for message ownership.
     # MessageTable itself does not store user_id directly.
-    return select(MessageTable).join(Flow, MessageTable.flow_id == Flow.id).where(Flow.user_id == user_id)
+    return (
+        select(MessageTable)
+        .join(Flow, MessageTable.flow_id == Flow.id)
+        .where(Flow.user_id == user_id, persisted_flow_history_filter())
+    )
 
 
 async def get_message_for_user(session: AsyncSession, user_id: UUID, message_id: UUID) -> MessageTable | None:
@@ -37,7 +41,7 @@ async def get_message_ids_for_user(session: AsyncSession, user_id: UUID, message
         select(MessageTable.id)
         .join(Flow, MessageTable.flow_id == Flow.id)
         .where(col(MessageTable.id).in_(message_ids))
-        .where(Flow.user_id == user_id)
+        .where(Flow.user_id == user_id, persisted_flow_history_filter())
     )
     return (await session.exec(stmt)).all()
 
@@ -47,7 +51,7 @@ async def get_message_ids_for_user_by_session(session: AsyncSession, user_id: UU
         select(MessageTable.id)
         .join(Flow, MessageTable.flow_id == Flow.id)
         .where(col(MessageTable.session_id) == session_id)
-        .where(Flow.user_id == user_id)
+        .where(Flow.user_id == user_id, persisted_flow_history_filter())
     )
     return (await session.exec(stmt)).all()
 

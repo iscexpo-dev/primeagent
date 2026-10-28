@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from wfx.components.flow_controls.conditional_router import ConditionalRouterComponent
     from wfx.components.flow_controls.data_conditional_router import DataConditionalRouterComponent
     from wfx.components.flow_controls.flow_tool import FlowToolComponent
+    from wfx.components.flow_controls.human_input import HumanInput
     from wfx.components.flow_controls.listen import ListenComponent
     from wfx.components.flow_controls.loop import LoopComponent
     from wfx.components.flow_controls.notify import NotifyComponent
@@ -19,6 +20,7 @@ _dynamic_imports = {
     "ConditionalRouterComponent": "conditional_router",
     "DataConditionalRouterComponent": "data_conditional_router",
     "FlowToolComponent": "flow_tool",
+    "HumanInput": "human_input",
     "ListenComponent": "listen",
     "LoopComponent": "loop",
     "NotifyComponent": "notify",
@@ -31,6 +33,7 @@ __all__ = [
     "ConditionalRouterComponent",
     "DataConditionalRouterComponent",
     "FlowToolComponent",
+    "HumanInput",
     "ListenComponent",
     "LoopComponent",
     "NotifyComponent",

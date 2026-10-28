@@ -4,16 +4,17 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import aiofiles
-from sqlmodel import delete, select, text
 from wfx.graph import Graph
 from wfx.graph.vertex.param_handler import ParameterHandler
 from wfx.log.logger import configure, logger
 from wfx.utils.util import update_settings
+from sqlmodel import delete, select
 
 from primeagent.api.utils import cascade_delete_flow
 from primeagent.load.utils import replace_tweaks_with_env
 from primeagent.processing.process import process_tweaks, run_graph
 from primeagent.services.cache.service import AsyncBaseCacheService
+from primeagent.services.database.migration import get_current_alembic_heads
 from primeagent.services.database.models import Flow, User, Variable
 from primeagent.services.database.utils import initialize_database
 from primeagent.services.deps import get_auth_service, get_cache_service, get_storage_service, session_scope
@@ -146,7 +147,9 @@ class PrimeagentRunnerExperimental:
                     tweaks[vertex.id][db_field] = field_params[db_field]
         if tweaks is not None:
             tweaks = replace_tweaks_with_env(tweaks=tweaks, env_vars=tweaks_values)
-            flow_dict = process_tweaks(flow_dict, tweaks)
+            # Built here from resolved load_from_db values, not sent by a caller,
+            # so the deployment policy does not judge them. The floor still does.
+            flow_dict = process_tweaks(flow_dict, tweaks, caller_supplied=False)
 
         # Recursively update load_from_db fields
         def update_load_from_db(obj):
@@ -214,6 +217,12 @@ class PrimeagentRunnerExperimental:
 
     @staticmethod
     async def clear_flow_state(flow_dict: dict):
+        from primeagent.services.memory_base.flow_cleanup import (
+            FlowMemoryBaseCleanup,
+            finalize_flow_memory_base_cleanup,
+        )
+
+        memory_base_cleanups: list[FlowMemoryBaseCleanup] = []
         cache_service = get_cache_service()
         if isinstance(cache_service, AsyncBaseCacheService):
             await cache_service.clear()
@@ -222,17 +231,27 @@ class PrimeagentRunnerExperimental:
         async with session_scope() as session:
             flow_id = flow_dict["id"]
             uuid_obj = flow_id if isinstance(flow_id, UUID) else UUID(str(flow_id))
-            await cascade_delete_flow(session, uuid_obj)
+            await cascade_delete_flow(session, uuid_obj, memory_base_cleanups=memory_base_cleanups)
+        # session_scope committed on exit; drop the external resources now.
+        await finalize_flow_memory_base_cleanup(memory_base_cleanups)
 
     @staticmethod
     async def clear_user_state(user_id: str):
+        from primeagent.services.memory_base.flow_cleanup import (
+            FlowMemoryBaseCleanup,
+            finalize_flow_memory_base_cleanup,
+        )
+
+        memory_base_cleanups: list[FlowMemoryBaseCleanup] = []
         async with session_scope() as session:
             flows = await session.exec(select(Flow.id).where(Flow.user_id == user_id))
             flow_ids: list[UUID] = [fid for fid in flows.scalars().all() if fid is not None]
             for flow_id in flow_ids:
-                await cascade_delete_flow(session, flow_id)
+                await cascade_delete_flow(session, flow_id, memory_base_cleanups=memory_base_cleanups)
             await session.exec(delete(Variable).where(Variable.user_id == user_id))
             await session.exec(delete(User).where(User.id == user_id))
+        # session_scope committed on exit; drop the external resources now.
+        await finalize_flow_memory_base_cleanup(memory_base_cleanups)
 
     async def init_db_if_needed(self):
         if not await self.database_exists_check() and self.should_initialize_db:
@@ -244,12 +263,7 @@ class PrimeagentRunnerExperimental:
     @staticmethod
     async def database_exists_check():
         async with session_scope() as session:
-            try:
-                result = await session.exec(text("SELECT version_num FROM public.alembic_version"))
-                return result.first() is not None
-            except Exception as e:  # noqa: BLE001
-                await logger.adebug(f"Database check failed: {e}")
-                return False
+            return bool(await get_current_alembic_heads(session))
 
     @staticmethod
     async def get_flow_dict(flow: Path | str | dict) -> dict:

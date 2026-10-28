@@ -4,6 +4,7 @@ from ibm_watsonx_ai.metanames import EmbedTextParamsMetaNames
 from langchain_ibm import WatsonxEmbeddings
 from wfx.base.embeddings.model import LCEmbeddingsModel
 from wfx.base.models.model_utils import get_watsonx_embedding_models
+from wfx.base.models.provider_ssrf import ensure_credential_endpoint_allowed, validate_provider_base_url
 from wfx.field_typing import Embeddings
 from wfx.io import BoolInput, DropdownInput, IntInput, Output, SecretStrInput, StrInput
 from wfx.log.logger import logger
@@ -14,6 +15,7 @@ from wfx.utils.secrets import secret_value_to_str
 class WatsonxEmbeddingsComponent(LCEmbeddingsModel):
     """WFX component for IBM watsonx.ai embeddings."""
 
+    model_provider_id = "ibm-watsonx"
     display_name = "IBM watsonx.ai Embeddings"
     description = "Generate embeddings using IBM watsonx.ai models."
     icon = "WatsonxAI"
@@ -132,6 +134,26 @@ class WatsonxEmbeddingsComponent(LCEmbeddingsModel):
         if bool(self.space_id) == bool(self.project_id):
             msg = "Exactly one of Project_ID or Space_ID must be selected"
             raise ValueError(msg)
+
+        # url is tenant-editable and the SDK sends the operator's API key to whatever
+        # host it names. The dropdown's canonical watsonx region endpoints are server-chosen;
+        # block internal/cloud-metadata destinations for anything else before connecting.
+        if self.url not in WatsonxEmbeddingsComponent._urls:
+            ensure_credential_endpoint_allowed(
+                api_key_value, self.url, sdk_env_fallback=("WATSONX_API_KEY", "WATSONX_APIKEY")
+            )
+            # The SDK also loads tokens/passwords independently of the supplied API key.
+            ensure_credential_endpoint_allowed(
+                None,
+                self.url,
+                sdk_env_fallback=(
+                    "WATSONX_TOKEN",
+                    "WATSONX_PASSWORD",
+                    "USER_ACCESS_TOKEN",
+                    "RUNTIME_ENV_ACCESS_TOKEN_FILE",
+                ),
+            )
+            validate_provider_base_url(self.url)
 
         return WatsonxEmbeddings(
             apikey=api_key_value,

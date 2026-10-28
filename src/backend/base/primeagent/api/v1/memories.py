@@ -28,10 +28,17 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlmodel import apaginate
+from wfx.base.knowledge_bases.backends.naming import StorageRoutingNotAllowedError
+from wfx.schema.legacy_render import render_v1_content_blocks
+from wfx.services.model_provider_policy import ModelProviderPolicyError
 from pydantic import BaseModel
-from sqlmodel import select
+from sqlmodel import col, select
 
-from primeagent.api.utils import CurrentActiveUser
+from primeagent.api.utils import CurrentActiveUser, knowledge_base_service
+from primeagent.services.authorization import KnowledgeBaseAction, ensure_knowledge_base_permission
+from primeagent.services.authorization.fetch import deny_to_404
+from primeagent.services.authorization.listing import visible_scope_prefilter
+from primeagent.services.database.models.knowledge_base import KnowledgeBaseRecord
 from primeagent.services.database.models.memory_base.model import (
     MemoryBase,
     MemoryBaseCreate,
@@ -39,9 +46,12 @@ from primeagent.services.database.models.memory_base.model import (
     MemoryBaseSessionRead,
     MemoryBaseUpdate,
 )
-from primeagent.services.deps import get_memory_base_service, session_scope
+from primeagent.services.deps import get_authorization_service, get_memory_base_service, session_scope
 from primeagent.services.jobs import DuplicateJobError
-from primeagent.services.memory_base.service import PreprocessingValidationError
+from primeagent.services.knowledge_base_storage.runtime import StorageUnavailableError, storage_unavailable_message
+from primeagent.services.memory_base.kb_path_helpers import BackendProvisioningError
+from primeagent.services.memory_base.provider_scope import MemoryBaseFlowNotFoundError
+from primeagent.services.memory_base.service import EmbeddingProviderValidationError, PreprocessingValidationError
 
 router = APIRouter(tags=["Memories"], prefix="/memories", include_in_schema=False)
 
@@ -83,9 +93,74 @@ class RegenerateResponse(BaseModel):
     job_ids: list[str]
 
 
+async def _get_memory_base_for_action(
+    db: Any,
+    *,
+    memory_base_id: uuid.UUID,
+    current_user: CurrentActiveUser,
+    action: KnowledgeBaseAction,
+    owner_scoped_memory_base: MemoryBase | None = None,
+    owner_lookup_done: bool = False,
+) -> MemoryBase:
+    """Resolve a Memory Base by id, then authorize against its true owner."""
+    mb = owner_scoped_memory_base
+    if mb is None and not owner_lookup_done:
+        mb = await get_memory_base_service().get(memory_base_id, user_id=current_user.id)
+    if mb is None:
+        authz = get_authorization_service()
+        if await authz.is_enabled() and await authz.supports_cross_user_fetch():
+            mb = await db.get(MemoryBase, memory_base_id)
+    if mb is None:
+        raise HTTPException(status_code=404, detail="Memory base not found")
+    try:
+        await ensure_knowledge_base_permission(
+            current_user,
+            action,
+            kb_id=mb.id,
+            kb_user_id=mb.user_id,
+            kb_name=mb.kb_name,
+        )
+    except HTTPException as exc:
+        raise deny_to_404(exc, detail="Memory base not found") from exc
+    if action == KnowledgeBaseAction.INGEST:
+        from primeagent.api.utils import knowledge_base_service
+
+        record = await knowledge_base_service.get_by_user_and_name(mb.user_id, mb.kb_name)
+        if record is not None and (record.storage_state != "ready" or record.backend_type == "chroma"):
+            raise HTTPException(
+                status_code=409,
+                detail=storage_unavailable_message(record.storage_state),
+            )
+    return mb
+
+
 # ------------------------------------------------------------------ #
 #  CRUD                                                                #
 # ------------------------------------------------------------------ #
+
+
+async def _storage_availability(items: list[MemoryBaseRead]) -> None:
+    """Enrich availability in one owner-aware query for the entire response."""
+    if not items:
+        return
+    async with session_scope() as session:
+        rows = (
+            await session.exec(
+                select(KnowledgeBaseRecord).where(
+                    col(KnowledgeBaseRecord.name).in_([item.kb_name for item in items]),
+                    col(KnowledgeBaseRecord.user_id).in_([item.user_id for item in items]),
+                )
+            )
+        ).all()
+    lookup = {(row.user_id, row.name): row for row in rows}
+    for item in items:
+        row = lookup.get((item.user_id, item.kb_name))
+        if row is not None:
+            item.storage_state = row.storage_state
+            item.storage_kb_id = row.id
+            item.active_migration_id = row.active_migration_id
+        else:
+            item.storage_state = "needs_attention"
 
 
 @router.post("", status_code=HTTPStatus.CREATED)
@@ -97,20 +172,51 @@ async def create_memory_base(
     """Create a new Memory Base.
 
     - kb_name is auto-generated as `{sanitized_name}_{8hex}`.
-    - KB directory and embedding_metadata.json are created on disk immediately.
+    - The backing ``knowledge_base`` row is created immediately; a local directory
+      is provisioned only when the resolved backend is local Chroma.
     - Returns 409 if a Memory Base with the same name already exists for this user.
     - Returns 422 if preprocessing=true but preproc_model is missing.
     """
+    # Memory bases are knowledge-base-backed resources; guard via the KB family.
+    # The actor is only the prospective owner during CREATE, so the shared guard
+    # still evaluates policy instead of applying the existing-resource override.
+    await ensure_knowledge_base_permission(
+        current_user,
+        KnowledgeBaseAction.CREATE,
+        kb_user_id=current_user.id,
+    )
     try:
-        mb = await get_memory_base_service().create(payload, user_id=current_user.id)
-    except PermissionError as exc:
+        mb = await get_memory_base_service().create(
+            payload,
+            user_id=current_user.id,
+            is_superuser=bool(current_user.is_superuser),
+        )
+    except MemoryBaseFlowNotFoundError as exc:
         # Flow not found or belongs to another user — return 404 to avoid info-leak
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except PreprocessingValidationError as exc:
+    except ModelProviderPolicyError as exc:
+        # Keep a hidden provider indistinguishable from one that does not exist.
+        raise HTTPException(status_code=404, detail="Model provider not found") from exc
+    except (PreprocessingValidationError, EmbeddingProviderValidationError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except StorageRoutingNotAllowedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except BackendProvisioningError as exc:
+        # Bad remote vector-store config (unreachable / wrong credentials) —
+        # rejected up front so we don't create a silently-dead Memory Base.
+        # Must precede the generic ValueError handler (it is a ValueError
+        # subclass, and 409 "already exists" would be the wrong signal).
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return MemoryBaseRead.model_validate(mb)
+    # ``backend_type``/``backend_config`` live on the knowledge_base row, not the
+    # memory_base table. Read back the effective server-resolved values so an
+    # omitted type correctly reports an env-defaulted pgvector backend.
+    read = MemoryBaseRead.model_validate(mb)
+    backends = await knowledge_base_service.get_backends_for_names([mb.kb_name])
+    read.backend_type, read.backend_config = backends.get(mb.kb_name, ("chroma", {}))
+    await _storage_availability([read])
+    return read
 
 
 @router.get("", status_code=HTTPStatus.OK)
@@ -126,11 +232,31 @@ async def list_memory_bases(
         page  - 1-based page number (default 1)
         size  - page size (default 50)
     """
+    visibility = await visible_scope_prefilter(
+        current_user,
+        resource_type="knowledge_base",
+        act=KnowledgeBaseAction.READ,
+    )
     async with session_scope() as db:
-        stmt = get_memory_base_service().list_for_user_stmt(user_id=current_user.id, flow_id=flow_id)
-        return await apaginate(
-            db, stmt, params=params, transformer=lambda items: [MemoryBaseRead.model_validate(m) for m in items]
+        stmt = get_memory_base_service().list_for_user_stmt(
+            user_id=current_user.id,
+            flow_id=flow_id,
+            visibility=visibility,
         )
+        raw_page = await apaginate(db, stmt, params=params)
+        # Convert to response models while the session is still open.
+        items = [MemoryBaseRead.model_validate(m) for m in raw_page.items]
+
+    # Eager-load the backing KB's backend (type + config) for the whole page in
+    # ONE batched query (an ``IN (...)`` over the page's kb_names) — the same
+    # shape SQLAlchemy's ``selectinload`` issues — so the config dropdown can
+    # surface the backend without an N+1 per-item lookup.
+    kb_names = [r.kb_name for r in items if r.kb_name]
+    backends = await knowledge_base_service.get_backends_for_names(kb_names)
+    for read in items:
+        read.backend_type, read.backend_config = backends.get(read.kb_name, ("chroma", {}))
+    await _storage_availability(items)
+    return raw_page.model_copy(update={"items": items})
 
 
 @router.get("/{memory_base_id}", status_code=HTTPStatus.OK)
@@ -139,10 +265,21 @@ async def get_memory_base(
     current_user: CurrentActiveUser,
 ) -> MemoryBaseRead:
     """Get details for a specific Memory Base."""
-    mb = await get_memory_base_service().get(memory_base_id, user_id=current_user.id)
-    if mb is None:
-        raise HTTPException(status_code=404, detail="Memory base not found")
-    return MemoryBaseRead.model_validate(mb)
+    async with session_scope() as db:
+        mb = await _get_memory_base_for_action(
+            db,
+            memory_base_id=memory_base_id,
+            current_user=current_user,
+            action=KnowledgeBaseAction.READ,
+        )
+    read = MemoryBaseRead.model_validate(mb)
+    # Resolve the backing KB's backend from the knowledge_base row so the
+    # Control Center config dropdown can surface it (config distinguishes
+    # Chroma Local vs Cloud).
+    backends = await knowledge_base_service.get_backends_for_names([mb.kb_name])
+    read.backend_type, read.backend_config = backends.get(mb.kb_name, ("chroma", {}))
+    await _storage_availability([read])
+    return read
 
 
 @router.get("/{memory_base_id}/sessions", status_code=HTTPStatus.OK)
@@ -164,11 +301,23 @@ async def list_sessions(
 
     async with session_scope() as db:
         try:
-            mb = await get_memory_base_service().get_memory_base_or_404(db, memory_base_id, current_user.id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            owner_scoped_memory_base = await get_memory_base_service().get_memory_base_or_404(
+                db,
+                memory_base_id,
+                current_user.id,
+            )
+        except ValueError:
+            owner_scoped_memory_base = None
+        mb = await _get_memory_base_for_action(
+            db,
+            memory_base_id=memory_base_id,
+            current_user=current_user,
+            action=KnowledgeBaseAction.READ,
+            owner_scoped_memory_base=owner_scoped_memory_base,
+            owner_lookup_done=True,
+        )
 
-        stmt = get_memory_base_service().sessions_stmt(memory_base_id, current_user.id)
+        stmt = get_memory_base_service().sessions_stmt(memory_base_id, mb.user_id)
         raw_page = await apaginate(db, stmt, params=params)
 
         items: list[MemoryBaseSessionRead] = []
@@ -200,11 +349,12 @@ async def list_memory_base_messages(
     """
     service = get_memory_base_service()
     async with session_scope() as db:
-        mb_stmt = select(MemoryBase).where(MemoryBase.id == memory_base_id).where(MemoryBase.user_id == current_user.id)
-        result = await db.exec(mb_stmt)
-        mb = result.first()
-        if mb is None:
-            raise HTTPException(status_code=404, detail="Memory base not found")
+        mb = await _get_memory_base_for_action(
+            db,
+            memory_base_id=memory_base_id,
+            current_user=current_user,
+            action=KnowledgeBaseAction.READ,
+        )
 
         if mb.preprocessing:
             # Preprocessing MBs: the KB holds LLM-distilled output, so the
@@ -244,8 +394,8 @@ async def list_memory_base_messages(
                     sender=msg.sender,
                     sender_name=msg.sender_name,
                     session_id=msg.session_id,
-                    text=msg.text,
-                    content_blocks=msg.content_blocks or [],
+                    text=msg.text or "",
+                    content_blocks=render_v1_content_blocks(msg.content_blocks) or [],
                     job_id=mir.job_id,
                     ingested_at=mir.ingested_at,
                 )
@@ -267,13 +417,30 @@ async def update_memory_base(
     Preprocessing fields (preprocessing, preproc_model, preproc_instructions, preproc_kill_phrase)
     are immutable after creation and cannot be patched.
     """
+    async with session_scope() as db:
+        mb = await _get_memory_base_for_action(
+            db,
+            memory_base_id=memory_base_id,
+            current_user=current_user,
+            action=KnowledgeBaseAction.WRITE,
+        )
     try:
-        mb = await get_memory_base_service().update(memory_base_id, user_id=current_user.id, patch=patch)
+        mb = await get_memory_base_service().update(
+            memory_base_id,
+            owner_user_id=mb.user_id,
+            patch=patch,
+            actor_user_id=current_user.id,
+            actor_is_superuser=bool(current_user.is_superuser),
+        )
+    except MemoryBaseFlowNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PreprocessingValidationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if mb is None:
         raise HTTPException(status_code=404, detail="Memory base not found")
-    return MemoryBaseRead.model_validate(mb)
+    read = MemoryBaseRead.model_validate(mb)
+    await _storage_availability([read])
+    return read
 
 
 @router.delete("/{memory_base_id}", status_code=HTTPStatus.NO_CONTENT)
@@ -287,7 +454,17 @@ async def delete_memory_base(
     removed. The associated KB directory is deleted from disk afterwards
     (best-effort — a disk failure will not affect the 204 response).
     """
-    deleted = await get_memory_base_service().delete(memory_base_id, user_id=current_user.id)
+    async with session_scope() as db:
+        mb = await _get_memory_base_for_action(
+            db,
+            memory_base_id=memory_base_id,
+            current_user=current_user,
+            action=KnowledgeBaseAction.DELETE,
+        )
+    try:
+        deleted = await get_memory_base_service().delete(memory_base_id, user_id=mb.user_id)
+    except StorageUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Memory base not found")
 
@@ -308,10 +485,18 @@ async def flush_memory_base(
     Returns 409 Conflict if an ingestion task is already in progress for the
     given (memory_base_id, session_id) pair to prevent concurrent indexing.
     """
+    async with session_scope() as db:
+        mb = await _get_memory_base_for_action(
+            db,
+            memory_base_id=memory_base_id,
+            current_user=current_user,
+            action=KnowledgeBaseAction.INGEST,
+        )
     try:
         job_id = await get_memory_base_service().trigger_ingestion(
             memory_base_id=memory_base_id,
-            user_id=current_user.id,
+            owner_user_id=mb.user_id,
+            actor_user_id=current_user.id,
             session_id=body.session_id,
         )
     except ValueError as exc:
@@ -338,8 +523,17 @@ async def check_mismatch(
 
     The UI should surface a "Mismatch Detected" warning and offer a Regenerate button.
     """
+    async with session_scope() as db:
+        mb = await _get_memory_base_for_action(
+            db,
+            memory_base_id=memory_base_id,
+            current_user=current_user,
+            action=KnowledgeBaseAction.READ,
+        )
     try:
-        detected = await get_memory_base_service().check_mismatch(memory_base_id, user_id=current_user.id)
+        detected = await get_memory_base_service().check_mismatch(memory_base_id, user_id=mb.user_id)
+    except StorageUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return MismatchResponse(mismatch_detected=detected)
@@ -355,8 +549,21 @@ async def regenerate_memory_base(
     Use this to recover from external Chroma directory deletions or vector DB corruption.
     All MemoryBaseSession.cursor_id values are set to None before re-running ingestion.
     """
+    async with session_scope() as db:
+        mb = await _get_memory_base_for_action(
+            db,
+            memory_base_id=memory_base_id,
+            current_user=current_user,
+            action=KnowledgeBaseAction.INGEST,
+        )
     try:
-        job_ids = await get_memory_base_service().regenerate(memory_base_id, user_id=current_user.id)
+        job_ids = await get_memory_base_service().regenerate(
+            memory_base_id=memory_base_id,
+            owner_user_id=mb.user_id,
+            actor_user_id=current_user.id,
+        )
+    except StorageUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return RegenerateResponse(job_ids=job_ids)

@@ -1,12 +1,14 @@
 import asyncio
+import faulthandler
 import json
 import os
 import shutil
+import sys
 
 # we need to import tmpdir
 import tempfile
 from collections.abc import AsyncGenerator
-from contextlib import suppress
+from contextlib import AsyncExitStack, suppress
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -17,6 +19,7 @@ from asgi_lifespan import LifespanManager
 from blockbuster import blockbuster_ctx
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient
+from filelock import FileLock
 from httpx import ASGITransport, AsyncClient
 from primeagent.initial_setup.constants import STARTER_FOLDER_NAME
 from primeagent.main import create_app
@@ -26,18 +29,25 @@ from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.database.models.transactions.model import TransactionTable
 from primeagent.services.database.models.user.model import User, UserCreate, UserRead
 from primeagent.services.database.models.vertex_builds.crud import delete_vertex_builds_by_flow_id_unchecked
-from primeagent.services.deps import get_auth_service, get_db_service, session_scope
+from primeagent.services.deps import (
+    get_auth_service,
+    get_db_service,
+    get_settings_service,
+    is_settings_service_initialized,
+    session_scope,
+)
+from wfx.components.input_output import ChatInput
+from wfx.graph import Graph
+from wfx.log.logger import logger
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel.pool import StaticPool
 from typer.testing import CliRunner
-from wfx.components.input_output import ChatInput
-from wfx.graph import Graph
-from wfx.log.logger import logger
 
 from tests.api_keys import get_openai_api_key
+from tests.database_template import DatabaseTemplate
 
 load_dotenv()
 
@@ -63,6 +73,36 @@ def disable_models_dev_refresh():
     os.environ["PRIMEAGENT_MODELS_DEV_REFRESH"] = "false"
     yield
     os.environ.pop("PRIMEAGENT_MODELS_DEV_REFRESH", None)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def disable_mcp_auto_init():
+    """Keep the MCP server auto-initialization out of tests.
+
+    Every app boot otherwise schedules a lifespan task (``delayed_init_mcp_servers``)
+    that, ~10s in, reconciles each project's MCP server config. For apikey/none projects
+    that reconciliation spawns ``uvx mcp-proxy`` and makes an outbound connect with no
+    bounded timeout, so on a slow/CI runner it hangs until the OS connect timeout (~127s),
+    inflating every app-fixture test by ~130s and pushing the heaviest test split past the
+    CI step timeout. Skipping it keeps the boot local and deterministic.
+    """
+    previous_env_value = os.environ.get("PRIMEAGENT_SKIP_MCP_AUTO_INIT")
+    previous_setting = (
+        get_settings_service().settings.skip_mcp_auto_init
+        if is_settings_service_initialized()
+        else (previous_env_value or "").lower() in {"1", "true", "yes", "on"}
+    )
+
+    os.environ["PRIMEAGENT_SKIP_MCP_AUTO_INIT"] = "true"
+    if is_settings_service_initialized():
+        get_settings_service().set("skip_mcp_auto_init", value=True)
+    yield
+    if previous_env_value is None:
+        os.environ.pop("PRIMEAGENT_SKIP_MCP_AUTO_INIT", None)
+    else:
+        os.environ["PRIMEAGENT_SKIP_MCP_AUTO_INIT"] = previous_env_value
+    if is_settings_service_initialized():
+        get_settings_service().set("skip_mcp_auto_init", previous_setting)
 
 
 # TODO: Revert this to True once bb.functions[func].can_block_in("http/client.py", "_safe_read") is fixed
@@ -129,10 +169,61 @@ def blockbuster(request):
             yield bb
 
 
+# Hard, GIL-proof per-test watchdog. pytest-timeout's thread method (pyproject
+# `timeout = 90`) arms a *Python* timer thread, which needs the GIL to run its
+# callback -- a hang inside a C call that never releases the GIL (observed on
+# the release-1.11.3 py3.13 Group 5 job: a worker froze for 25+ minutes in
+# test_login.py::test_session_endpoint_rejects_expired_external_token with no
+# dump) silently defeats it and the job burns to the CI step wall.
+# faulthandler.dump_traceback_later() instead uses a C-level watchdog thread
+# that needs no GIL: it dumps every thread's stack to the real stderr fd
+# (inherited by xdist workers, so it lands in the CI log) and, with exit=True,
+# hard-exits the wedged worker -- xdist then reports "node down", replaces the
+# worker, and --reruns retries the test on the fresh one. The 120s default sits
+# above pytest-timeout's 90s so the soft watchdog (clean per-test failure)
+# always gets first shot; this only fires when that one *couldn't* run.
+# Disable locally for debugger sessions with PRIMEAGENT_TEST_HARD_TIMEOUT=0.
+_HARD_TIMEOUT_S = float(os.getenv("PRIMEAGENT_TEST_HARD_TIMEOUT", "120"))
+
+# Real-stderr fd, dup'd at pytest_configure time. pytest's fd-level capture
+# redirects fd 2 into a per-test temp file that is discarded when the process
+# hard-exits, so a dump armed against sys.__stderr__ at *test* time vanishes
+# (which is also why pytest-timeout's thread dumps never showed in CI logs).
+# At configure time fd 2 still points at the process's original stderr -- in an
+# xdist worker that fd is inherited from the controller, so dumps written to
+# the dup land in the CI step log. Same strategy as pytest's builtin
+# faulthandler plugin.
+_watchdog_stderr_fd: int | None = None
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item, nextitem):  # noqa: ARG001
+    if _HARD_TIMEOUT_S <= 0 or _watchdog_stderr_fd is None:
+        return (yield)
+    faulthandler.dump_traceback_later(_HARD_TIMEOUT_S, file=_watchdog_stderr_fd, exit=True)
+    try:
+        return (yield)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
+
 def pytest_configure(config):
+    global _watchdog_stderr_fd  # noqa: PLW0603
+    if _HARD_TIMEOUT_S > 0 and _watchdog_stderr_fd is None:
+        with suppress(AttributeError, ValueError, OSError):
+            try:
+                fd = sys.stderr.fileno()
+            except (AttributeError, ValueError, OSError):
+                fd = sys.__stderr__.fileno()
+            _watchdog_stderr_fd = os.dup(fd)
+
     config.addinivalue_line("markers", "noclient: don't create a client for this test")
     config.addinivalue_line("markers", "load_flows: load the flows for this test")
     config.addinivalue_line("markers", "api_key_required: run only if the api key is set in the environment variables")
+    config.addinivalue_line(
+        "markers",
+        "real_services: Tests that need real service instances (real SQLite + real Postgres + real Redis)",
+    )
     data_path = Path(__file__).parent.absolute() / "data"
 
     pytest.BASIC_EXAMPLE_PATH = data_path / "basic_example.json"
@@ -195,6 +286,8 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001
             item.add_marker(pytest.mark.integration)
         elif "tests/slow/" in str(item.fspath):
             item.add_marker(pytest.mark.slow)
+        if {"alembic", "initial_setup"} & set(item.path.parts):
+            item.add_marker(pytest.mark.full_database_init)
 
 
 async def delete_transactions_by_flow_id(db: AsyncSession, flow_id: UUID):
@@ -318,6 +411,8 @@ def distributed_client_fixture(
         db_path = Path(db_dir) / "test.db"
         monkeypatch.setenv("PRIMEAGENT_DATABASE_URL", f"sqlite:///{db_path}")
         monkeypatch.setenv("PRIMEAGENT_AUTO_LOGIN", "false")
+        monkeypatch.setenv("PRIMEAGENT_SUPERUSER", "primeagent")
+        monkeypatch.setenv("PRIMEAGENT_SUPERUSER_PASSWORD", "test-superuser-password")
         # monkeypatch primeagent.services.task.manager.USE_CELERY to True
         # monkeypatch.setattr(manager, "USE_CELERY", True)
         monkeypatch.setattr(celery_app, "celery_app", celery_app.make_celery("primeagent", Config))
@@ -455,22 +550,46 @@ def use_noop_session(monkeypatch):
 
 @pytest.fixture(name="client")
 async def client_fixture(
-    session: Session,  # noqa: ARG001
     monkeypatch,
     request,
     load_flows_dir,
+    database_templates,
 ):
     # Set the database url to a test database
     if "noclient" in request.keywords:
         yield
     else:
+        # Only cache the ordinary API fixture's schema. Startup and migration
+        # tests can request full_database_init or construct their own app.
+        from primeagent.services import utils as service_utils
+        from primeagent.services.database.utils import initialize_database
+
+        use_template = (
+            "full_database_init" not in request.keywords
+            and os.getenv("PRIMEAGENT_TEST_DATABASE_TEMPLATE", "1") != "0"
+            and service_utils.initialize_database is initialize_database
+        )
+        # Tests sometimes register additional SQLModel tables dynamically.
+        # Never reuse a template made before their metadata was registered.
+        schema_key = tuple((name, id(table)) for name, table in sorted(SQLModel.metadata.tables.items()))
+        template = database_templates(schema_key) if use_template else None
 
         def init_app():
             db_dir = tempfile.mkdtemp()
             db_path = Path(db_dir) / "test.db"
+            restored = template.restore(db_path) if template else False
             monkeypatch.setenv("PRIMEAGENT_DATABASE_URL", f"sqlite:///{db_path}")
             monkeypatch.setenv("PRIMEAGENT_AUTO_LOGIN", "false")
+            monkeypatch.setenv("PRIMEAGENT_KNOWLEDGE_BASES_DIR", str(db_path.parent / "knowledge"))
+            monkeypatch.setenv("PRIMEAGENT_SUPERUSER", "primeagent")
+            monkeypatch.setenv("PRIMEAGENT_SUPERUSER_PASSWORD", "test-superuser-password")
             monkeypatch.setenv("DO_NOT_TRACK", "true")
+            # Triggers: keep the leased dispatcher out of the test app. It is a
+            # background loop that polls the database, so leaving it on would
+            # race any test that drives the dispatcher directly and would add a
+            # poll to every unrelated API test. Trigger tests call the loop's
+            # own entry points instead.
+            monkeypatch.setenv("PRIMEAGENT_TRIGGER_DISPATCHER_ENABLED", "false")
             if "load_flows" in request.keywords:
                 shutil.copyfile(
                     pytest.BASIC_EXAMPLE_PATH, Path(load_flows_dir) / "c54f9130-f2fa-4a3e-b22a-3856d946351b.json"
@@ -486,20 +605,60 @@ async def client_fixture(
             db_service = get_db_service()
             db_service.database_url = f"sqlite:///{db_path}"
             db_service.reload_engine()
-            return app, db_path
+            return app, db_path, restored
 
-        app, db_path = await asyncio.to_thread(init_app)
-        # app.dependency_overrides[get_session] = get_session_override
-        async with (
-            LifespanManager(app, startup_timeout=None, shutdown_timeout=60) as manager,
-            AsyncClient(transport=ASGITransport(app=manager.app), base_url="http://testserver/", http2=True) as client,
-        ):
+        app, db_path, restored = await asyncio.to_thread(init_app)
+
+        async def initialize_test_database(*, fix_migration=False):
+            if not restored:
+                await initialize_database(fix_migration=fix_migration)
+                if template:
+                    await asyncio.to_thread(template.capture, db_path)
+
+        async with AsyncExitStack() as stack:
+            with monkeypatch.context() as startup_patch:
+                # Each fixture has its own database, so another worker's
+                # starter-project lock must not make this app skip its seeds.
+                # Keep real locking, scoped to this database's directory.
+                main_module = sys.modules["primeagent.main"]
+                if main_module.FileLock is FileLock:
+                    startup_patch.setattr(
+                        main_module,
+                        "FileLock",
+                        lambda path, **kwargs: FileLock(db_path.parent / Path(path).name, **kwargs),
+                    )
+                if template:
+                    startup_patch.setattr(service_utils, "initialize_database", initialize_test_database)
+                manager = await stack.enter_async_context(LifespanManager(app, startup_timeout=60, shutdown_timeout=60))
+                # Startup schedules storage discovery. Settle it before tests
+                # insert fenced records that the background migration could alter.
+                from primeagent.services.knowledge_base_storage import coordinator
+
+                await coordinator.wait_for_upgrade(timeout=30)
+            # Restore the real initializer before test code runs. Tests of
+            # database initialization must still exercise production behavior.
+            client = await stack.enter_async_context(
+                AsyncClient(transport=ASGITransport(app=manager.app), base_url="http://testserver/", http2=True)
+            )
             yield client
         # app.dependency_overrides.clear()
         monkeypatch.undo()
         # clear the temp db
         with suppress(FileNotFoundError):
             await anyio.Path(db_path).unlink()
+
+
+@pytest.fixture(scope="session")
+def database_templates(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("database-templates")
+    templates = {}
+
+    def get_template(schema_key):
+        if schema_key not in templates:
+            templates[schema_key] = DatabaseTemplate(directory / f"schema-{len(templates)}.db")
+        return templates[schema_key]
+
+    return get_template
 
 
 @pytest.fixture

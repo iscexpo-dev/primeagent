@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import AlertDropdown from "@/alerts/alertDropDown";
-import PrimeagentLogo from "@/assets/PrimeagentLogo.svg?react";
 import ForwardedIconComponent from "@/components/common/genericIconComponent";
 import ModelProviderCount from "@/components/common/modelProviderCountComponent";
 import ShadTooltip from "@/components/common/shadTooltipComponent";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import CustomAccountMenu from "@/customization/components/custom-AccountMenu";
+import CustomHeaderLogo from "@/customization/components/custom-header-logo";
 import CustomPrimeagentCounts from "@/customization/components/custom-primeagent-counts";
 import { CustomOrgSelector } from "@/customization/components/custom-org-selector";
 import { useCustomNavigate } from "@/customization/hooks/use-custom-navigate";
@@ -50,7 +50,7 @@ export default function AppHeader(): JSX.Element {
   };
 
   return (
-    <div
+    <header
       className={`z-10 flex h-[48px] w-full items-center justify-between border-b pr-5 pl-2.5 dark:bg-background`}
       data-testid="app-header"
     >
@@ -62,10 +62,11 @@ export default function AppHeader(): JSX.Element {
         <Button
           unstyled
           onClick={() => navigate("/")}
-          className="mr-1 flex h-8 w-8 items-center"
+          className="mr-1 flex h-8 w-8 items-center justify-center"
           data-testid="icon-ChevronLeft"
+          aria-label={t("header.home")}
         >
-          <PrimeagentLogo className="h-5 w-5" />
+          <CustomHeaderLogo className="h-5 w-5" />
         </Button>
         <CustomOrgSelector />
       </div>
@@ -88,11 +89,16 @@ export default function AppHeader(): JSX.Element {
           notificationRef={notificationContentRef}
           onClose={() => setActiveState(null)}
         >
-          <ShadTooltip content={t("header.notifications")} side="bottom">
+          <ShadTooltip
+            content={t("header.notifications")}
+            side="bottom"
+            ariaDescribedBy={undefined}
+          >
             <AlertDropdown onClose={() => setActiveState(null)}>
               <Button
                 ref={notificationRef}
                 unstyled
+                aria-label={t("header.notifications")}
                 onClick={() =>
                   setActiveState((prev) =>
                     prev === "notifications" ? null : "notifications",
@@ -128,6 +134,6 @@ export default function AppHeader(): JSX.Element {
           <CustomAccountMenu />
         </div>
       </div>
-    </div>
+    </header>
   );
 }

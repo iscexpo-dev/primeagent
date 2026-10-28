@@ -11,32 +11,51 @@ import re
 import zipfile
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import aiofiles
 from anyio import Path
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from wfx.log import logger
+from pydantic import ValidationError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
-from wfx.log import logger
 
-from primeagent.api.utils import build_content_disposition, normalize_flow_for_export, remove_api_keys
+from primeagent.api.utils import (
+    build_content_disposition,
+    normalize_flow_for_export,
+    remove_api_keys,
+    strip_flow_secrets,
+)
+from primeagent.api.v1.flow_conflict import claim_version_token
+from primeagent.services.audit import vocabulary as audit_vocab
+from primeagent.services.audit.operations import stage_flow_succeeded
+from primeagent.services.authorization.fetch import authorized_or_owner_scoped
 from primeagent.services.database.models.base import orjson_dumps
 from primeagent.services.database.models.deployment.orm_guards import ensure_flow_move_allowed
+from primeagent.services.database.models.flow.guards import (
+    LockedFlowError,
+    ensure_flow_update_allowed,
+    lock_flow_for_update,
+)
 from primeagent.services.database.models.flow.model import (
     Flow,
     FlowCreate,
     FlowRead,
     FlowUpdate,
+    is_virtual_flow_id,
 )
 from primeagent.services.database.models.flow.utils import get_webhook_component_in_flow
 from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.database.models.folder.utils import get_default_folder_id
-from primeagent.services.deps import get_settings_service
+from primeagent.services.deps import get_settings_service, get_variable_service
 from primeagent.services.storage.service import StorageService
+from primeagent.utils.flow_secrets import HiddenFieldMetadataError, restore_redacted_flow_values
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from primeagent.services.database.models.user.model import User
 
 
@@ -106,9 +125,8 @@ def _get_safe_flow_path(fs_path: str, user_id: UUID, storage_service: StorageSer
     return Path(resolved_str)
 
 
-# Fields that may be updated via setattr on a Flow ORM instance.
-# Any key not in this set is silently dropped to prevent callers from
-# overwriting internal fields (e.g. ``id``, ``user_id``).
+# Updatable via setattr on a Flow ORM instance; anything else is dropped so callers
+# cannot overwrite internal fields such as ``id``, ``user_id`` or ``version_token``.
 _UPDATABLE_FLOW_FIELDS: frozenset[str] = frozenset(
     {
         "name",
@@ -118,18 +136,17 @@ _UPDATABLE_FLOW_FIELDS: frozenset[str] = frozenset(
         "endpoint_name",
         "tags",
         "folder_id",
-        # ``workspace_id`` is part of the FlowUpdate / FlowCreate contract and
-        # the PATCH/PUT routes re-authorize WRITE at the destination scope when
-        # the payload changes it (see flows.py). Omitting it here would silently
-        # accept the payload, pass the authorization check, and then drop the
-        # write — leaving the flow in its old workspace despite the API saying
-        # the move succeeded.
+        # Omitting ``workspace_id`` would accept the payload, pass the destination
+        # authorization in flows.py, then drop the write — a move the API claims succeeded.
         "workspace_id",
         "icon",
         "icon_bg_color",
         "gradient",
         "locked",
         "mcp_enabled",
+        "flow_type",
+        "a2a_enabled",
+        "a2a_card_overrides",
         "action_name",
         "action_description",
         "access_type",
@@ -148,6 +165,19 @@ def _apply_update_data(target: Flow, update_data: dict[str, Any]) -> None:
 def _endpoint_name_was_explicitly_cleared(flow: FlowCreate | FlowUpdate) -> bool:
     """Return whether the request explicitly asked to clear the endpoint name."""
     return "endpoint_name" in flow.model_fields_set and flow.endpoint_name in (None, "")
+
+
+def _ensure_api_flow_update_allowed(
+    db_flow: Flow,
+    update_data: dict[str, Any],
+    *,
+    persisted_values: Mapping[str, Any] | None = None,
+) -> None:
+    """Translate the domain lock guard into the API's 423 response."""
+    try:
+        ensure_flow_update_allowed(db_flow, update_data, persisted_values=persisted_values)
+    except LockedFlowError as exc:
+        raise HTTPException(status_code=423, detail=str(exc)) from exc
 
 
 async def _verify_fs_path(path: str | None, user_id: UUID, storage_service: StorageService) -> None:
@@ -179,10 +209,19 @@ async def _save_flow_to_fs(flow: Flow, user_id: UUID, storage_service: StorageSe
         raise HTTPException(status_code=500, detail=f"Failed to write flow to filesystem: {e}") from e
 
 
-async def _deduplicate_flow_name(session: AsyncSession, name: str, user_id: UUID) -> str:
+async def _deduplicate_flow_name(
+    session: AsyncSession,
+    name: str,
+    user_id: UUID,
+    *,
+    fail_on_conflict: bool = False,
+) -> str:
     """Return a unique flow name for *user_id*, appending ``(N)`` if needed."""
     if not (await session.exec(select(Flow).where(Flow.name == name).where(Flow.user_id == user_id))).first():
         return name
+
+    if fail_on_conflict:
+        raise HTTPException(status_code=409, detail="Name must be unique")
 
     flows = (
         await session.exec(
@@ -241,33 +280,181 @@ async def _validate_and_assign_folder(
     session: AsyncSession,
     db_flow: Flow,
     user_id: UUID,
+    *,
+    widen_for_authz: bool = False,
+    authorized_existing_folder_id: UUID | None = None,
 ) -> None:
-    """Ensure *db_flow* has a valid ``folder_id`` belonging to *user_id*.
+    """Ensure *db_flow* has a valid permission-guarded destination project.
 
-    Falls back to the default folder when the current ``folder_id`` is
-    ``None`` or references a non-existent / other-user's folder.
+    The OSS path falls back to the user's default project when the current
+    ``folder_id`` is missing or not owned. Cross-user authorization plugins may
+    preserve a foreign-owned project that the route already authorized.
     """
     old_folder_id = db_flow.folder_id
     # no_autoflush prevents the guard query (ensure_flow_move_allowed)
     # from flushing the in-progress folder_id mutation before the guard
     # has validated it.
     with session.no_autoflush:
-        if db_flow.folder_id is not None:
-            folder_exists = (
-                await session.exec(select(Folder).where(Folder.id == db_flow.folder_id, Folder.user_id == user_id))
-            ).first()
-            if not folder_exists:
-                db_flow.folder_id = None
-
-        if db_flow.folder_id is None:
-            db_flow.folder_id = await get_default_folder_id(session, user_id)
-
+        await _canonicalize_flow_destination(
+            session,
+            db_flow,
+            user_id,
+            reject_invalid=db_flow.folder_id is not None,
+            widen_for_authz=widen_for_authz,
+            authorized_existing_folder_id=authorized_existing_folder_id,
+        )
         await ensure_flow_move_allowed(
             session,
             flow_id=db_flow.id,
             old_folder_id=old_folder_id,
             new_folder_id=db_flow.folder_id,
         )
+
+
+async def _get_flow_destination_folder(
+    session: AsyncSession,
+    user_id: UUID,
+    folder_id: UUID,
+    *,
+    widen_for_authz: bool = False,
+    authorized_existing_folder_id: UUID | None = None,
+) -> Folder | None:
+    """Load a non-system project using authorization-aware owner scoping."""
+    if folder_id == authorized_existing_folder_id:
+        # The exact current folder came from an already-authorized flow row.
+        # Preserve it for in-place edits without widening a requested move.
+        folder = (await session.exec(select(Folder).where(Folder.id == folder_id))).first()
+    elif widen_for_authz:
+        folder = await authorized_or_owner_scoped(
+            session,
+            Folder,
+            id_column=Folder.id,
+            resource_id=folder_id,
+            owner_column=Folder.user_id,
+            owner_id=user_id,
+        )
+    else:
+        folder = (await session.exec(select(Folder).where(Folder.id == folder_id, Folder.user_id == user_id))).first()
+    # Ownerless folders are system-managed and are never valid write targets.
+    return folder if folder is not None and folder.user_id is not None else None
+
+
+async def _resolve_flow_destination(
+    session: AsyncSession,
+    user_id: UUID,
+    requested_folder_id: UUID | None,
+    *,
+    fallback_folder_id: UUID | None = None,
+    reject_invalid: bool = False,
+    widen_for_authz: bool = False,
+    authorized_existing_folder_id: UUID | None = None,
+) -> tuple[UUID | None, UUID]:
+    """Resolve the folder/workspace tuple that a flow write will actually use.
+
+    Folder membership is canonical. When ``widen_for_authz`` is set, an enabled
+    authorization plugin that supports cross-user fetch may resolve a project
+    owned by another user so the caller's permission check can decide access.
+    The default path remains owner-scoped. A missing or stale caller folder keeps
+    the established API behavior of falling back to the user's default folder,
+    but callers must authorize this resolved tuple before writing.
+    """
+    folder_id = requested_folder_id if requested_folder_id is not None else fallback_folder_id
+    folder = None
+    if folder_id is not None:
+        folder = await _get_flow_destination_folder(
+            session,
+            user_id,
+            folder_id,
+            widen_for_authz=widen_for_authz,
+            authorized_existing_folder_id=authorized_existing_folder_id,
+        )
+        if folder is None and requested_folder_id is not None and reject_invalid:
+            raise HTTPException(status_code=400, detail="Folder not found")
+    if folder is None:
+        default_folder_id = await get_default_folder_id(session, user_id)
+        folder = (
+            await session.exec(select(Folder).where(Folder.id == default_folder_id, Folder.user_id == user_id))
+        ).first()
+    if folder is None:
+        raise HTTPException(status_code=400, detail="Folder not found")
+    return folder.workspace_id, folder.id
+
+
+async def destination_folder_owner_id(session: AsyncSession, folder_id: UUID | None) -> UUID | None:
+    """Return who owns the project a flow is about to be created in.
+
+    A flow being created has no owner yet, so the destination project is the
+    only ownership the CREATE check can consult. Read it from the stored row
+    after canonicalization — a caller-supplied folder_id may have been
+    redirected to the caller's default project, and the payload can never be
+    trusted to assert who owns a project.
+    """
+    if folder_id is None:
+        return None
+    folder = await session.get(Folder, folder_id)
+    return getattr(folder, "user_id", None)
+
+
+async def _resolve_new_flow_owner(
+    session: AsyncSession,
+    creator_id: UUID,
+    folder_id: UUID | None,
+    *,
+    widen_for_authz: bool,
+) -> UUID:
+    """Return who owns a flow that is about to be created in *folder_id*.
+
+    A project is the ownership boundary for the flows it contains. Every
+    owner-scoped query keys on ``Flow.user_id``: ``read_project`` filters a
+    project's flow list by it, and ``delete_project`` / ``_apply_project_update``
+    sweep only the project owner's rows. A flow whose owner differs from its
+    project's owner therefore falls out of both sides' project views — the owner
+    cannot enumerate what is in their own project, and the creator has no project
+    of their own that contains it.
+
+    Only the authorized cross-user CREATE path sets ``widen_for_authz``; every
+    other destination (moves, upserts, bulk creates) resolves owner-scoped and
+    cannot land a flow in a foreign project. So this is the one place ownership
+    has to follow the destination rather than the caller.
+    """
+    if not widen_for_authz or folder_id is None:
+        return creator_id
+    folder_owner_id = await destination_folder_owner_id(session, folder_id)
+    # A missing or ownerless (system-managed) folder is not a valid write target:
+    # ``_validate_and_assign_folder`` redirects it to the creator's default
+    # project, so the creator stays the owner.
+    return folder_owner_id if folder_owner_id is not None else creator_id
+
+
+async def _canonicalize_flow_destination(
+    session: AsyncSession,
+    flow: Flow | FlowCreate | FlowUpdate,
+    user_id: UUID,
+    *,
+    fallback_folder_id: UUID | None = None,
+    reject_invalid: bool = False,
+    widen_for_authz: bool = False,
+    authorized_existing_folder_id: UUID | None = None,
+) -> tuple[UUID | None, UUID]:
+    """Apply the canonical destination tuple to a flow payload or row."""
+    workspace_id, folder_id = await _resolve_flow_destination(
+        session,
+        user_id,
+        flow.folder_id,
+        fallback_folder_id=fallback_folder_id,
+        reject_invalid=reject_invalid,
+        widen_for_authz=widen_for_authz,
+        authorized_existing_folder_id=authorized_existing_folder_id,
+    )
+    flow.folder_id = folder_id
+    flow.workspace_id = workspace_id
+    return workspace_id, folder_id
+
+
+def _validate_new_flow_id(flow_id: UUID | None) -> None:
+    """Keep saved flow IDs separate from deterministic public execution IDs."""
+    if flow_id is not None and is_virtual_flow_id(flow_id):
+        raise HTTPException(status_code=400, detail="UUID5 flow IDs are reserved for public execution histories.")
 
 
 async def _new_flow(
@@ -278,36 +465,72 @@ async def _new_flow(
     storage_service: StorageService,
     flow_id: UUID | None = None,
     fail_on_endpoint_conflict: bool = False,
+    fail_on_name_conflict: bool = False,
     validate_folder: bool = False,
+    widen_for_authz: bool = False,
+    propagate_unhandled_errors: bool = False,
+    save_to_fs: bool = True,
+    reconcile_triggers: bool = True,
+    update_webhook: bool = False,
 ):
     """Create or upsert a flow.
 
     Args:
         session: Database session.
         flow: Flow creation data.
-        user_id: Owner of the new flow.
+        user_id: Caller creating the flow. The flow's owner follows its destination
+            project, so this is the owner unless an authorized cross-user create
+            targets a project owned by someone else.
         storage_service: Service for filesystem operations.
         flow_id: Allows PUT upsert to create flows with a specific ID for syncing between instances.
         fail_on_endpoint_conflict: PUT should fail predictably on conflicts rather than silently renaming.
-        validate_folder: Validates folder_id exists and belongs to user when upserting from external sources.
+        fail_on_name_conflict: Fail when a flow name already belongs to the destination owner.
+        validate_folder: Validates folder_id under the active authorization fetch mode for external upserts.
+        widen_for_authz: Preserve a cross-user destination that the route already authorized.
+        propagate_unhandled_errors: Let the caller own retry and sanitization of unexpected failures.
+        save_to_fs: Write flow JSON to the owner-scoped filesystem after saving.
+        reconcile_triggers: Reconcile trigger rows after saving the flow.
+        update_webhook: Recompute the webhook flag from the saved flow data.
     """
     try:
-        await _verify_fs_path(flow.fs_path, user_id, storage_service)
+        effective_id = flow_id if flow_id is not None else flow.id
+        _validate_new_flow_id(effective_id)
+        # Ownership follows the destination project, so it has to be resolved
+        # before anything keyed on the owner: the filesystem sandbox, the
+        # ``(user_id, name)`` / ``(user_id, endpoint_name)`` de-duplication, and
+        # the folder validation below all scope to the flow's owner, not to
+        # whoever issued the request.
+        owner_id = await _resolve_new_flow_owner(
+            session,
+            user_id,
+            flow.folder_id,
+            widen_for_authz=widen_for_authz,
+        )
+
+        await _verify_fs_path(flow.fs_path, owner_id, storage_service)
 
         if validate_folder and flow.folder_id is not None:
-            folder = (
-                await session.exec(select(Folder).where(Folder.id == flow.folder_id, Folder.user_id == user_id))
-            ).first()
+            folder = await _get_flow_destination_folder(
+                session,
+                owner_id,
+                flow.folder_id,
+                widen_for_authz=widen_for_authz,
+            )
             if not folder:
                 raise HTTPException(status_code=400, detail="Folder not found")
 
         # Set user_id (ignore any user_id from body for security)
-        flow.user_id = user_id
-        flow.name = await _deduplicate_flow_name(session, flow.name, user_id)
+        flow.user_id = owner_id
+        flow.name = await _deduplicate_flow_name(
+            session,
+            flow.name,
+            owner_id,
+            fail_on_conflict=fail_on_name_conflict,
+        )
 
         if flow.endpoint_name:
             flow.endpoint_name = await _deduplicate_endpoint_name(
-                session, flow.endpoint_name, user_id, fail_on_conflict=fail_on_endpoint_conflict
+                session, flow.endpoint_name, owner_id, fail_on_conflict=fail_on_endpoint_conflict
             )
 
         # Exclude the id field from FlowCreate so that Flow.id (UUID, non-optional)
@@ -316,32 +539,79 @@ async def _new_flow(
 
         # Apply the stable ID: explicit flow_id param (PUT upsert) takes precedence,
         # then flow.id (stable import from FlowCreate), then the uuid4 default.
-        effective_id = flow_id if flow_id is not None else flow.id
         if effective_id is not None:
             db_flow.id = effective_id
 
         db_flow.updated_at = datetime.now(timezone.utc)
-        await _validate_and_assign_folder(session, db_flow, user_id)
+        # Stamped at creation so the very first concurrent edit is already protected;
+        # without it a brand-new flow has nothing to compare and saves unconditionally.
+        db_flow.version_token = uuid4()
+        db_flow.last_modified_by = user_id
+        await _validate_and_assign_folder(session, db_flow, owner_id, widen_for_authz=widen_for_authz)
 
         session.add(db_flow)
         await session.flush()
         await session.refresh(db_flow)
-        await _save_flow_to_fs(db_flow, user_id, storage_service)
+        await stage_flow_succeeded(
+            session,
+            action=audit_vocab.FLOW_CREATE,
+            operation=audit_vocab.AuditOperation.CREATE,
+            flow_id=db_flow.id,
+            flow_name=db_flow.name,
+            written_fields=flow.model_fields_set,
+            project_after=db_flow.folder_id,
+        )
+        if update_webhook:
+            db_flow.webhook = get_webhook_component_in_flow(db_flow.data or {}) is not None
+            session.add(db_flow)
+            await session.flush()
+        if reconcile_triggers:
+            await _reconcile_flow_triggers(
+                session,
+                flow_id=db_flow.id,
+                owner_id=db_flow.user_id,
+                flow_data=db_flow.data,
+            )
+        if save_to_fs:
+            await _save_flow_to_fs(db_flow, owner_id, storage_service)
 
         return FlowRead.model_validate(db_flow, from_attributes=True)
-    except Exception as e:
-        if hasattr(e, "errors"):
-            raise HTTPException(status_code=400, detail=str(e)) from e
-        if isinstance(e, HTTPException):
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if propagate_unhandled_errors:
             raise
-        logger.exception("Error creating flow")
-        raise HTTPException(status_code=500, detail="An internal error occurred while creating the flow.") from e
+        await logger.aerror("Error creating flow", error_type=type(exc).__name__)
+        raise HTTPException(status_code=500, detail="An internal error occurred while creating the flow.") from exc
+
+
+async def _reconcile_flow_triggers(
+    session: AsyncSession,
+    *,
+    flow_id: UUID,
+    owner_id: UUID | None,
+    flow_data: dict | None,
+) -> None:
+    """Sync the flow's trigger rows to its trigger nodes, on every save path.
+
+    Kept as a thin wrapper so all three save paths (create, PUT update, PATCH)
+    call the same thing — the asymmetry the ``webhook`` flag recompute has, where
+    ``_new_flow`` skips it, is exactly the bug this avoids. Reconciliation never
+    raises: a flow save is the user's document, not trigger bookkeeping.
+    """
+    from primeagent.services.triggers.reconciliation import reconcile_flow_triggers_safely
+
+    await reconcile_flow_triggers_safely(session, flow_id=flow_id, owner_id=owner_id, flow_data=flow_data)
 
 
 async def _read_flow(
     session: AsyncSession,
     flow_id: UUID,
     user_id: UUID,
+    *,
+    for_update: bool = False,
 ):
     """Read a flow.
 
@@ -359,6 +629,7 @@ async def _read_flow(
         resource_id=flow_id,
         owner_column=Flow.user_id,
         owner_id=user_id,
+        for_update=for_update,
     )
 
 
@@ -369,6 +640,11 @@ async def _update_existing_flow(
     flow: FlowCreate,
     current_user: User,
     storage_service: StorageService,
+    save_to_fs: bool = True,
+    reconcile_triggers: bool = True,
+    preserve_explicit_nulls: bool = False,
+    locked_flow_persisted_values: Mapping[str, Any] | None = None,
+    expected_version_token: UUID | None = None,
 ) -> FlowRead:
     """Update an existing flow (PUT update path).
 
@@ -383,11 +659,21 @@ async def _update_existing_flow(
     otherwise the write silently retargets folders/storage that belong to the
     actor. This mirrors the cross-user semantics already enforced by
     ``_patch_flow``.
+
+    ``locked_flow_persisted_values`` overrides ``existing_flow``'s in-memory
+    fields for the locked-flow diff only (see ``ensure_flow_update_allowed``).
+    Atomic project replacement passes the flow's pre-rename name/endpoint_name
+    here: it temporarily renames the row before calling this function, and
+    without the override a locked flow's own (unchanged) name would look
+    changed against that interim value.
     """
+    await lock_flow_for_update(session, existing_flow)
+
     settings_service = get_settings_service()
     actor_user_id = current_user.id
     owner_user_id: UUID = existing_flow.user_id
     is_owner_edit = owner_user_id == actor_user_id
+    existing_folder_id = existing_flow.folder_id
 
     # Non-owner edits cannot relocate the flow into folders or storage they
     # own, nor transfer ownership. Reject early so the failure is explicit
@@ -408,6 +694,21 @@ async def _update_existing_flow(
                 status_code=403,
                 detail="Cannot transfer ownership of a flow you do not own.",
             )
+        # ``a2a_enabled`` defaults to False (not None) on FlowCreate, so gate on
+        # model_fields_set to block only an explicit, differing change.
+        if "a2a_enabled" in flow.model_fields_set and flow.a2a_enabled != existing_flow.a2a_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot change a2a_enabled of a flow you do not own.",
+            )
+        if (
+            "a2a_card_overrides" in flow.model_fields_set
+            and flow.a2a_card_overrides != existing_flow.a2a_card_overrides
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot change a2a_card_overrides of a flow you do not own.",
+            )
 
     # Validate fs_path if provided (use `is not None` to catch empty strings).
     # Path safety is scoped to the *owner* — fs_path lives under the owner's
@@ -418,9 +719,12 @@ async def _update_existing_flow(
     # Validate folder_id if provided — scoped to the owner so a non-owner
     # cannot land the flow in their own default folder via this code path.
     if flow.folder_id is not None:
-        folder = (
-            await session.exec(select(Folder).where(Folder.id == flow.folder_id, Folder.user_id == owner_user_id))
-        ).first()
+        folder = await _get_flow_destination_folder(
+            session,
+            owner_user_id,
+            flow.folder_id,
+            authorized_existing_folder_id=existing_folder_id,
+        )
         if not folder:
             raise HTTPException(status_code=400, detail="Folder not found")
 
@@ -454,8 +758,16 @@ async def _update_existing_flow(
         if endpoint_conflict:
             raise HTTPException(status_code=409, detail="Endpoint name must be unique")
 
-    # None-valued inputs are treated as omitted by default for updates.
-    update_data = flow.model_dump(exclude_unset=True, exclude_none=True)
+    # Ordinary PUT retains its legacy null-as-omitted behavior. Atomic
+    # replacement must apply explicit nulls so a rollback can clear old values.
+    update_data = flow.model_dump(exclude_unset=True, exclude_none=not preserve_explicit_nulls)
+    if not is_owner_edit and isinstance(update_data.get("data"), dict):
+        try:
+            update_data["data"] = restore_redacted_flow_values(update_data["data"], existing_flow.data)
+        except HiddenFieldMetadataError as exc:
+            raise HTTPException(
+                status_code=400, detail="Cannot change hidden fields or executable graph data in a shared flow."
+            ) from exc
 
     # Preserve the existing endpoint unless the request explicitly clears it.
     if _endpoint_name_was_explicitly_cleared(flow):
@@ -476,10 +788,29 @@ async def _update_existing_flow(
             new_folder_id=update_data["folder_id"],
         )
 
+    _ensure_api_flow_update_allowed(existing_flow, update_data, persisted_values=locked_flow_persisted_values)
+
     if settings_service.settings.remove_api_keys:
         update_data = remove_api_keys(update_data)
 
+    graph_changed = "data" in update_data and update_data["data"] != existing_flow.data
+
     _apply_update_data(existing_flow, update_data)
+
+    if graph_changed:
+        # PUT and the import upsert replace the graph exactly like a PATCH does, so they
+        # take the writer's turn the same way. Leaving the token alone here let an editor
+        # that was open before the import save straight over it and be told nothing.
+        claimed = await claim_version_token(session, existing_flow, expected_version_token)
+        existing_flow.version_token = claimed or uuid4()
+        existing_flow.last_modified_by = actor_user_id
+
+    await _validate_and_assign_folder(
+        session,
+        existing_flow,
+        owner_user_id,
+        authorized_existing_folder_id=existing_folder_id,
+    )
 
     webhook_component = get_webhook_component_in_flow(existing_flow.data or {})
     existing_flow.webhook = webhook_component is not None
@@ -488,8 +819,23 @@ async def _update_existing_flow(
     session.add(existing_flow)
     await session.flush()
     await session.refresh(existing_flow)
-    # Writes happen under the owner's storage namespace, not the actor's.
-    await _save_flow_to_fs(existing_flow, owner_user_id, storage_service)
+    await stage_flow_succeeded(
+        session,
+        action=audit_vocab.FLOW_WRITE,
+        operation=audit_vocab.AuditOperation.REPLACE,
+        flow_id=existing_flow.id,
+        flow_name=existing_flow.name,
+        written_fields=update_data.keys() & _UPDATABLE_FLOW_FIELDS,
+        project_before=existing_folder_id,
+        project_after=existing_flow.folder_id,
+    )
+    if reconcile_triggers:
+        await _reconcile_flow_triggers(
+            session, flow_id=existing_flow.id, owner_id=existing_flow.user_id, flow_data=existing_flow.data
+        )
+    if save_to_fs:
+        # Writes happen under the owner's storage namespace, not the actor's.
+        await _save_flow_to_fs(existing_flow, owner_user_id, storage_service)
 
     return FlowRead.model_validate(existing_flow, from_attributes=True)
 
@@ -501,6 +847,7 @@ async def _patch_flow(
     flow: FlowUpdate,
     user_id: UUID,
     storage_service: StorageService,
+    expected_version_token: UUID | None = None,
 ) -> FlowRead:
     """Apply a partial update (PATCH) to an existing flow and return a FlowRead.
 
@@ -510,18 +857,30 @@ async def _patch_flow(
     silently move the flow into the actor's folder or write into the actor's
     fs namespace; the actor cannot change ownership-bound state at all.
     """
+    await lock_flow_for_update(session, db_flow)
+
     settings_service = get_settings_service()
 
     owner_user_id: UUID = db_flow.user_id
     is_owner_edit = owner_user_id == user_id
+    existing_folder_id = db_flow.folder_id
 
     # PATCH follows the same rule: None-valued fields are omitted unless
     # explicitly reintroduced below (for example endpoint_name clear).
     update_data = flow.model_dump(exclude_unset=True, exclude_none=True)
+    if not is_owner_edit and isinstance(update_data.get("data"), dict):
+        try:
+            update_data["data"] = restore_redacted_flow_values(update_data["data"], db_flow.data)
+        except HiddenFieldMetadataError as exc:
+            raise HTTPException(
+                status_code=400, detail="Cannot change hidden fields or executable graph data in a shared flow."
+            ) from exc
 
     # Preserve the existing endpoint unless the request explicitly clears it.
     if _endpoint_name_was_explicitly_cleared(flow):
         update_data["endpoint_name"] = None
+
+    _ensure_api_flow_update_allowed(db_flow, update_data)
 
     # A non-owner editing a shared flow must not be able to relocate the
     # flow into folders or storage they own. Reject ownership-bound mutations
@@ -538,10 +897,25 @@ async def _patch_flow(
                 status_code=403,
                 detail="Cannot change fs_path of a flow you do not own.",
             )
+        if "workspace_id" in update_data and update_data["workspace_id"] != db_flow.workspace_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot change workspace of a flow you do not own.",
+            )
         if "user_id" in update_data and update_data["user_id"] != owner_user_id:
             raise HTTPException(
                 status_code=403,
                 detail="Cannot transfer ownership of a flow you do not own.",
+            )
+        if "a2a_enabled" in update_data and update_data["a2a_enabled"] != db_flow.a2a_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot change a2a_enabled of a flow you do not own.",
+            )
+        if "a2a_card_overrides" in update_data and update_data["a2a_card_overrides"] != db_flow.a2a_card_overrides:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot change a2a_card_overrides of a flow you do not own.",
             )
 
     if "folder_id" in update_data and update_data["folder_id"] != db_flow.folder_id:
@@ -555,7 +929,18 @@ async def _patch_flow(
     if settings_service.settings.remove_api_keys:
         update_data = remove_api_keys(update_data)
 
+    # Only a graph change takes the writer's turn. A rename or a no-op save leaves
+    # the token alone on purpose — see the scope note in ``flow_conflict``.
+    graph_changed = "data" in update_data and update_data["data"] != db_flow.data
+
     _apply_update_data(db_flow, update_data)
+
+    if graph_changed:
+        # Claimed here, not before: only a graph change takes the write turn, and the
+        # claim has to be the same indivisible step that grants it.
+        claimed = await claim_version_token(session, db_flow, expected_version_token)
+        db_flow.version_token = claimed or uuid4()
+        db_flow.last_modified_by = user_id
 
     # Validate fs_path if it was changed (will raise HTTPException if invalid).
     # fs_path lives under the owner's storage namespace, so the owner id
@@ -569,69 +954,31 @@ async def _patch_flow(
 
     # Folder validation must be scoped to the owner — otherwise a non-owner
     # edit would land in the actor's default folder (see ``_validate_and_assign_folder``).
-    await _validate_and_assign_folder(session, db_flow, owner_user_id)
+    await _validate_and_assign_folder(
+        session,
+        db_flow,
+        owner_user_id,
+        authorized_existing_folder_id=existing_folder_id,
+    )
 
     session.add(db_flow)
     await session.flush()
     await session.refresh(db_flow)
+    await stage_flow_succeeded(
+        session,
+        action=audit_vocab.FLOW_WRITE,
+        operation=audit_vocab.AuditOperation.PATCH,
+        flow_id=db_flow.id,
+        flow_name=db_flow.name,
+        written_fields=update_data.keys() & _UPDATABLE_FLOW_FIELDS,
+        project_before=existing_folder_id,
+        project_after=db_flow.folder_id,
+    )
+    await _reconcile_flow_triggers(session, flow_id=db_flow.id, owner_id=db_flow.user_id, flow_data=db_flow.data)
     # Writes happen under the owner's storage namespace, not the actor's.
     await _save_flow_to_fs(db_flow, owner_user_id, storage_service)
 
     return FlowRead.model_validate(db_flow, from_attributes=True)
-
-
-async def _upsert_flow_list(
-    *,
-    session: AsyncSession,
-    flows: list[FlowCreate],
-    current_user: User,
-    storage_service: StorageService,
-    folder_id: UUID | None = None,
-) -> list[FlowRead]:
-    """Import a list of flows with upsert semantics (used by the upload endpoint).
-
-    For each flow:
-    - If it has an ID matching an existing flow owned by the user, update in place.
-    - If it has an ID claimed by another user, mint a fresh UUID.
-    - Otherwise create with the provided or generated ID.
-    """
-    flow_reads: list[FlowRead] = []
-    for flow in flows:
-        flow.user_id = current_user.id
-        if folder_id:
-            flow.folder_id = folder_id
-
-        if flow.id is not None:
-            existing = (await session.exec(select(Flow).where(Flow.id == flow.id))).first()
-
-            if existing is not None and existing.user_id == current_user.id:
-                flow_read = await _update_existing_flow(
-                    session=session,
-                    existing_flow=existing,
-                    flow=flow,
-                    current_user=current_user,
-                    storage_service=storage_service,
-                )
-            elif existing is not None:
-                flow.id = None
-                flow_read = await _new_flow(
-                    session=session, flow=flow, user_id=current_user.id, storage_service=storage_service
-                )
-            else:
-                flow_read = await _new_flow(
-                    session=session,
-                    flow=flow,
-                    user_id=current_user.id,
-                    storage_service=storage_service,
-                    flow_id=flow.id,
-                )
-        else:
-            flow_read = await _new_flow(
-                session=session, flow=flow, user_id=current_user.id, storage_service=storage_service
-            )
-
-        flow_reads.append(flow_read)
-    return flow_reads
 
 
 def _sanitize_flow_filename(raw_name: str, fallback_id: str = "flow") -> str:
@@ -649,14 +996,46 @@ def _sanitize_flow_filename(raw_name: str, fallback_id: str = "flow") -> str:
     return name or fallback_id
 
 
-def _build_flows_download_response(
+async def _export_variable_names(session: AsyncSession, owner_id: UUID | None) -> frozenset[str]:
+    """Return the global-variable names a flow owner's export may keep as bindings.
+
+    Export keeps a ``load_from_db`` value only when it names one of the owner's
+    existing global variables, so a literal secret behind a stale flag is not
+    exported even when it is shaped like a variable name.
+    """
+    if owner_id is None:
+        return frozenset()
+    names = await get_variable_service().list_variables(user_id=owner_id, session=session)
+    return frozenset(name for name in names if name)
+
+
+async def _build_flows_download_response(
+    session: AsyncSession,
     flows: list[Flow],
+    *,
+    caller_id: UUID,
 ) -> StreamingResponse | dict:
     """Build a download response (ZIP or single JSON) for the given flows.
 
-    Strips API keys and normalises for git-friendly export before packaging.
+    Strips secret field values and normalises for git-friendly export before
+    packaging. Scrubbing uses the metadata-driven scrubber rather than the
+    legacy API-key-name matcher, so ``password``-marked fields under ordinary
+    names and credential-bearing connection strings are cleared too. Global
+    variable bindings survive only when they name one of the flow owner's
+    variables.
     """
-    normalised_flows = [normalize_flow_for_export(remove_api_keys(flow.model_dump())) for flow in flows]
+    # A shared reader's in-app view hides even variable names. The download
+    # must follow that same rule; only an owner may export their bindings.
+    owner_variable_names = await _export_variable_names(session, caller_id)
+    normalised_flows = [
+        normalize_flow_for_export(
+            strip_flow_secrets(
+                flow.model_dump(),
+                known_variable_names=owner_variable_names if flow.user_id == caller_id else frozenset(),
+            )
+        )
+        for flow in flows
+    ]
 
     if len(normalised_flows) > 1:
         zip_stream = io.BytesIO()

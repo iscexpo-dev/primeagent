@@ -241,7 +241,7 @@ class AsyncPrimeagentClient(_ClientCommon):
         Returns:
             A :class:`BackgroundJob` wrapping the in-flight asyncio task.
 
-        Adapted from ``BackgroundJob`` in khulnasoft/sdk PR #1
+        Adapted from ``BackgroundJob`` in khulnasoft-bot/sdk PR #1
         (Janardan Singh Kavia, IBM Corp., Apache 2.0).
         """
         task: asyncio.Task[RunResponse] = asyncio.create_task(

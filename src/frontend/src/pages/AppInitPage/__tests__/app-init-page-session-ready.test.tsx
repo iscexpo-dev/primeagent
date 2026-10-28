@@ -170,18 +170,16 @@ describe("AppInitPage - isSessionReady Logic", () => {
       const isSessionFetched = false;
 
       // Act: Initial state
-      const { result, rerender } = renderHook<
-        boolean,
-        { auto: boolean | undefined }
-      >(({ auto }) => useIsSessionReady(auto, isSessionFetched), {
-        initialProps: { auto: autoLogin },
-      });
+      const { result, rerender } = renderHook(
+        ({ auto }) => useIsSessionReady(auto, isSessionFetched),
+        { initialProps: { auto: autoLogin } },
+      );
 
       expect(result.current).toBe(false);
 
       // Act: autoLogin determined to be true
       autoLogin = true;
-      rerender({ auto: autoLogin } as { auto: boolean });
+      rerender({ auto: autoLogin });
 
       // Assert: Now ready (auto-login mode)
       expect(result.current).toBe(true);
@@ -212,30 +210,22 @@ describe("AppInitPage - isSessionReady Logic", () => {
       let autoLogin: boolean | undefined = undefined;
       let isSessionFetched = false;
 
-      const { result, rerender } = renderHook<
-        boolean,
-        { auto: boolean | undefined; fetched: boolean }
-      >(({ auto, fetched }) => useIsSessionReady(auto, fetched), {
-        initialProps: { auto: autoLogin, fetched: isSessionFetched },
-      });
+      const { result, rerender } = renderHook(
+        ({ auto, fetched }) => useIsSessionReady(auto, fetched),
+        { initialProps: { auto: autoLogin, fetched: isSessionFetched } },
+      );
 
       // Step 1: Initial state - not ready
       expect(result.current).toBe(false);
 
       // Step 2: autoLogin determined (manual mode)
       autoLogin = false;
-      rerender({ auto: autoLogin, fetched: isSessionFetched } as {
-        auto: boolean;
-        fetched: boolean;
-      });
+      rerender({ auto: autoLogin, fetched: isSessionFetched });
       expect(result.current).toBe(false);
 
       // Step 3: Session validated - now ready
       isSessionFetched = true;
-      rerender({ auto: autoLogin, fetched: isSessionFetched } as {
-        auto: boolean;
-        fetched: boolean;
-      });
+      rerender({ auto: autoLogin, fetched: isSessionFetched });
       expect(result.current).toBe(true);
     });
   });

@@ -27,6 +27,7 @@ from wfx.extension.errors import ERROR_CODES
 LOADER_CODES = frozenset(
     {
         "module-import-failed",
+        "optional-dependency-missing",
         "duplicate-component-name",
         "duplicate-inline-bundle",
         "inline-bundle-name-invalid",
@@ -44,6 +45,7 @@ def test_load_result_default_is_ok() -> None:
     assert result.ok
     assert bool(result) is True
     assert result.components == []
+    assert result.integrations == []
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ models endpoint the dropdown is populated from). If ``get_llm`` falls back to th
 generic ``model`` param name, the selected foundation-model id is sent to the
 gateway and fails with "model <id> not found" / IAM "Provided user not found or
 active" — even though the dropdown, connection test, and standalone
-``IBM watsonx.ai`` component all work. See khulnasoft/primeagent#13671.
+``IBM watsonx.ai`` component all work. See khulnasoft-bot/primeagent#13671.
 
 These tests pin that ``get_llm`` resolves the provider-specific param names
 (``model_id``, ``apikey``, ``url``, ``project_id``) from the provider mapping
@@ -58,6 +58,7 @@ def _raw_watsonx_selection() -> list[dict]:
 
 def _build_llm_from_raw_selection() -> dict:
     from wfx.base.models import unified_models as unified_models_module
+    from wfx.base.models.unified_models import instantiation
     from wfx.base.models.unified_models.instantiation import get_llm
 
     fake_cls, captured = _capture_factory()
@@ -77,6 +78,7 @@ def _build_llm_from_raw_selection() -> dict:
                 "WATSONX_PROJECT_ID": "proj-123",
             },
         ),
+        patch.object(instantiation, "validate_url_for_ssrf_or_raise"),
     ):
         get_llm(_raw_watsonx_selection(), user_id=None, stream=True)
 

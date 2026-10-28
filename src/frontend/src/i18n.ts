@@ -8,21 +8,10 @@ const SUPPORTED_LANGUAGES = [
   "es",
   "fr",
   "ja",
+  "ko",
   "pt",
   "zh-Hans",
 ] as const;
-
-const localeLoaders: Record<
-  string,
-  () => Promise<{ default: Record<string, unknown> }>
-> = {
-  de: () => import("./locales/de.json"),
-  es: () => import("./locales/es.json"),
-  fr: () => import("./locales/fr.json"),
-  ja: () => import("./locales/ja.json"),
-  pt: () => import("./locales/pt.json"),
-  "zh-Hans": () => import("./locales/zh-Hans.json"),
-};
 
 const normalizeLanguage = (lang?: string | null): string => {
   if (!lang) return "en";
@@ -76,13 +65,23 @@ i18n.use(initReactI18next).init({
 });
 console.info = _consoleInfo;
 
+/**
+ * Keeps `<html lang>` in sync with the active locale so assistive technology
+ * applies the right pronunciation rules (WCAG 3.1.1 Language of Page).
+ * `index.html` only ever ships the hard-coded default.
+ */
+const syncDocumentLanguage = (lang: string) => {
+  document.documentElement.lang = lang;
+};
+
+syncDocumentLanguage(detectedLang);
+i18n.on("languageChanged", syncDocumentLanguage);
+
 export async function loadLanguage(lang: string): Promise<void> {
   if (lang === "en") return;
   if (i18n.hasResourceBundle(lang, "translation")) return;
-  const loader = localeLoaders[lang];
-  if (!loader) return;
   try {
-    const messages = await loader();
+    const messages = await import(`./locales/${lang}.json`);
     i18n.addResourceBundle(lang, "translation", messages.default);
   } catch {
     // Unknown locale — no bundle file exists. i18next's fallbackLng: "en" takes over.

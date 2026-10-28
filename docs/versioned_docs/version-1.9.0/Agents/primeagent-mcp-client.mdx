@@ -1,0 +1,33 @@
+---
+title: Primeagent MCP Client for coding agents
+slug: /primeagent-mcp-client
+---
+
+import Icon from "@site/src/components/icon";
+
+Connect coding agents such as **Bob (IBM)** and **Claude Code** to a Primeagent instance so they can build and run flows over MCP.
+
+This page describes the <Icon name="Terminal" aria-hidden="true"/> **Primeagent MCP Client** entry in **Settings**. It is different from Primeagent's other MCP options.
+
+* [**Use Primeagent as an MCP client**](/mcp-client): Use the **MCP Tools** component in flows so agent components _on the canvas_ can call external MCP servers or Primeagent MCP URLs.
+* [**Use Primeagent as an MCP server**](/mcp-server): Use the **MCP Servers** page in Primeagent to expose your Primeagent project as an MCP server to desktop clients such as Cursor or Windsurf.
+
+## Connect Bob (IBM) or Claude Code
+
+To connect Primeagent to a coding agent, do the following:
+
+1. Click your profile icon, select **Settings**, and then click <Icon name="Terminal" aria-hidden="true"/> **Primeagent MCP Client**.
+2. Select the coding agent you want to connect to Primeagent, and follow the steps shown in the UI.
+
+    All client configurations run `wfx-mcp` with `uvx`, and set `PRIMEAGENT_SERVER_URL` to your Primeagent server URL and `PRIMEAGENT_API_KEY` to a Primeagent API key of your choice.
+
+    * To connect to **Bob (IBM)**, paste the configuration JSON into `~/.bob/settings/mcp_settings.json`, or use **Edit Project MCP** for a project-only setup.
+    * To connect to **Claude Code**, run the `claude mcp add` command shown on the page, or manually add the JSON configuration to `~/.claude.json`.
+
+    If you do not set `PRIMEAGENT_API_KEY`, the coding agent can log in with the Primeagent username and password you use to sign in to the Primeagent web UI for that server.
+
+## See also
+
+* [Use Primeagent as an MCP client](/mcp-client)
+* [Use Primeagent as an MCP server](/mcp-server)
+* [**MCP Tools** component](/mcp-tools)

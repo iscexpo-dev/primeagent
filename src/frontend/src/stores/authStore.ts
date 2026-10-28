@@ -7,7 +7,8 @@ import {
   PRIMEAGENT_REFRESH_TOKEN,
 } from "@/constants/constants";
 import type { AuthStoreType } from "@/types/zustand/auth";
-import { cookieManager, getCookiesInstance } from "@/utils/cookie-manager";
+import { clearAllConflictDrafts } from "@/utils/conflict-draft";
+import { cookieManager } from "@/utils/cookie-manager";
 
 const useAuthStore = create<AuthStoreType>((set, get) => ({
   isAdmin: false,
@@ -33,6 +34,9 @@ const useAuthStore = create<AuthStoreType>((set, get) => ({
     localStorage.removeItem(PRIMEAGENT_ACCESS_TOKEN);
     localStorage.removeItem(PRIMEAGENT_API_TOKEN);
     localStorage.removeItem(PRIMEAGENT_REFRESH_TOKEN);
+    // Unsaved work is this person's; the next person on this browser must never
+    // be offered it back.
+    clearAllConflictDrafts();
 
     cookieManager.clearAuthCookies();
 

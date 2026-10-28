@@ -1,4 +1,4 @@
-import type { TFunction } from "i18next";
+type TFunction = (key: string, opts?: object) => string;
 
 export const timeElapsed = (
   dateTimeString: string | undefined,

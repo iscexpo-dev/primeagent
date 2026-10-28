@@ -143,6 +143,10 @@ export const lazyIconsMapping = {
     import("@/icons/CometAPI").then((mod) => ({ default: mod.CometAPIIcon })),
   Composio: () =>
     import("@/icons/Composio").then((mod) => ({ default: mod.ComposioIcon })),
+  Confluent: () =>
+    import("@/icons/Confluent").then((mod) => ({
+      default: mod.ConfluentIcon,
+    })),
   Confluence: () =>
     import("@/icons/Confluence").then((mod) => ({
       default: mod.ConfluenceIcon,
@@ -171,6 +175,10 @@ export const lazyIconsMapping = {
     import("@/icons/ElasticsearchStore").then((mod) => ({
       default: mod.ElasticsearchIcon,
     })),
+  EmpirioLabs: () =>
+    import("@/icons/EmpirioLabs").then((mod) => ({
+      default: mod.EmpirioLabsIcon,
+    })),
   Evernote: () =>
     import("@/icons/Evernote").then((mod) => ({ default: mod.EvernoteIcon })),
   Exa: () => import("@/icons/Exa").then((mod) => ({ default: mod.ExaIcon })),
@@ -186,6 +194,8 @@ export const lazyIconsMapping = {
     import("@/icons/FacebookMessenger").then((mod) => ({
       default: mod.FBIcon,
     })),
+  Figranium: () =>
+    import("@/icons/Figranium").then((mod) => ({ default: mod.FigraniumIcon })),
   Firecrawl: () =>
     import("@/icons/Firecrawl").then((mod) => ({ default: mod.FirecrawlIcon })),
   Finage: () =>
@@ -270,6 +280,10 @@ export const lazyIconsMapping = {
       default: mod.HackerNewsIcon,
     })),
   HCD: () => import("@/icons/HCD").then((mod) => ({ default: mod.HCDIcon })),
+  HumanInput: () =>
+    import("@/icons/HumanInput").then((mod) => ({
+      default: mod.HumanInputIcon,
+    })),
   HomeAssistant: () =>
     import("@/icons/HomeAssistant").then((mod) => ({
       default: mod.HomeAssistantIcon,
@@ -289,6 +303,10 @@ export const lazyIconsMapping = {
   WatsonxAI: () =>
     import("@/icons/IBM").then((mod) => ({
       default: mod.WatsonxAiIcon,
+    })),
+  WatsonxData: () =>
+    import("@/icons/IBM").then((mod) => ({
+      default: mod.WatsonxDataIcon,
     })),
   WatsonxOrchestrate: () =>
     import("@/icons/IBM").then((mod) => ({
@@ -334,6 +352,8 @@ export const lazyIconsMapping = {
       default: mod.Mem0IconComposio,
     })),
   Meta: () => import("@/icons/Meta").then((mod) => ({ default: mod.MetaIcon })),
+  Microsoft: () =>
+    import("@/icons/Microsoft").then((mod) => ({ default: mod.MicrosoftIcon })),
   Midjourney: () =>
     import("@/icons/Midjorney").then((mod) => ({
       default: mod.MidjourneyIcon,
@@ -346,11 +366,17 @@ export const lazyIconsMapping = {
     import("@/icons/mistral").then((mod) => ({ default: mod.MistralIcon })),
   MongoDB: () =>
     import("@/icons/MongoDB").then((mod) => ({ default: mod.MongoDBIcon })),
+  Mrscraper: () =>
+    import("@/icons/Mrscraper").then((mod) => ({
+      default: mod.MrscraperIcon,
+    })),
   Needle: () =>
     import("@/icons/Needle").then((mod) => ({ default: mod.NeedleIcon })),
   Neon: () => import("@/icons/Neon").then((mod) => ({ default: mod.NeonIcon })),
   Newsapi: () =>
     import("@/icons/Newsapi").then((mod) => ({ default: mod.NewsapiIcon })),
+  NextPlaid: () =>
+    import("@/icons/NextPlaid").then((mod) => ({ default: mod.NextPlaidIcon })),
   NotDiamond: () =>
     import("@/icons/NotDiamond").then((mod) => ({
       default: mod.NotDiamondIcon,
@@ -369,12 +395,20 @@ export const lazyIconsMapping = {
     import("@/icons/OpenAi").then((mod) => ({ default: mod.OpenAiIcon })),
   OpenAICopy: () =>
     import("@/icons/OpenAI copy").then((mod) => ({ default: mod.OpenAIIcon })),
+  OpenRAG: () =>
+    import("@/icons/OpenRAG").then((mod) => ({ default: mod.OpenRAGIcon })),
   OpenRouter: () =>
     import("@/icons/OpenRouter").then((mod) => ({
       default: mod.OpenRouterIcon,
     })),
   OpenSearch: () =>
     import("@/icons/OpenSearch").then((mod) => ({ default: mod.OpenSearch })),
+  Oracle: () =>
+    import("@/icons/Oracle").then((mod) => ({ default: mod.OracleIcon })),
+  OrcaRouter: () =>
+    import("@/icons/OrcaRouter").then((mod) => ({
+      default: mod.OrcaRouterIcon,
+    })),
   Perplexity: () =>
     import("@/icons/Perplexity").then((mod) => ({
       default: mod.PerplexityIcon,
@@ -385,6 +419,8 @@ export const lazyIconsMapping = {
     })),
   Pinecone: () =>
     import("@/icons/Pinecone").then((mod) => ({ default: mod.PineconeIcon })),
+  Plivo: () =>
+    import("@/icons/Plivo").then((mod) => ({ default: mod.PlivoIcon })),
   Postgres: () =>
     import("@/icons/Postgres").then((mod) => ({ default: mod.PostgresIcon })),
   Python: () =>
@@ -435,6 +471,10 @@ export const lazyIconsMapping = {
     import("@/icons/Share").then((mod) => ({ default: mod.ShareIcon })),
   Share2: () =>
     import("@/icons/Share2").then((mod) => ({ default: mod.Share2Icon })),
+  SharePoint: () =>
+    import("@/icons/SharePoint").then((mod) => ({
+      default: mod.SharePointIcon,
+    })),
   Slack: () =>
     import("@/icons/Slack/SlackIcon").then((mod) => ({ default: mod.default })),
   SlackComposio: () =>
@@ -451,6 +491,8 @@ export const lazyIconsMapping = {
     import("@/icons/supabase").then((mod) => ({ default: mod.SupabaseIcon })),
   Tavily: () =>
     import("@/icons/Tavily").then((mod) => ({ default: mod.TavilyIcon })),
+  Teams: () =>
+    import("@/icons/Teams").then((mod) => ({ default: mod.TeamsIcon })),
   ThumbDownCustom: () =>
     import("@/icons/thumbs").then((mod) => ({
       default: mod.ThumbDownIconCustom,
@@ -481,8 +523,11 @@ export const lazyIconsMapping = {
     })),
   Upstash: () =>
     import("@/icons/Upstash").then((mod) => ({ default: mod.UpstashSvgIcon })),
+  Valkey: () =>
+    import("@/icons/Valkey").then((mod) => ({ default: mod.ValkeyIcon })),
   Vectara: () =>
     import("@/icons/VectaraIcon").then((mod) => ({ default: mod.VectaraIcon })),
+  vLLM: () => import("@/icons/vLLM").then((mod) => ({ default: mod.VllmIcon })),
   VectorStores: () =>
     import("@/icons/vectorstores").then((mod) => ({
       default: mod.VectorStoresIcon,

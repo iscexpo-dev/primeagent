@@ -7,6 +7,12 @@ slug: /integrations-langwatch
 
 ## Integrate LangWatch observability
 
+:::note LangWatch is unavailable in the default Docker images
+The official Primeagent Docker images (`khulnasoft/primeagent` and `khulnasoft/primeagent-nightly`) run on Python 3.14, and the `langwatch` package doesn't yet support Python 3.14 (it requires Python `<3.14`). As a result, LangWatch tracing is **not available in the default Docker images** even when `LANGWATCH_API_KEY` is set. Primeagent logs a warning on the first flow run and continues without LangWatch tracing.
+
+To use LangWatch, run Primeagent on Python 3.10–3.13, such as the PyPI distribution (`pip install primeagent`) or the Primeagent desktop app. If you need a container, build a custom image on a Python 3.10–3.13 base.
+:::
+
 To integrate with Primeagent, add your LangWatch API key as a Primeagent environment variable:
 
 1. Get a LangWatch API key from your LangWatch account.

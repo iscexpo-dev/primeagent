@@ -14,8 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from primeagent.helpers.windows_postgres_helper import (
-    POSTGRESQL_PREFIXES,
     PRIMEAGENT_DATABASE_URL,
+    POSTGRESQL_PREFIXES,
     configure_windows_postgres_event_loop,
 )
 

@@ -2,6 +2,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.tools import ToolException
+
+pytest.importorskip("wfx_bundles")
+
 from wfx.components.yahoosearch.yahoo import YahooFinanceMethod, YfinanceComponent
 from wfx.custom.utils import build_custom_component_template
 from wfx.schema import Data

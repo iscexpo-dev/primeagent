@@ -5,7 +5,7 @@ import { useConnectionPanelState } from "../use-connection-panel-state";
 const baseParams = () => ({
   connections: [] as ConnectionItem[],
   setConnections: jest.fn(),
-  effectiveAttachmentKey: "flow-1" as string | null,
+  effectiveAttachmentKey: "flow-1",
   attachedConnectionByFlow: new Map<string, string[]>(),
   onAttachConnection: jest.fn(),
   commitPendingAttachment: jest.fn(),

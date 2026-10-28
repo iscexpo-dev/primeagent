@@ -1,7 +1,7 @@
-"""Tests for the dynamic ``primeagent.components.*`` -> ``wfx.components.*`` bridge.
+"""Tests for the dynamic ``prime.khulnasoft.components.*`` -> ``wfx.components.*`` bridge.
 
 Saved flows in the wild import their components via the legacy
-``primeagent.components.<sub>.<leaf>`` paths (the integration test
+``prime.khulnasoft.components.<sub>.<leaf>`` paths (the integration test
 ``test_dynamic_import_integration.py`` documents this contract).  The
 wfx extraction moved every component module into ``wfx.components.*``;
 ``primeagent/__init__.py`` installs a meta path finder that bridges the
@@ -10,10 +10,10 @@ modification.
 
 This suite locks the contract:
 
-    1. Generic prefix bridge: ``primeagent.components.<rest>`` resolves to
+    1. Generic prefix bridge: ``prime.khulnasoft.components.<rest>`` resolves to
        ``wfx.components.<rest>`` for arbitrary subpackages and submodules,
        including new bundles extracted in the future.
-    2. Renamed-package override: ``primeagent.components.knowledge_bases``
+    2. Renamed-package override: ``prime.khulnasoft.components.knowledge_bases``
        (and any submodule under it) resolves to
        ``wfx.components.files_and_knowledge`` because the package was
        renamed during the move while the primeagent-side path stays for
@@ -32,12 +32,12 @@ import primeagent  # noqa: F401  -- triggers the meta finder install
 
 
 def test_dotted_submodule_import_resolves() -> None:
-    """``from primeagent.components.processing.converter import X`` works.
+    """``from prime.khulnasoft.components.processing.converter import X`` works.
 
     Regression: the deletion of the physical ``primeagent/components/processing/converter.py``
     shim broke this import path before the dynamic bridge landed.
     """
-    from primeagent.components.processing.converter import convert_to_dataframe
+    from prime.khulnasoft.components.processing.converter import convert_to_dataframe
 
     # The bridge is a name alias, not a copy; ``__module__`` reflects the
     # underlying wfx location so debuggers / stack traces point at the
@@ -46,32 +46,32 @@ def test_dotted_submodule_import_resolves() -> None:
 
 
 def test_helpers_subpackage_imports() -> None:
-    """``from primeagent.components.helpers import X`` works for any helper class."""
-    from primeagent.components.helpers import CalculatorComponent
+    """``from prime.khulnasoft.components.helpers import X`` works for any helper class."""
+    from prime.khulnasoft.components.helpers import CalculatorComponent
 
     assert CalculatorComponent.__module__.startswith("wfx.components.")
 
 
 def test_knowledge_bases_override_resolves_to_files_and_knowledge() -> None:
-    """``primeagent.components.knowledge_bases[.<rest>]`` -> ``wfx.components.files_and_knowledge[.<rest>]``.
+    """``prime.khulnasoft.components.knowledge_bases[.<rest>]`` -> ``wfx.components.files_and_knowledge[.<rest>]``.
 
     The wfx package was renamed during the move; the primeagent-side path
     stays as ``knowledge_bases`` so saved flows that imported via that
     name continue to resolve.
     """
-    from primeagent.components.knowledge_bases.retrieval import KnowledgeBaseComponent
+    from prime.khulnasoft.components.knowledge_bases.retrieval import KnowledgeBaseComponent
 
     assert KnowledgeBaseComponent.__module__ == "wfx.components.files_and_knowledge.retrieval"
 
 
 def test_class_identity_preserved_across_bridge() -> None:
-    """Same class is returned via ``primeagent.components.X`` and ``wfx.components.X``.
+    """Same class is returned via ``prime.khulnasoft.components.X`` and ``wfx.components.X``.
 
     Critical for ``isinstance`` checks against types resolved through
     either path -- e.g. a saved flow imports the legacy primeagent path
     while runtime code imports the wfx path; both must compare equal.
     """
-    import primeagent.components.processing.converter as primeagent_module
+    import prime.khulnasoft.components.processing.converter as primeagent_module
     import wfx.components.processing.converter as wfx_module
 
     assert primeagent_module is wfx_module
@@ -79,16 +79,16 @@ def test_class_identity_preserved_across_bridge() -> None:
 
 
 def test_top_level_components_is_aliased_to_wfx_components() -> None:
-    """``import primeagent.components`` resolves to the wfx package.
+    """``import prime.khulnasoft.components`` resolves to the wfx package.
 
     Catches the case where the meta finder isn't installed yet when
-    ``primeagent.components`` is first imported -- happens on cold imports
+    ``prime.khulnasoft.components`` is first imported -- happens on cold imports
     in test runs that don't go through ``primeagent.__init__`` first.
     """
-    import primeagent.components
+    import prime.khulnasoft.components
     import wfx.components
 
-    assert primeagent.components is wfx.components
+    assert prime.khulnasoft.components is wfx.components
 
 
 def test_arbitrary_extracted_bundle_resolves_via_dynamic_bridge() -> None:
@@ -103,5 +103,5 @@ def test_arbitrary_extracted_bundle_resolves_via_dynamic_bridge() -> None:
     # physical shim under primeagent/components/ before the deletion.
     target = "wfx.components.helpers.calculator_core"
     importlib.import_module(target)
-    bridge = importlib.import_module("primeagent.components.helpers.calculator_core")
+    bridge = importlib.import_module("prime.khulnasoft.components.helpers.calculator_core")
     assert bridge is sys.modules[target]

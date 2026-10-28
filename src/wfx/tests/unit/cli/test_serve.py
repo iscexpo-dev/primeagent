@@ -138,8 +138,8 @@ def test_serve_command_json_file():
             patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "test-key"}),  # pragma: allowlist secret
         ):
             import typer
-            from typer.testing import CliRunner
             from wfx.cli.commands import serve_command
+            from typer.testing import CliRunner
 
             # Create a mock graph
             mock_graph = MagicMock()
@@ -192,8 +192,8 @@ def test_serve_command_inline_json():
         patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "test-key"}),  # pragma: allowlist secret
     ):
         import typer
-        from typer.testing import CliRunner
         from wfx.cli.commands import serve_command
+        from typer.testing import CliRunner
 
         # Create a mock graph
         mock_graph = MagicMock()
@@ -217,6 +217,36 @@ def test_serve_command_inline_json():
         # Check that the mock was called with the parsed JSON dict (not a temp file path)
         args, _kwargs = mock_load.call_args
         assert isinstance(args[0], dict)
+
+
+def test_serve_command_env_file_overrides_shell_environment(tmp_path):
+    """An explicit --env-file must take precedence over shell environment variables."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("PRIMEAGENT_API_KEY=from-env-file\n")  # pragma: allowlist secret
+    flow_json = '{"nodes": [], "edges": []}'
+
+    with (
+        patch("wfx.cli.commands.load_flow_from_json") as mock_load,
+        patch("wfx.cli.commands.uvicorn.run"),
+        patch("wfx.cli.commands.is_port_in_use", return_value=False),
+        patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "from-shell"}),  # pragma: allowlist secret
+    ):
+        import typer
+        from wfx.cli.commands import serve_command
+        from typer.testing import CliRunner
+
+        mock_graph = MagicMock()
+        mock_graph.prepare = MagicMock()
+        mock_graph.nodes = {}
+        mock_load.return_value = mock_graph
+
+        app = typer.Typer()
+        app.command()(serve_command)
+
+        result = CliRunner().invoke(app, ["--flow-json", flow_json, "--env-file", str(env_file)])
+
+        assert result.exit_code == 0, result.stdout
+        assert os.environ["PRIMEAGENT_API_KEY"] == "from-env-file"  # pragma: allowlist secret
 
 
 class TestBuildRegistryFromDirectory:
@@ -337,6 +367,87 @@ class TestBuildRegistryFromPaths:
             registry = asyncio.run(build_registry_from_paths([p1, p2], lambda _: None, check_variables=False))
 
         assert len(registry) == 2, "both flows must be registered with distinct IDs"
+
+
+class TestBuildServeRegistryTempCleanup:
+    """``_build_serve_registry`` owns the temp file until it hands the path back.
+
+    ``serve_command`` only learns the path from a successful return, so any exit that
+    skips that return has to unlink the staged flow itself or it is orphaned in the
+    system temp directory.
+    """
+
+    @staticmethod
+    def _build(**overrides):
+        import asyncio
+
+        from wfx.cli.commands import _build_serve_registry
+
+        kwargs = {
+            "script_paths": None,
+            "flow_json": None,
+            "stdin": False,
+            "check_variables": False,
+            "no_env_fallback": False,
+            "flow_store": MagicMock(),
+            "verbose_print": lambda _: None,
+        }
+        kwargs.update(overrides)
+        return asyncio.run(_build_serve_registry(**kwargs))
+
+    def test_inline_flow_removes_temp_file_when_registry_build_fails(self, tmp_path, monkeypatch):
+        import typer
+
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+        with (
+            patch("wfx.cli.commands.build_registry_from_paths", new=AsyncMock(side_effect=ValueError("invalid flow"))),
+            pytest.raises(typer.Exit),
+        ):
+            self._build(flow_json="{}")
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_inline_flow_removes_temp_file_when_build_fails_unexpectedly(self, tmp_path, monkeypatch):
+        """Cleanup can't hinge on ValueError — a Ctrl-C mid-load orphans the file too."""
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+        with (
+            patch("wfx.cli.commands.build_registry_from_paths", new=AsyncMock(side_effect=KeyboardInterrupt)),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            self._build(flow_json="{}")
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_inline_flow_keeps_temp_file_for_caller_on_success(self, tmp_path, monkeypatch):
+        """The success path must still hand the path to ``serve_command``'s finally."""
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+        with patch("wfx.cli.commands.build_registry_from_paths", new=AsyncMock(return_value=MagicMock())):
+            _registry, temp_file = self._build(flow_json="{}")
+
+        assert temp_file is not None
+        assert Path(temp_file).exists()
+        assert [entry.name for entry in tmp_path.iterdir()] == [Path(temp_file).name]
+
+    def test_upgraded_file_removes_temp_file_when_registry_build_fails(self, tmp_path, monkeypatch):
+        import typer
+
+        source_path = tmp_path / "flow.json"
+        source_path.write_text("{}")
+        temp_dir = tmp_path / "temp"
+        temp_dir.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(temp_dir))
+
+        with (
+            patch("wfx.cli.commands._gate_flow_for_serve", return_value={}),
+            patch("wfx.cli.commands.build_registry_from_paths", new=AsyncMock(side_effect=ValueError("invalid flow"))),
+            pytest.raises(typer.Exit),
+        ):
+            self._build(script_paths=[str(source_path)], upgrade_flow="safe")
+
+        assert list(temp_dir.iterdir()) == []
 
 
 class TestServeCommandMultiFlow:
@@ -678,8 +789,30 @@ def test_startup_scan_store_flows_accessible_lazily(tmp_path):
     assert result[1].title == "Pre-existing"
 
 
-def test_serve_command_passes_workers_to_uvicorn():
-    """--workers N must be forwarded to uvicorn.run as the workers argument."""
+def _make_fake_gunicorn_app(*, captured=None, captured_env=None):
+    """Stand-in for ``WFXGunicornApp`` that records launch args/env instead of forking workers.
+
+    ``captured`` (when given) receives ``app_import_string`` and ``options`` (the gunicorn
+    config); ``captured_env`` (when given) receives a snapshot of ``os.environ`` taken inside
+    ``run()`` — i.e. what forked workers would inherit. Either may be omitted when the test
+    doesn't need it.
+    """
+
+    class FakeGunicornApp:
+        def __init__(self, app_import_string=None, options=None):
+            if captured is not None:
+                captured["app_import_string"] = app_import_string
+                captured["options"] = options
+
+        def run(self):
+            if captured_env is not None:
+                captured_env.update(os.environ)
+
+    return FakeGunicornApp
+
+
+def _run_serve_capturing_gunicorn(*, workers, max_requests, captured, sync_workers=False):
+    """Run serve_command under a stubbed gunicorn launcher, capturing options + launch env."""
     import json
     import os
     import tempfile
@@ -698,13 +831,16 @@ def test_serve_command_passes_workers_to_uvicorn():
         with (
             patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "test-key"}),  # pragma: allowlist secret
             patch("wfx.cli.commands.load_flow_from_json", return_value=mock_graph),
-            patch("wfx.cli.commands.uvicorn.run") as mock_run,
+            patch("wfx.cli.serve_gunicorn.WFXGunicornApp", _make_fake_gunicorn_app(captured=captured)),
         ):
+            # Direct call (not via CLI): typer defaults are not applied, so pass
+            # max_requests / reset_environ / sync_workers explicitly even when None/False
+            # (OptionInfo sentinels are truthy).
             serve_command(
                 script_paths=[str(p)],
                 host="127.0.0.1",
                 port=9999,
-                workers=4,
+                workers=workers,
                 verbose=False,
                 env_file=None,
                 log_level="warning",
@@ -713,17 +849,54 @@ def test_serve_command_passes_workers_to_uvicorn():
                 stdin=False,
                 check_variables=False,
                 no_env_fallback=False,
+                max_requests=max_requests,
+                reset_environ=False,
+                sync_workers=sync_workers,
             )
 
-    mock_run.assert_called_once()
-    call_args = mock_run.call_args[0]
-    call_kwargs = mock_run.call_args[1] if mock_run.call_args[1] else {}
-    assert call_kwargs.get("workers") == 4
-    # For workers > 1, the app must be the factory import string, not an object
-    assert call_args[0] == "wfx.cli.serve_app:create_serve_app"
-    # The factory=True flag is required so uvicorn calls create_serve_app() at
-    # worker startup, not at request time.
-    assert call_kwargs.get("factory") is True
+
+def test_serve_command_passes_workers_to_gunicorn():
+    """--workers N is forwarded to gunicorn; default --max-requests recycles periodically.
+
+    Multi-worker serving runs gunicorn with preload; the app is loaded by the
+    preload master via the ``serve_preloaded_app`` import string. With no
+    --max-requests, max_requests defaults to DEFAULT_MAX_REQUESTS so warm workers
+    recycle periodically to shed memory (with 10% jitter).
+    """
+    from wfx.cli.commands import DEFAULT_MAX_REQUESTS
+
+    captured: dict = {}
+    _run_serve_capturing_gunicorn(workers=4, max_requests=None, captured=captured)
+
+    assert captured["options"]["workers"] == 4
+    # The preload master loads the warm app from this import string, not a factory.
+    assert captured["app_import_string"] == "wfx.cli.serve_preloaded_app:app"
+    assert captured["options"]["preload_app"] is True
+    # Default: periodic recycling to bound memory (not 0/never).
+    assert captured["options"]["max_requests"] == DEFAULT_MAX_REQUESTS
+    assert captured["options"]["max_requests_jitter"] == DEFAULT_MAX_REQUESTS // 10
+    # Our named async worker class is used, not the stock one.
+    assert captured["options"]["worker_class"] == "wfx.cli.serve_gunicorn.WFXUvicornWorker"
+
+
+def test_serve_command_max_requests_propagates_to_gunicorn():
+    """--max-requests N is forwarded to gunicorn as max_requests (overrides the default)."""
+    captured: dict = {}
+    _run_serve_capturing_gunicorn(workers=4, max_requests=1, captured=captured)
+
+    assert captured["options"]["max_requests"] == 1
+    # 1 // 10 == 0: small explicit values get no jitter.
+    assert captured["options"]["max_requests_jitter"] == 0
+    assert captured["options"]["preload_app"] is True
+
+
+def test_serve_command_max_requests_zero_disables_recycling():
+    """--max-requests 0 explicitly disables recycling, overriding the periodic default."""
+    captured: dict = {}
+    _run_serve_capturing_gunicorn(workers=4, max_requests=0, captured=captured)
+
+    assert captured["options"]["max_requests"] == 0
+    assert captured["options"]["max_requests_jitter"] == 0
 
 
 def test_serve_command_sets_startup_paths_env_for_multi_worker(tmp_path):
@@ -741,16 +914,13 @@ def test_serve_command_sets_startup_paths_env_for_multi_worker(tmp_path):
 
     captured_env: dict = {}
 
-    def capture_env(*_a, **_kw):
-        captured_env.update(os.environ)
-
     p = tmp_path / "flow.json"
     p.write_text(json.dumps(flow_data))
 
     with (
         patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "test-key"}),  # pragma: allowlist secret
         patch("wfx.cli.commands.load_flow_from_json", return_value=mock_graph),
-        patch("wfx.cli.commands.uvicorn.run", side_effect=capture_env),
+        patch("wfx.cli.serve_gunicorn.WFXGunicornApp", _make_fake_gunicorn_app(captured_env=captured_env)),
     ):
         serve_command(
             script_paths=[str(p)],
@@ -765,9 +935,11 @@ def test_serve_command_sets_startup_paths_env_for_multi_worker(tmp_path):
             stdin=False,
             check_variables=False,
             no_env_fallback=False,
+            reset_environ=False,
+            sync_workers=False,
         )
 
-    assert _SERVE_STARTUP_PATHS_ENV in captured_env, "WFX_SERVE_STARTUP_PATHS must be set before uvicorn.run()"
+    assert _SERVE_STARTUP_PATHS_ENV in captured_env, "WFX_SERVE_STARTUP_PATHS must be set before the launch"
     paths = json.loads(captured_env[_SERVE_STARTUP_PATHS_ENV])
     assert len(paths) == 1
     assert paths[0].endswith("flow.json"), f"expected flow.json in paths, got {paths}"
@@ -795,16 +967,13 @@ def test_serve_command_does_not_set_startup_paths_when_flow_dir_set(tmp_path):
 
     captured_env: dict = {}
 
-    def capture_env(*_a, **_kw):
-        captured_env.update(os.environ)
-
     p = tmp_path / "flow.json"
     p.write_text(json.dumps(flow_data))
 
     with (
         patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "test-key"}),  # pragma: allowlist secret
         patch("wfx.cli.commands.load_flow_from_json", return_value=mock_graph),
-        patch("wfx.cli.commands.uvicorn.run", side_effect=capture_env),
+        patch("wfx.cli.serve_gunicorn.WFXGunicornApp", _make_fake_gunicorn_app(captured_env=captured_env)),
     ):
         serve_command(
             script_paths=[str(p)],
@@ -819,6 +988,8 @@ def test_serve_command_does_not_set_startup_paths_when_flow_dir_set(tmp_path):
             stdin=False,
             check_variables=False,
             no_env_fallback=False,
+            reset_environ=False,
+            sync_workers=False,
         )
 
     assert _SERVE_STARTUP_PATHS_ENV in captured_env, "env var must still be set (to empty list)"
@@ -848,7 +1019,7 @@ def test_serve_command_warns_when_workers_gt1_without_flow_dir():
         with (
             patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "test-key"}),  # pragma: allowlist secret
             patch("wfx.cli.commands.load_flow_from_json", return_value=mock_graph),
-            patch("wfx.cli.commands.uvicorn.run"),
+            patch("wfx.cli.serve_gunicorn.WFXGunicornApp", _make_fake_gunicorn_app()),
             patch("typer.echo", side_effect=lambda msg, **kw: stderr_output.append(msg) if kw.get("err") else None),
         ):
             serve_command(
@@ -864,6 +1035,8 @@ def test_serve_command_warns_when_workers_gt1_without_flow_dir():
                 stdin=False,
                 check_variables=False,
                 no_env_fallback=False,
+                reset_environ=False,
+                sync_workers=False,
             )
 
     assert any("--flow-dir" in msg for msg in stderr_output), (
@@ -904,6 +1077,8 @@ def test_serve_command_rejects_py_with_multiple_workers(tmp_path):
                 stdin=False,
                 check_variables=False,
                 no_env_fallback=False,
+                reset_environ=False,
+                sync_workers=False,
             )
 
     assert any(".py" in msg and "cannot be used" in msg for msg in stderr_output), stderr_output
@@ -930,14 +1105,11 @@ def test_serve_command_allows_py_with_multiple_workers_no_flow_dir(tmp_path):
     mock_graph.context = {}
     captured_env: dict = {}
 
-    def capture_env(*_a, **_kw):
-        captured_env.update(os.environ)
-
     with (
         patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "test-key"}),  # pragma: allowlist secret
         patch("wfx.cli.commands.load_graph_from_script", new=AsyncMock(return_value=mock_graph)),
         patch("wfx.cli.commands.find_graph_variable", return_value={"type": "assignment", "line": 1}),
-        patch("wfx.cli.commands.uvicorn.run", side_effect=capture_env),
+        patch("wfx.cli.serve_gunicorn.WFXGunicornApp", _make_fake_gunicorn_app(captured_env=captured_env)),
     ):
         # Must NOT raise — .py without flow_dir is allowed for multi-worker
         serve_command(
@@ -953,6 +1125,8 @@ def test_serve_command_allows_py_with_multiple_workers_no_flow_dir(tmp_path):
             stdin=False,
             check_variables=False,
             no_env_fallback=False,
+            reset_environ=False,
+            sync_workers=False,
         )
 
     # WFX_SERVE_STARTUP_PATHS must contain the .py path so workers can reload it
@@ -983,7 +1157,7 @@ def test_serve_command_no_warning_when_workers_gt1_with_flow_dir(tmp_path):
         with (
             patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "test-key"}),  # pragma: allowlist secret
             patch("wfx.cli.commands.load_flow_from_json", return_value=mock_graph),
-            patch("wfx.cli.commands.uvicorn.run"),
+            patch("wfx.cli.serve_gunicorn.WFXGunicornApp", _make_fake_gunicorn_app()),
             patch("typer.echo", side_effect=lambda msg, **kw: stderr_output.append(msg) if kw.get("err") else None),
         ):
             serve_command(
@@ -999,9 +1173,59 @@ def test_serve_command_no_warning_when_workers_gt1_with_flow_dir(tmp_path):
                 stdin=False,
                 check_variables=False,
                 no_env_fallback=False,
+                reset_environ=False,
+                sync_workers=False,
             )
 
     assert not any("--flow-dir" in msg for msg in stderr_output)
+
+
+def test_serve_command_warns_when_multiworker_has_no_isolation(tmp_path):
+    """--workers > 1 without an isolation mechanism must warn; --reset-environ silences it."""
+    import json
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import MagicMock, patch
+
+    from wfx.cli.commands import serve_command
+
+    flow_data = {"name": "Test", "description": "", "data": {"nodes": [], "edges": []}}
+    mock_graph = MagicMock()
+    mock_graph.context = {}
+
+    def _run(*, reset_environ):
+        stderr_output = []
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "flow.json"
+            p.write_text(json.dumps(flow_data))
+            with (
+                patch.dict(os.environ, {"PRIMEAGENT_API_KEY": "test-key"}),  # pragma: allowlist secret
+                patch("wfx.cli.commands.load_flow_from_json", return_value=mock_graph),
+                patch("wfx.cli.serve_gunicorn.WFXGunicornApp", _make_fake_gunicorn_app()),
+                patch("typer.echo", side_effect=lambda msg, **kw: stderr_output.append(msg) if kw.get("err") else None),
+            ):
+                serve_command(
+                    script_paths=[str(p)],
+                    host="127.0.0.1",
+                    port=9999,
+                    workers=2,
+                    verbose=False,
+                    env_file=None,
+                    log_level="warning",
+                    flow_json=None,
+                    flow_dir=tmp_path / "flows",  # avoids the separate missing-store warning
+                    stdin=False,
+                    check_variables=False,
+                    no_env_fallback=False,
+                    reset_environ=reset_environ,
+                    sync_workers=False,
+                )
+        return stderr_output
+
+    # No isolation flag -> warn loudly.
+    assert any("per-request isolation" in msg for msg in _run(reset_environ=False))
+    # --reset-environ provides isolation -> no warning.
+    assert not any("per-request isolation" in msg for msg in _run(reset_environ=True))
 
 
 # ---------------------------------------------------------------------------

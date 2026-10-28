@@ -38,14 +38,6 @@ on:
         description: "(Optional) Ref to checkout"
         required: false
         type: string
-      openai_api_key:
-        description: "OpenAI API Key"
-        required: false
-        type: string
-      store_api_key:
-        description: "Store API Key"
-        required: false
-        type: string
       python-versions:
         description: "Python Versions"
         required: false
@@ -58,20 +50,19 @@ on:
         options:
           - ubuntu-latest
           - self-hosted
-          - '["self-hosted", "linux", "ARM64", "primeagent-arm64-40gb-ephemeral"]'
+          - '["self-hosted", "linux", "ARM64", "khulnasoft-bot-arm64-40gb-ephemeral"]'
         default: ubuntu-latest
   pull_request:
-    types: [opened, synchronize, labeled]
+    # ready_for_review matters: every job below is gated on the PR not being a draft, so a PR
+    # opened as a draft and later marked ready has no run where that gate was ever true.
+    types: [opened, synchronize, labeled, ready_for_review]
   merge_group:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-  STORE_API_KEY: ${{ secrets.STORE_API_KEY }}
-  TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+permissions:
+  contents: read
 
 jobs:
   echo-inputs:
@@ -206,6 +197,7 @@ jobs:
       database: ${{ steps.filter.outputs.database }}
       docker: ${{ steps.filter.outputs.docker }}
       design-md: ${{ steps.filter.outputs.design-md }}
+      storage: ${{ steps.filter.outputs.storage }}
       docs-only: ${{
         steps.filter.outputs.docs == 'true' &&
         steps.filter.outputs.python != 'true' &&
@@ -223,16 +215,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
       - name: Filter Paths
         id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: ./.github/changes-filter.yaml
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install deps for coverage check
@@ -260,7 +252,8 @@ jobs:
       (
         inputs.run-all-tests ||
         (needs.path-filter.result != 'skipped' &&
-        needs.path-filter.outputs.docs-only != 'true')
+        needs.path-filter.outputs.docs-only != 'true' &&
+        needs.path-filter.outputs.python == 'true')
       )
     uses: ./.github/workflows/python_test.yml
     with:
@@ -284,11 +277,20 @@ jobs:
         (needs.path-filter.result != 'skipped' &&
         needs.path-filter.outputs.frontend == 'true')
       )
-    uses: ./.github/workflows/lint-js.yml origin/realease/v2
+    uses: ./.github/workflows/lint-js.yml
+    with:
+      allow-failure: ${{ inputs.release == true }}
 
   test-frontend-unit:
     needs: [path-filter, set-ci-condition]
     name: Run Frontend Unit Tests
+    # The called workflow publishes a check run and, for PR events, a coverage
+    # comment. Keep these writes scoped to this reporting job; every other CI
+    # job retains the workflow-level read-only token.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     if: |
       always() &&
       !cancelled() &&
@@ -322,12 +324,6 @@ jobs:
       release: ${{ inputs.release || false }}
       runs-on: ${{ inputs['runs-on'] || github.event.inputs['runs-on'] || 'ubuntu-latest' }}
       ref: ${{ inputs.ref || github.ref }}
-    secrets:
-      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}"
-      STORE_API_KEY: "${{ secrets.STORE_API_KEY }}"
-      ANTHROPIC_API_KEY: "${{ secrets.ANTHROPIC_API_KEY }}"
-      TAVILY_API_KEY: "${{ secrets.TAVILY_API_KEY }}"
-
   test-docs-build:
     needs: path-filter
     if: |
@@ -348,19 +344,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: 3.12
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.0.0
         with:
-          version: "latest"
+          version: latest-known
 
       - name: Install dependencies
         run: |
@@ -375,9 +371,60 @@ jobs:
     name: Test Docker Images
     if: ${{ needs.path-filter.outputs.docker == 'true' && needs.set-ci-condition.outputs.should-run-tests == 'true' }}
     uses: ./.github/workflows/docker_test.yml
-    secrets:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  test-object-storage:
+    needs: [path-filter, set-ci-condition]
+    name: Object Storage Tests (S3)
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.set-ci-condition.outputs.should-run-tests == 'true' &&
+      (
+        inputs.run-all-tests ||
+        (needs.path-filter.result != 'skipped' &&
+        needs.path-filter.outputs.storage == 'true')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # SeaweedFS's S3 gateway: MinIO no longer publishes pullable images. A service
+      # container cannot pass it the "server" command, so start it here. With no S3
+      # config it accepts any credentials.
+      - name: Start S3 server
+        run: |
+          docker run -d --name s3 -p 8333:8333 chrislusf/seaweedfs:4.47 server -s3 -s3.port=8333
+          for _ in $(seq 30); do
+            curl -sf -o /dev/null http://localhost:8333/ && exit 0
+            sleep 2
+          done
+          docker logs s3
+          exit 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.0
+        with:
+          version: latest-known
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync
+
+      # These tests are marked api_key_required, so the unit lanes deselect them.
+      - name: Run object storage tests against S3
+        env:
+          AWS_ACCESS_KEY_ID: primeagent
+          AWS_SECRET_ACCESS_KEY: primeagent-s3  # pragma: allowlist secret
+          AWS_ENDPOINT_URL: http://localhost:8333
+          AWS_DEFAULT_REGION: us-east-1
+        run: uv run pytest src/backend/tests/unit/api/utils/test_file_relocation.py -v
 
   lint-design-md:
     needs: path-filter
@@ -388,12 +435,12 @@ jobs:
       DESIGN_MD_CLI_VERSION: "0.1.1"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -415,17 +462,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download Jest Coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           name: jest-coverage
           path: coverage/jest
 
       - name: Download Playwright Coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           pattern: playwright-coverage-*
@@ -451,7 +498,7 @@ jobs:
         if: env.CODECOV_TOKEN != ''
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ env.CODECOV_TOKEN }}
           files: coverage/combined/total-frontend-coverage.json
@@ -473,6 +520,7 @@ jobs:
         test-docs-build,
         test-templates,
         test-docker,
+        test-object-storage,
         lint-design-md,
         set-ci-condition,
         path-filter,
@@ -487,8 +535,13 @@ jobs:
       RESULTS_JSON: ${{ toJSON(needs.*.result) }}
       # Skip nightly build check if only docs files changed
       DOCS_ONLY: ${{ needs.path-filter.outputs.docs-only }}
+      # A skipped need is not counted as a failure, which is correct when path-filter ran and
+      # decided nothing relevant changed. It is not correct when path-filter itself never
+      # produced a decision: every dependent job is then skipped for want of its outputs, and
+      # this gate would report success over a job set that never ran. Require the decision.
       EXIT_CODE: ${{ (contains(needs.*.result, 'failure') ||
         contains(needs.*.result, 'cancelled') ||
+        (needs.set-ci-condition.outputs.should-run-ci == 'true' && !inputs.run-all-tests && needs.path-filter.result != 'success') ||
         (needs.check-nightly-status.outputs.should-proceed != 'true' && github.event_name != 'workflow_dispatch' && github.event_name != 'merge_group' && needs.path-filter.outputs.docs-only != 'true' && !contains(github.event.pull_request.labels.*.name, 'skip-nightly-check')))
         && '1' || '0' }}
     steps:
@@ -500,6 +553,7 @@ jobs:
           echo "Nightly build status: ${{ needs.check-nightly-status.outputs.should-proceed }}"
           echo "Event type: ${{ github.event_name }}"
           echo "Docs only changes: $DOCS_ONLY"
+          echo "Path filter decision: ${{ needs.path-filter.result }}"
           echo "Python changes: ${{ needs.path-filter.outputs.python }}"
           echo "Frontend changes: ${{ needs.path-filter.outputs.frontend }}"
           echo "Docs changes: ${{ needs.path-filter.outputs.docs }}"
@@ -530,6 +584,8 @@ jobs:
                   "  - Template Tests: Check starter project templates"
                 elif $job == "test-docker" then
                   "  - Docker Tests: Check Docker image builds and version verification"
+                elif $job == "test-object-storage" then
+                  "  - Object Storage Tests: Check S3 storage and file relocation against a real S3 server"
                 elif $job == "lint-design-md" then
                   "  - DESIGN.md Lint: Check token references, WCAG contrast, and spec compliance"
                 elif $job == "path-filter" then

@@ -18,12 +18,12 @@ from types import ModuleType  # noqa: E402
 from typing import Any  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Dynamic ``primeagent.components.*`` -> ``wfx.components.*`` bridge
+# Dynamic ``prime.khulnasoft.components.*`` -> ``wfx.components.*`` bridge
 # ---------------------------------------------------------------------------
 #
-# Saved flows in the wild import their components via ``primeagent.components.<sub>``
-# (``from primeagent.components.processing.converter import convert_to_dataframe``,
-# ``import primeagent.components.knowledge_bases.retrieval``, etc.).  The wfx
+# Saved flows in the wild import their components via ``prime.khulnasoft.components.<sub>``
+# (``from prime.khulnasoft.components.processing.converter import convert_to_dataframe``,
+# ``import prime.khulnasoft.components.knowledge_bases.retrieval``, etc.).  The wfx
 # extraction moved every component module into ``wfx.components.*``; we
 # previously kept a stack of physical shim files (one per subpackage)
 # under ``src/backend/base/primeagent/components/`` to forward those imports.
@@ -32,7 +32,7 @@ from typing import Any  # noqa: E402
 # silently breaks pre-existing flows at load time.
 #
 # Replace the physical-shim stack with a single meta path finder that
-# dynamically resolves any ``primeagent.components.<rest>`` import to the
+# dynamically resolves any ``prime.khulnasoft.components.<rest>`` import to the
 # corresponding ``wfx.components.<rest>`` module.  The finder returns the
 # already-loaded wfx module from ``create_module`` so the primeagent- and
 # wfx-prefixed names share a single underlying module object; class
@@ -44,7 +44,7 @@ from typing import Any  # noqa: E402
 
 
 class _PrimeagentComponentsAliasLoader(importlib.abc.Loader):
-    """Loader that fronts ``wfx.components.<rest>`` as ``primeagent.components.<rest>``.
+    """Loader that fronts ``wfx.components.<rest>`` as ``prime.khulnasoft.components.<rest>``.
 
     ``create_module`` returns the wfx module object directly so attribute
     access on either name resolves to the same backing module.
@@ -65,19 +65,19 @@ class _PrimeagentComponentsAliasLoader(importlib.abc.Loader):
 
 
 class _PrimeagentComponentsAliasFinder(importlib.abc.MetaPathFinder):
-    """Bridge ``primeagent.components.<rest>`` -> ``wfx.components.<rest>`` for arbitrary subpackages.
+    """Bridge ``prime.khulnasoft.components.<rest>`` -> ``wfx.components.<rest>`` for arbitrary subpackages.
 
     Replaces a stack of per-subpackage physical shim files with a single
     dynamic resolver, so a new wfx component module never requires a
     parallel primeagent shim.  Saved flows that imported components via
-    the legacy ``primeagent.components.*`` paths (and the integration tests
+    the legacy ``prime.khulnasoft.components.*`` paths (and the integration tests
     that document the contract) continue to load without modification.
     """
 
-    _BRIDGE_PREFIX = "primeagent.components"
+    _BRIDGE_PREFIX = "prime.khulnasoft.components"
     _WFX_PREFIX = "wfx.components"
 
-    # First-segment renames applied when translating ``primeagent.components.<head>[.<tail>]``
+    # First-segment renames applied when translating ``prime.khulnasoft.components.<head>[.<tail>]``
     # to ``wfx.components.<renamed>[.<tail>]``.  ``knowledge_bases`` was
     # renamed to ``files_and_knowledge`` in wfx during the move; the
     # primeagent-side import path stays as ``knowledge_bases`` so the
@@ -158,7 +158,7 @@ def _setup_compatibility_modules():
     # First, set up the base attribute on this module (primeagent)
     current_module = sys.modules[__name__]
 
-    # Install the dynamic ``primeagent.components.<rest>`` -> ``wfx.components.<rest>``
+    # Install the dynamic ``prime.khulnasoft.components.<rest>`` -> ``wfx.components.<rest>``
     # bridge BEFORE any explicit module_mappings entries are registered.  The
     # finder handles every subpackage (including ones added later when a new
     # bundle is extracted), so the explicit per-helper entries that used to
@@ -181,7 +181,7 @@ def _setup_compatibility_modules():
         "primeagent.template": "wfx.template",
         "primeagent.template.field": "wfx.template.field",
         "primeagent.template.field.base": "wfx.template.field.base",
-        # ``primeagent.components.*`` is bridged dynamically by
+        # ``prime.khulnasoft.components.*`` is bridged dynamically by
         # ``_PrimeagentComponentsAliasFinder`` registered above, so no
         # entries are needed here.
         # Individual modules that exist in wfx
@@ -244,7 +244,7 @@ def _setup_compatibility_modules():
                         current_module.schema = compat_module
                     elif primeagent_name == "primeagent.template":
                         current_module.template = compat_module
-                    elif primeagent_name == "primeagent.components":
+                    elif primeagent_name == "prime.khulnasoft.components":
                         current_module.components = compat_module
             except (ImportError, ValueError):
                 # Skip modules that don't exist in wfx
@@ -252,7 +252,7 @@ def _setup_compatibility_modules():
 
     # Handle modules that exist only in primeagent (like knowledge_bases)
     # These need special handling because they're not in wfx yet.
-    # ``primeagent.components.knowledge_bases`` is no longer listed here:
+    # ``prime.khulnasoft.components.knowledge_bases`` is no longer listed here:
     # ``_PrimeagentComponentsAliasFinder`` rewrites it to
     # ``wfx.components.files_and_knowledge`` via the override map and the
     # physical shim file used to live under ``components/knowledge_bases/``

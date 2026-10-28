@@ -42,7 +42,7 @@ class _LegacyCaseEnum(sa_types.TypeDecorator):
     ``result_processor`` *before* ``process_result_value``, and the
     impl's processor raises ``LookupError`` on legacy uppercase strings
     before our normalisation gets a chance to run. See
-    https://github.com/khulnasoft/primeagent/issues/13318.
+    https://github.com/khulnasoft-bot/primeagent/issues/13318.
     """
 
     impl = SQLEnum
@@ -351,7 +351,12 @@ class SpanTable(SpanBase, table=True):  # type: ignore[call-arg]
     __tablename__ = "span"
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    trace_id: UUID = Field(foreign_key="trace.id", index=True, description="Parent trace ID")
+    trace_id: UUID = Field(
+        foreign_key="trace.id",
+        ondelete="CASCADE",
+        index=True,
+        description="Parent trace ID",
+    )
     parent_span_id: UUID | None = Field(
         default=None,
         foreign_key="span.id",

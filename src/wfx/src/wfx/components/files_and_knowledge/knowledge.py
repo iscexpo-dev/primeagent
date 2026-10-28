@@ -18,18 +18,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
 import uuid
+from collections.abc import Awaitable, Mapping
+from contextlib import aclosing
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
+import anyio
 import pandas as pd
-from cryptography.fernet import InvalidToken
-from langchain_chroma import Chroma
-from primeagent.services.auth.utils import decrypt_api_key, encrypt_api_key
 
-from wfx.base.knowledge_bases.backends import BackendType, BaseVectorStoreBackend, create_backend
+from wfx.base.knowledge_bases.backends import BackendType, BaseVectorStoreBackend
+from wfx.base.knowledge_bases.backends.base import BackendConfigurationError, IngestedDocument
+from wfx.base.knowledge_bases.backends.naming import ensure_storage_routing_allowed
 from wfx.base.knowledge_bases.ingestion_sources.base import (
     IngestionItemResult,
     IngestionItemStatus,
@@ -38,16 +39,13 @@ from wfx.base.knowledge_bases.ingestion_sources.base import (
 )
 from wfx.base.knowledge_bases.ingestion_sources.flow_component import FlowComponentSource
 from wfx.base.knowledge_bases.knowledge_base_utils import get_knowledge_bases
+from wfx.base.knowledge_bases.validation import (
+    is_valid_collection_name as is_valid_kb_collection_name,
+)
 from wfx.base.models.unified_models import get_embedding_model_options, get_embeddings
-from wfx.base.vectorstores.chroma_security import chroma_langchain_collection_kwargs
-from wfx.components.files_and_knowledge._kb_paths import (
-    get_knowledge_bases_root_path as _get_knowledge_bases_root_path,
-)
-from wfx.components.files_and_knowledge._kb_paths import (
-    load_kb_metadata,
-)
 from wfx.components.processing.converter import convert_to_dataframe
 from wfx.custom import Component
+from wfx.helpers.base_model import coalesce_bool
 from wfx.io import (
     BoolInput,
     DBProviderInput,
@@ -68,7 +66,6 @@ from wfx.schema.dataframe import DataFrame
 from wfx.schema.dotdict import dotdict
 from wfx.schema.table import EditMode
 from wfx.services.deps import (
-    get_settings_service,
     session_scope,
 )
 from wfx.utils.component_utils import set_current_fields, set_field_display
@@ -103,6 +100,42 @@ if TYPE_CHECKING:
 MODE_INGEST = "Ingest"
 MODE_RETRIEVE = "Retrieve"
 
+# How often a flow ingestion checks whether its job was cancelled from the
+# Knowledge page while it waits on the embedding provider.
+JOB_CANCEL_POLL_SECONDS = 1.0
+
+
+class KnowledgeIngestionCancelledError(Exception):
+    """The ingestion's job was cancelled from the Knowledge page."""
+
+
+_T = TypeVar("_T")
+
+
+async def _finish_despite_cancellation(awaitable: Awaitable[_T]) -> _T:
+    """Run ``awaitable`` to completion even if the caller is cancelled meanwhile.
+
+    ``anyio.CancelScope(shield=True)`` holds off AnyIO cancellation, but a
+    repeated native ``Task.cancel()`` still interrupts it, and a stopped flow
+    build can cancel its task more than once. The work runs in its own task,
+    and the caller waits through every cancellation, re-raising once the work
+    has landed.
+    """
+    task = asyncio.ensure_future(awaitable)
+    cancelled = False
+    with anyio.CancelScope(shield=True):
+        while not task.done():
+            try:
+                await asyncio.wait({task})
+            except asyncio.CancelledError:
+                cancelled = True
+    if cancelled:
+        error = None if task.cancelled() else task.exception()
+        if error is not None:
+            logger.warning(f"Work finished during cancellation failed: {error!r}")
+        raise asyncio.CancelledError from error
+    return task.result()
+
 
 def _is_retrieve_mode(value: Any) -> bool:
     """Lenient mode check: treats any label containing 'Retrieve' as retrieve mode.
@@ -112,6 +145,17 @@ def _is_retrieve_mode(value: Any) -> bool:
     keeps those loading without forcing a flow rewrite.
     """
     return isinstance(value, str) and "Retrieve" in value
+
+
+# Boolean flags of a ``column_config`` row. Toggled cells hold real booleans,
+# but a typed cell (or a flow saved while the cell rendered as plain text)
+# keeps the raw string, e.g. ``"true"`` — read them with ``coalesce_bool``.
+_COLUMN_FLAGS = ("vectorize", "identifier")
+
+
+def _normalize_column_config(config_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return copies of the rows with every flag as a real boolean."""
+    return [{**row, **{key: coalesce_bool(row.get(key)) for key in _COLUMN_FLAGS}} for row in config_list]
 
 
 # Error message used by both the ingest and retrieve paths when the user is
@@ -125,13 +169,6 @@ _DEFAULT_OPENSEARCH_CONFIG = {
     "index_name": "",
     "vector_field": "vector_field",
     "text_field": "text",
-}
-
-_DEFAULT_CHROMA_CLOUD_CONFIG = {
-    "mode": "cloud",
-    "tenant_variable": "CHROMA_TENANT",
-    "database_variable": "CHROMA_DATABASE",
-    "api_key_variable": "CHROMA_API_KEY",  # pragma: allowlist secret
 }
 
 
@@ -175,6 +212,69 @@ class KnowledgeComponent(Component):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._cached_kb_path: Path | None = None
+        self._knowledge_output_result: Data | DataFrame | None = None
+
+    def _pre_run_setup(self) -> None:
+        self._knowledge_output_result = None
+
+    async def _get_output_result(self, output: Output):
+        # Both legacy handles dispatch to the selected mode. Terminal nodes
+        # evaluate both handles, but must execute the storage operation once.
+        if output.method not in {"build_kb_info", "retrieve_data"}:
+            return await super()._get_output_result(output)
+        if self._knowledge_output_result is None:
+            raw_output = output.model_copy(update={"options": None})
+            self._knowledge_output_result = await super()._get_output_result(raw_output)
+        output.value = output.apply_options(self._knowledge_output_result)
+        return output.value
+
+    @staticmethod
+    def _embedding_provider_from_selection(selection: Any) -> str | None:
+        """Read a provider name from a raw or persisted model selection."""
+        if isinstance(selection, list):
+            selection = selection[0] if selection else None
+        if not isinstance(selection, Mapping):
+            return None
+        provider = selection.get("provider")
+        if not isinstance(provider, str) or not provider.strip():
+            return None
+        return provider.strip()
+
+    async def _additional_model_provider_policy_ids(self, purpose, parameters=None) -> tuple[str, ...]:
+        """Resolve the embedding provider before dialog hooks or runtime secrets.
+
+        New-KB configuration carries its ModelInput inside a dropdown dialog,
+        while existing KBs persist the provider in the KB row. Neither is a
+        top-level ModelInput, so both must be resolved explicitly before the
+        generic component pipeline hydrates ``api_key``.
+        """
+        from wfx.base.models.provider_registry import resolve_provider_id
+        from wfx.services.model_provider_policy import ModelProviderPolicyError
+
+        effective_parameters = parameters if isinstance(parameters, Mapping) else getattr(self, "_parameters", None)
+        if not isinstance(effective_parameters, Mapping):
+            effective_parameters = {}
+        knowledge_value = effective_parameters.get("knowledge_base", getattr(self, "knowledge_base", None))
+
+        if isinstance(knowledge_value, Mapping):
+            if "02_embedding_model" not in knowledge_value:
+                return ()
+            provider = self._embedding_provider_from_selection(knowledge_value.get("02_embedding_model"))
+        elif isinstance(knowledge_value, str) and knowledge_value.strip():
+            metadata = await self._get_kb_metadata(knowledge_value.strip())
+            provider = self._embedding_provider_from_selection(metadata.get("model_selection"))
+            if provider is None:
+                legacy_provider = metadata.get("embedding_provider")
+                provider = legacy_provider.strip() if isinstance(legacy_provider, str) else None
+                if provider == "Unknown":
+                    provider = None
+        else:
+            return ()
+
+        if provider is None:
+            unknown_provider = "unknown"
+            raise ModelProviderPolicyError(unknown_provider, purpose)
+        return (resolve_provider_id(provider),)
 
     @dataclass
     class NewKnowledgeBaseInput:
@@ -432,9 +532,33 @@ class KnowledgeComponent(Component):
         canvas could land with both outputs visible.
         """
         await super().update_frontend_node(new_frontend_node, current_frontend_node)
-        mode_value = new_frontend_node.get("template", {}).get("mode", {}).get("value", MODE_INGEST)
+        template = new_frontend_node.get("template", {})
+        mode_value = template.get("mode", {}).get("value", MODE_INGEST)
         self.update_outputs(new_frontend_node, "mode", mode_value)
+        # The rebuilt template carries class-default (Ingest) ``show`` flags,
+        # so a saved Retrieve node returned ``search_query`` hidden and the canvas
+        # silently dropped the edge feeding it.
+        self._apply_mode_visibility(template)
         return new_frontend_node
+
+    def _apply_mode_visibility(self, build_config, field_name: str | None = None, field_value: Any = None):
+        """Show only the inputs that belong to the effective mode."""
+        current_mode = build_config.get("mode", {}).get("value") if isinstance(build_config, dict) else None
+        if field_name == "mode":
+            current_mode = field_value
+        # Map legacy/emoji-prefixed labels onto the current canonical values so
+        # flows saved before the label change still toggle visibility correctly.
+        if _is_retrieve_mode(current_mode):
+            current_mode = MODE_RETRIEVE
+        elif current_mode not in self.mode_config:
+            current_mode = MODE_INGEST
+        return set_current_fields(
+            build_config=build_config if isinstance(build_config, dotdict) else dotdict(build_config),
+            action_fields=self.mode_config,
+            selected_action=current_mode,
+            default_fields=self.default_keys,
+            func=set_field_display,
+        )
 
     def update_outputs(self, frontend_node: dict, field_name: str, field_value: Any) -> dict:
         """Filter visible outputs to match the selected mode.
@@ -512,12 +636,7 @@ class KnowledgeComponent(Component):
                 if not current_user:
                     msg = f"User with ID {self.user_id} not found."
                     raise ValueError(msg)
-                kb_user = current_user.username
             if isinstance(field_value, dict) and "01_new_kb_name" in field_value:
-                if not self.is_valid_collection_name(field_value["01_new_kb_name"]):
-                    msg = f"Invalid knowledge base name: {field_value['01_new_kb_name']}"
-                    raise ValueError(msg)
-
                 model_selection = field_value["02_embedding_model"]
                 if isinstance(model_selection, dict):
                     model_selection = [model_selection]
@@ -525,6 +644,14 @@ class KnowledgeComponent(Component):
                 backend_type, backend_config = self._normalize_backend_selection(
                     field_value.get("03_knowledge_backend")
                 )
+                ensure_storage_routing_allowed(backend_config, is_superuser=bool(current_user.is_superuser))
+                new_kb_name = field_value["01_new_kb_name"]
+                from primeagent.api.utils.kb_helpers import local_chroma_rejection_reason, validate_kb_name
+
+                validate_kb_name(new_kb_name)
+                rejection = local_chroma_rejection_reason(backend_type, backend_config)
+                if rejection:
+                    raise ValueError(rejection)
 
                 embed_model = get_embeddings(
                     model=model_selection,
@@ -543,16 +670,7 @@ class KnowledgeComponent(Component):
                     msg = f"Embedding validation failed: {e!s}"
                     raise ValueError(msg) from e
 
-                kb_path = _get_knowledge_bases_root_path() / kb_user / field_value["01_new_kb_name"]
-                kb_path.mkdir(parents=True, exist_ok=True)
-
-                build_config["knowledge_base"]["value"] = field_value["01_new_kb_name"]
-                self._save_embedding_metadata(
-                    kb_path=kb_path,
-                    model_selection=model_selection,
-                    backend_type=backend_type,
-                    backend_config=backend_config,
-                )
+                build_config["knowledge_base"]["value"] = new_kb_name
                 await self._create_knowledge_base_record(
                     user_id=self.user_id,
                     name=field_value["01_new_kb_name"],
@@ -561,39 +679,16 @@ class KnowledgeComponent(Component):
                     backend_config=backend_config,
                 )
 
-            build_config["knowledge_base"]["options"] = await get_knowledge_bases(
-                _get_knowledge_bases_root_path(),
-                user_id=self.user_id,
-            )
+            build_config["knowledge_base"]["options"] = await get_knowledge_bases(user_id=self.user_id)
             if build_config["knowledge_base"]["value"] not in build_config["knowledge_base"]["options"]:
                 build_config["knowledge_base"]["value"] = None
 
         # Honor the current mode regardless of which field triggered the refresh.
-        # Falls back to MODE_INGEST when ``mode`` is missing (legacy nodes).
-        current_mode = build_config.get("mode", {}).get("value") if isinstance(build_config, dict) else None
-        if field_name == "mode":
-            current_mode = field_value
-        # Map legacy/emoji-prefixed labels onto the current canonical values so
-        # flows saved before the label change still toggle visibility correctly.
-        if _is_retrieve_mode(current_mode):
-            current_mode = MODE_RETRIEVE
-        elif current_mode not in self.mode_config:
-            current_mode = MODE_INGEST
-        return set_current_fields(
-            build_config=build_config if isinstance(build_config, dotdict) else dotdict(build_config),
-            action_fields=self.mode_config,
-            selected_action=current_mode,
-            default_fields=self.default_keys,
-            func=set_field_display,
-        )
+        return self._apply_mode_visibility(build_config, field_name, field_value)
 
     # =====================================================================
     #                       INGESTION CODE PATH
     # =====================================================================
-    def _get_kb_root(self) -> Path:
-        """Return the root directory for knowledge bases."""
-        return _get_knowledge_bases_root_path()
-
     @staticmethod
     def _scalar_notna(value) -> bool:
         """Check if a value is not NA, safely handling arrays and sequences.
@@ -627,94 +722,12 @@ class KnowledgeComponent(Component):
 
         return config_list
 
-    def _build_embedding_metadata(
-        self,
-        model_selection: list[dict[str, Any]],
-        api_key: str | None = None,
-        backend_type: str = BackendType.CHROMA.value,
-        backend_config: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Build embedding model metadata from a model selection dict."""
-        model_dict = model_selection[0] if isinstance(model_selection, list) else model_selection
-        embedding_model = model_dict.get("name", "")
-        embedding_provider = model_dict.get("provider", "Unknown")
-
-        api_key_to_save = None
-        if api_key and hasattr(api_key, "get_secret_value"):
-            api_key_to_save = api_key.get_secret_value()
-        elif isinstance(api_key, str):
-            api_key_to_save = api_key
-
-        encrypted_api_key = None
-        if api_key_to_save:
-            settings_service = get_settings_service()
-            try:
-                encrypted_api_key = encrypt_api_key(api_key_to_save, settings_service=settings_service)
-            except (TypeError, ValueError) as e:
-                self.log(f"Could not encrypt API key: {e}")
-
-        return {
-            "embedding_provider": embedding_provider,
-            "embedding_model": embedding_model,
-            "model_selection": model_dict,
-            "api_key": encrypted_api_key,
-            "api_key_used": bool(api_key),
-            "chunk_size": self.chunk_size,
-            "backend_type": backend_type,
-            "backend_config": backend_config or {},
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-    def _save_embedding_metadata(
-        self,
-        kb_path: Path,
-        model_selection: list[dict[str, Any]],
-        api_key: str | None = None,
-        backend_type: str | None = None,
-        backend_config: dict[str, Any] | None = None,
-    ) -> None:
-        """Save embedding model metadata."""
-        metadata_path = kb_path / "embedding_metadata.json"
-        existing_metadata: dict[str, Any] = {}
-        if metadata_path.exists():
-            try:
-                existing_metadata = json.loads(metadata_path.read_text())
-            except (OSError, json.JSONDecodeError):
-                existing_metadata = {}
-
-        embedding_metadata = self._build_embedding_metadata(
-            model_selection,
-            api_key,
-            backend_type=backend_type or existing_metadata.get("backend_type") or BackendType.CHROMA.value,
-            backend_config=backend_config
-            if backend_config is not None
-            else existing_metadata.get("backend_config") or {},
-        )
-        metadata_path.write_text(json.dumps(embedding_metadata, indent=2))
-
-    def _update_metadata_metrics(self, kb_path: Path, chroma: Chroma) -> None:
-        """Update embedding_metadata.json with accurate chunk/word/character counts."""
-        import chromadb.errors
-        from primeagent.api.utils.kb_helpers import KBAnalysisHelper, KBStorageHelper
-
-        metadata_path = kb_path / "embedding_metadata.json"
-        if not metadata_path.exists():
-            return
-
-        try:
-            metadata = json.loads(metadata_path.read_text())
-            KBAnalysisHelper.update_text_metrics(kb_path, metadata, chroma)
-            metadata["size"] = KBStorageHelper.get_directory_size(kb_path)
-            metadata_path.write_text(json.dumps(metadata, indent=2))
-        except (OSError, ValueError, TypeError, json.JSONDecodeError, chromadb.errors.ChromaError) as e:
-            self.log(f"Warning: Could not update metadata metrics: {e}")
-
     @staticmethod
     def _extract_source_types_from_df(df_source: pd.DataFrame) -> set[str]:
         """Pull file extensions out of common path/name columns on the source DataFrame.
 
         The direct-upload ingestion path stores extensions in
-        ``embedding_metadata.json[source_types]`` so the KB list can render the
+        the KB row's ``source_types`` so the KB list can render the
         correct file-type icon. When ingestion happens via a connected
         ``input_df`` (e.g. File → Knowledge) the same field stayed empty and
         the icon defaulted to a blank tile. We look at the well-known columns
@@ -800,98 +813,95 @@ class KnowledgeComponent(Component):
             mapping = input_value
         return cls._extract_source_types_from_mapping(mapping)
 
-    def _merge_source_types(self, kb_path: Path, extensions: set[str]) -> None:
-        """Merge newly observed extensions into the KB's ``source_types`` metadata.
+    async def _refresh_kb_stats(
+        self,
+        *,
+        kb_record_id: Any,
+        backend: BaseVectorStoreBackend,
+        extensions: set[str],
+    ) -> None:
+        """Recount the KB from its vector store and write the totals onto the row.
 
-        Mirrors the direct-upload path in ``KBIngestionHelper`` so the icon
-        rendering on the Knowledge Bases list works regardless of which
-        ingestion route was used.
+        Backend-agnostic: counts come from ``count`` / ``iter_documents`` /
+        ``storage_size_bytes``, so a Chroma, OpenSearch, or pgVector KB all report
+        real numbers. ``extensions`` are merged into ``source_types`` so the KB
+        list renders the right file-type icon regardless of which ingestion route
+        produced the chunks.
+
+        Best-effort: the chunks are already written and committed by the time this
+        runs, so a stats refresh failure must not fail the ingestion.
         """
-        if not extensions:
-            return
-        metadata_path = kb_path / "embedding_metadata.json"
-        if not metadata_path.exists():
+        if kb_record_id is None:
             return
         try:
-            metadata = json.loads(metadata_path.read_text())
-            existing = set(metadata.get("source_types") or [])
-            metadata["source_types"] = sorted(existing | extensions)
-            metadata_path.write_text(json.dumps(metadata, indent=2))
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
-            self.log(f"Warning: Could not update source_types metadata: {e}")
-
-    async def _update_backend_metadata_metrics(self, kb_path: Path, backend: BaseVectorStoreBackend) -> None:
-        """Update metadata metrics for non-Chroma backends."""
-        metadata_path = kb_path / "embedding_metadata.json"
-        if not metadata_path.exists():
+            from primeagent.api.utils import knowledge_base_service
+        except ImportError:
             return
 
         try:
-            metadata = json.loads(metadata_path.read_text())
             chunks = await backend.count()
             characters = 0
             words = 0
-            async for batch in backend.iter_documents():
-                for document in batch:
-                    characters += len(document.content)
-                    words += len(document.content.split())
+            async with aclosing(backend.iter_documents()) as batches:
+                async for batch in batches:
+                    for document in batch:
+                        characters += len(document.content)
+                        words += len(document.content.split())
 
-            metadata["chunks"] = chunks
-            metadata["characters"] = characters
-            metadata["words"] = words
-            metadata["avg_chunk_size"] = characters / chunks if chunks else 0.0
-            metadata["size"] = await backend.storage_size_bytes()
-            metadata_path.write_text(json.dumps(metadata, indent=2))
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
-            self.log(f"Warning: Could not update backend metadata metrics: {e}")
+            record = await knowledge_base_service.get_by_id(kb_record_id)
+            existing = set(record.source_types or []) if record is not None else set()
+
+            await knowledge_base_service.update_stats(
+                kb_record_id,
+                chunks=chunks,
+                words=words,
+                characters=characters,
+                size_bytes=await backend.storage_size_bytes(),
+                source_types=sorted(existing | extensions),
+            )
+        except Exception as e:  # noqa: BLE001 — stats are cosmetic; chunks are already written
+            self.log(f"Warning: Could not refresh knowledge base stats: {e}")
 
     @staticmethod
-    def _normalize_backend_selection(value: Any) -> tuple[str, dict[str, Any]]:
+    def _default_backend_selection() -> tuple[str, dict[str, Any]]:
+        """Deployment default for a new KB with no explicit backend chosen.
+
+        Environment-driven: pgVector when ``PGVECTOR_CONNECTION_STRING`` is set,
+        else OpenSearch when ``OPENSEARCH_URL`` is set, else SQLite. An
+        unspecified selection (headless flows, multi-replica) therefore lands on
+        the deployment's shared store.
+        """
+        from wfx.base.knowledge_bases.backends.postgres import resolve_default_kb_backend
+
+        backend_type = resolve_default_kb_backend()
+        if backend_type == BackendType.OPENSEARCH.value:
+            return backend_type, dict(_DEFAULT_OPENSEARCH_CONFIG)
+        return backend_type, {}
+
+    @classmethod
+    def _normalize_backend_selection(cls, value: Any) -> tuple[str, dict[str, Any]]:
         """Normalize a DBProviderInput value into backend type/config."""
         if not value:
-            return BackendType.CHROMA.value, {}
+            return cls._default_backend_selection()
 
+        backend_config: dict[str, Any]
         if isinstance(value, str):
-            backend_type = value if value == BackendType.OPENSEARCH.value else BackendType.CHROMA.value
-            return (
-                backend_type,
-                _DEFAULT_OPENSEARCH_CONFIG.copy() if backend_type == BackendType.OPENSEARCH.value else {},
-            )
-
-        if not isinstance(value, dict):
-            return BackendType.CHROMA.value, {}
-
-        backend_type = str(value.get("backend_type") or value.get("id") or BackendType.CHROMA.value)
-
-        if backend_type == BackendType.OPENSEARCH.value:
+            backend_type, backend_config = value, {}
+        elif isinstance(value, dict):
+            backend_type = str(value.get("backend_type") or value.get("id") or BackendType.SQLITE.value)
             backend_config = value.get("backend_config") or value.get("config") or {}
-            if not isinstance(backend_config, dict):
-                backend_config = {}
-            return BackendType.OPENSEARCH.value, {**_DEFAULT_OPENSEARCH_CONFIG, **backend_config}
-
-        if backend_type == "chroma_cloud":
-            backend_config = value.get("backend_config") or value.get("config") or {}
-            if not isinstance(backend_config, dict):
-                backend_config = {}
-            return BackendType.CHROMA.value, {**_DEFAULT_CHROMA_CLOUD_CONFIG, **backend_config}
-
-        return BackendType.CHROMA.value, {}
-
-    @staticmethod
-    def _get_backend_from_metadata(kb_path: Path) -> tuple[str, dict[str, Any]]:
-        metadata_path = kb_path / "embedding_metadata.json"
-        if not metadata_path.exists():
-            return BackendType.CHROMA.value, {}
-        try:
-            metadata = json.loads(metadata_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return BackendType.CHROMA.value, {}
-
-        backend_type = str(metadata.get("backend_type") or BackendType.CHROMA.value)
-        backend_config = metadata.get("backend_config") or {}
+        else:
+            msg = "Invalid vector-store backend selection."
+            raise TypeError(msg)
         if not isinstance(backend_config, dict):
-            backend_config = {}
-        return backend_type, backend_config
+            msg = "Vector-store backend configuration must be an object."
+            raise TypeError(msg)
+        if backend_type == BackendType.OPENSEARCH.value:
+            return backend_type, {**_DEFAULT_OPENSEARCH_CONFIG, **backend_config}
+        if backend_type in {BackendType.SQLITE.value, BackendType.POSTGRES.value}:
+            return backend_type, backend_config
+        msg = "Chroma is retired. Choose SQLite, pgVector, or OpenSearch for a new knowledge base."
+        raise ValueError(msg)
 
     async def _create_knowledge_base_record(
         self,
@@ -903,38 +913,16 @@ class KnowledgeComponent(Component):
         backend_config: dict[str, Any],
     ) -> None:
         """Persist the component-created KB in the DB when Primeagent is available."""
-        try:
-            from primeagent.api.utils import knowledge_base_service
-        except ImportError:
-            return
+        from primeagent.api.utils import knowledge_base_service
 
-        try:
-            await knowledge_base_service.create_record(
-                user_id=user_id,
-                name=name,
-                model_selection=model_selection,
-                column_config=self.column_config if isinstance(self.column_config, list) else [],
-                backend_type=backend_type,
-                backend_config=backend_config,
-            )
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"Warning: could not persist knowledge base record: {exc}")
-
-    def _save_kb_files(
-        self,
-        kb_path: Path,
-        config_list: list[dict[str, Any]],
-    ) -> None:
-        """Save KB files using File Component storage patterns."""
-        try:
-            kb_path.mkdir(parents=True, exist_ok=True)
-
-            cfg_path = kb_path / "schema.json"
-            if not cfg_path.exists():
-                cfg_path.write_text(json.dumps(config_list, indent=2))
-
-        except (OSError, TypeError, ValueError) as e:
-            self.log(f"Error saving KB files: {e}")
+        await knowledge_base_service.create_record(
+            user_id=user_id,
+            name=name,
+            model_selection=model_selection,
+            column_config=_normalize_column_config(self.column_config) if isinstance(self.column_config, list) else [],
+            backend_type=backend_type,
+            backend_config=backend_config,
+        )
 
     def _build_column_metadata(self, config_list: list[dict[str, Any]], df_source: pd.DataFrame) -> dict[str, Any]:
         """Build detailed column metadata."""
@@ -948,8 +936,8 @@ class KnowledgeComponent(Component):
 
         for config in config_list:
             col_name = config.get("column_name")
-            vectorize = config.get("vectorize") == "True" or config.get("vectorize") is True
-            identifier = config.get("identifier") == "True" or config.get("identifier") is True
+            vectorize = coalesce_bool(config.get("vectorize"))
+            identifier = coalesce_bool(config.get("identifier"))
 
             metadata["columns"].append(
                 {
@@ -971,50 +959,158 @@ class KnowledgeComponent(Component):
         df_source: pd.DataFrame,
         config_list: list[dict[str, Any]],
         embedding_function,
-    ) -> BaseVectorStoreBackend:
-        """Create vector store using the configured DB provider."""
-        vector_store_dir = await self._kb_path()
-        if not vector_store_dir:
-            msg = "Knowledge base path is not set. Please create a new knowledge base first."
-            raise ValueError(msg)
-        vector_store_dir.mkdir(parents=True, exist_ok=True)
+        *,
+        job_id: uuid.UUID | None = None,
+    ) -> tuple[BaseVectorStoreBackend, set[int]]:
+        """Create the vector store and return the input row positions actually stored."""
+        from primeagent.api.utils.kb_helpers import backend_for_name
 
-        backend_type, backend_config = self._get_backend_from_metadata(vector_store_dir)
-        backend = create_backend(
-            backend_type,
-            kb_name=self.knowledge_base,
-            kb_path=vector_store_dir,
-            backend_config=backend_config,
-            embedding_function=embedding_function,
-            user_id=self.user_id,
-        )
+        owner_id = self._user_uuid
+        if owner_id is None:
+            msg = "User ID is required for knowledge base storage."
+            raise ValueError(msg)
+        backend = await backend_for_name(owner_id, self.knowledge_base, embedding_function=embedding_function)
+        try:
+            return await self._ingest_into_backend(backend, df_source, config_list, embedding_function, job_id=job_id)
+        except BaseException:
+            await _finish_despite_cancellation(backend.teardown())
+            raise
+
+    async def _ingest_into_backend(
+        self,
+        backend: BaseVectorStoreBackend,
+        df_source: pd.DataFrame,
+        config_list: list[dict[str, Any]],
+        embedding_function,
+        *,
+        job_id: uuid.UUID | None = None,
+    ) -> tuple[BaseVectorStoreBackend, set[int]]:
         await backend.ensure_ready()
 
-        existing_ids = None
-        if backend_type != BackendType.CHROMA.value and not self.allow_duplicates:
-            existing_ids = set()
-            async for batch in backend.iter_documents():
-                for document in batch:
-                    doc_id = document.metadata.get("_id")
-                    if doc_id:
-                        existing_ids.add(doc_id)
+        from primeagent.services.knowledge_base_storage.runtime import operation, resolve_record
 
-        data_objects = await self._convert_df_to_data_objects(df_source, config_list, existing_ids=existing_ids)
+        record = await resolve_record(self._user_uuid, self.knowledge_base)
+        async with operation(record, shared=True):
+            existing_ids = set()
+            if not self.allow_duplicates:
+                async with aclosing(backend.iter_documents()) as batches:
+                    async for batch in batches:
+                        for document in batch:
+                            doc_id = document.metadata.get("_id")
+                            if doc_id:
+                                existing_ids.add(doc_id)
+
+        # Keep row positions through both duplicate checks so run history can
+        # distinguish stored rows from rows skipped before or after embedding.
+        data_objects = await self._convert_df_to_data_objects(df_source, config_list)
 
         user_metadata_tag = self._resolve_user_metadata_tag()
 
         documents = []
-        for data_obj in data_objects:
+        row_indices = []
+        for row_index, data_obj in enumerate(data_objects):
+            if not self.allow_duplicates and data_obj.data["_id"] in existing_ids:
+                continue
             doc = data_obj.to_lc_document()
             if user_metadata_tag:
                 doc.metadata["source_metadata"] = user_metadata_tag
             documents.append(doc)
+            row_indices.append(row_index)
+        if not documents:
+            return backend, set()
 
-        if documents:
-            await backend.add_documents(documents)
-            self.log(f"Added {len(documents)} documents to vector store '{self.knowledge_base}'")
+        # No storage lease may surround the provider call. The write lease
+        # below rechecks routing and IDs after concurrent operations finish.
+        vectors = await self._embed_unless_job_cancelled(
+            embedding_function, [doc.page_content for doc in documents], job_id
+        )
+        if len(vectors) != len(documents):
+            msg = "Embedding provider returned an incorrect number of vectors"
+            raise BackendConfigurationError(msg)
+        embedded = [
+            (row_index, IngestedDocument(doc.page_content, doc.metadata, vector, id=doc.id))
+            for row_index, doc, vector in zip(row_indices, documents, vectors, strict=True)
+        ]
+        async with operation(record):
+            # A cancel that landed after the embeddings returned must still
+            # keep this run's chunks out of the KB.
+            await self._raise_if_job_cancelled(job_id)
+            if not self.allow_duplicates:
+                current_ids = set()
+                async with aclosing(backend.iter_documents()) as batches:
+                    async for batch in batches:
+                        current_ids.update(doc.metadata["_id"] for doc in batch if doc.metadata.get("_id"))
+                unique = []
+                for row_index, doc in embedded:
+                    doc_id = doc.metadata.get("_id")
+                    if doc_id and doc_id in current_ids:
+                        continue
+                    if doc_id:
+                        current_ids.add(doc_id)
+                    unique.append((row_index, doc))
+                embedded = unique
 
-        return backend
+            if embedded:
+                await backend.add_embedded_documents([doc for _, doc in embedded])
+                self.log(f"Added {len(embedded)} documents to vector store '{self.knowledge_base}'")
+
+        return backend, {row_index for row_index, _ in embedded}
+
+    async def _embed_unless_job_cancelled(
+        self, embedding_function, texts: list[str], job_id: uuid.UUID | None
+    ) -> list[list[float]]:
+        """Embed ``texts``, giving up as soon as the run's job is cancelled.
+
+        The Knowledge page cancels a run by marking its job. The embedding call
+        is the long, write-free part of a flow ingestion, so it is the safe
+        place to stop.
+        """
+        await self._raise_if_job_cancelled(job_id)
+        if job_id is None:
+            return await embedding_function.aembed_documents(texts)
+
+        # A task group would wrap provider errors in an ExceptionGroup, so a
+        # plain watcher task cancels this scope instead.
+        with anyio.CancelScope() as scope:
+            watcher = asyncio.ensure_future(self._cancel_when_job_cancelled(job_id, scope))
+            try:
+                return await embedding_function.aembed_documents(texts)
+            finally:
+                # The watcher may be mid-poll; let its DB session close.
+                watcher.cancel()
+                with anyio.CancelScope(shield=True):
+                    await asyncio.wait({watcher})
+        raise self._cancelled_error()
+
+    async def _cancel_when_job_cancelled(self, job_id: uuid.UUID, scope: anyio.CancelScope) -> None:
+        # The cancel is a job-row write from another request, so it is polled.
+        while True:
+            await asyncio.sleep(JOB_CANCEL_POLL_SECONDS)
+            if await self._job_cancelled(job_id):
+                scope.cancel()
+                return
+
+    async def _raise_if_job_cancelled(self, job_id: uuid.UUID | None) -> None:
+        if await self._job_cancelled(job_id):
+            raise self._cancelled_error()
+
+    def _cancelled_error(self) -> KnowledgeIngestionCancelledError:
+        return KnowledgeIngestionCancelledError(f"Ingestion into '{self.knowledge_base}' was cancelled.")
+
+    async def _job_cancelled(self, job_id: uuid.UUID | None) -> bool:
+        if job_id is None:
+            return False
+        try:
+            from primeagent.services.database.models.jobs.model import JobStatus
+            from primeagent.services.deps import get_job_service
+        except ImportError:
+            return False
+        try:
+            job = await get_job_service().get_job_by_job_id(job_id)
+        except Exception as exc:  # noqa: BLE001 — a failed poll must not abort the ingestion
+            self.log(f"Could not check whether ingestion job {job_id} was cancelled: {exc}")
+            return False
+        return job is not None and job.status == JobStatus.CANCELLED
 
     async def _convert_df_to_data_objects(
         self,
@@ -1026,29 +1122,17 @@ class KnowledgeComponent(Component):
         data_objects: list[Data] = []
 
         if existing_ids is None:
-            kb_path = await self._kb_path()
-
-            chroma = Chroma(
-                persist_directory=str(kb_path),
-                collection_name=self.knowledge_base,
-                **chroma_langchain_collection_kwargs(),
-            )
-
-            all_docs = chroma.get()
-
-            existing_ids = {metadata.get("_id") for metadata in all_docs["metadatas"] if metadata.get("_id")}
+            existing_ids = set()
 
         content_cols = []
         identifier_cols = []
 
         for config in config_list:
             col_name = config.get("column_name")
-            vectorize = config.get("vectorize") == "True" or config.get("vectorize") is True
-            identifier = config.get("identifier") == "True" or config.get("identifier") is True
 
-            if vectorize:
+            if coalesce_bool(config.get("vectorize")):
                 content_cols.append(col_name)
-            if identifier:
+            if coalesce_bool(config.get("identifier")):
                 identifier_cols.append(col_name)
 
         for _, row in df_source.iterrows():
@@ -1083,25 +1167,36 @@ class KnowledgeComponent(Component):
 
         return data_objects
 
-    def is_valid_collection_name(self, name, min_length: int = 3, max_length: int = 63) -> bool:
-        """Validate collection name.
+    def is_valid_collection_name(self, name: str) -> bool:
+        """Return whether ``name`` satisfies the shared collection-name contract."""
+        return is_valid_kb_collection_name(name)
 
-        1. Contains 3-63 characters
-        2. Starts and ends with alphanumeric character
-        3. Contains only alphanumeric characters, underscores, or hyphens.
+    def _resolve_store_path(
+        self,
+        kb_user: str,
+        backend_type: str,
+        backend_config: dict[str, Any] | None,
+    ) -> Path | None:
+        """Return this KB's on-disk directory, or ``None`` when it needs no disk.
+
+        Only local Chroma stores anything on this box; every other backend
+        resolves to ``None`` and never touches the filesystem.
         """
-        if not (min_length <= len(name) <= max_length):
-            return False
+        # Lazy import keeps wfx importable without primeagent's DB services.
+        from primeagent.api.utils.kb_helpers import resolve_local_store_path
 
-        if not (name[0].isalnum() and name[-1].isalnum()):
-            return False
+        return resolve_local_store_path(
+            self.knowledge_base,
+            kb_user,
+            backend_type=backend_type,
+            backend_config=backend_config,
+        )
 
-        return re.match(r"^[a-zA-Z0-9_-]+$", name) is not None
-
-    async def _kb_path(self) -> Path | None:
-        cached_path = getattr(self, "_cached_kb_path", None)
-        if cached_path is not None:
-            return cached_path
+    async def _kb_username(self) -> str:
+        """Resolve the owning user's username (used to root a local-Chroma path)."""
+        cached = getattr(self, "_cached_kb_username", None)
+        if cached is not None:
+            return cached
 
         # Lazy import to keep ``wfx`` importable standalone — primeagent's
         # user/DB models are not always available at module load time.
@@ -1115,12 +1210,19 @@ class KnowledgeComponent(Component):
             if not current_user:
                 msg = f"User with ID {self.user_id} not found."
                 raise ValueError(msg)
-            kb_user = current_user.username
+            self._cached_kb_username = current_user.username
 
-        kb_root = self._get_kb_root()
+        return self._cached_kb_username
 
-        self._cached_kb_path = kb_root / kb_user / self.knowledge_base
+    async def _kb_path(self) -> Path | None:
+        """Resolve the KB's local directory from its configured backend."""
+        cached_path = getattr(self, "_cached_kb_path", None)
+        if cached_path is not None:
+            return cached_path
 
+        backend_type, backend_config = await self._resolve_backend_config()
+        kb_user = await self._kb_username()
+        self._cached_kb_path = self._resolve_store_path(kb_user, backend_type, backend_config)
         return self._cached_kb_path
 
     def _resolve_user_metadata_tag(self) -> str:
@@ -1163,6 +1265,8 @@ class KnowledgeComponent(Component):
         run_status: IngestionRunStatus = IngestionRunStatus.SUCCEEDED
         run_error: str | None = None
         kb_record_id: uuid.UUID | None = None
+        previous_kb_status = "ready"
+        previous_failure_reason: str | None = None
         try:
             input_value = self.input_df[0] if isinstance(self.input_df, list) else self.input_df
             df_source: DataFrame = convert_to_dataframe(input_value, auto_parse=False)
@@ -1170,102 +1274,83 @@ class KnowledgeComponent(Component):
             config_list = self._validate_column_config(df_source)
             column_metadata = self._build_column_metadata(config_list, df_source)
 
-            kb_path = await self._kb_path()
-            if not kb_path:
-                msg = "Knowledge base path is not set. Please create a new knowledge base first."
-                raise ValueError(msg)
-            metadata_path = kb_path / "embedding_metadata.json"
-            api_key = None
-            model_selection = None
-
-            if metadata_path.exists():
-                settings_service = get_settings_service()
-                stored_metadata = json.loads(metadata_path.read_text())
-
-                model_selection = stored_metadata.get("model_selection")
-                if model_selection:
-                    model_selection = [model_selection] if isinstance(model_selection, dict) else model_selection
-                else:
-                    embedding_model_name = stored_metadata.get("embedding_model")
-                    embedding_provider = stored_metadata.get("embedding_provider", "Unknown")
-                    if embedding_model_name:
-                        try:
-                            all_options = get_embedding_model_options(user_id=self.user_id)
-                            match = next(
-                                (o for o in all_options if o.get("name") == embedding_model_name),
-                                None,
-                            )
-                            if match:
-                                model_selection = [match]
-                            else:
-                                self.log(
-                                    f"Embedding model '{embedding_model_name}' (provider: {embedding_provider}) "
-                                    "from stored metadata is no longer available in the model registry. "
-                                    "Please re-create this knowledge base with a supported embedding model."
-                                )
-                                msg = (
-                                    f"Embedding model '{embedding_model_name}' is no longer recognized. "
-                                    "The knowledge base was created with an older format and the model "
-                                    "is not available in the current registry. "
-                                    "Please re-create the knowledge base with a supported embedding model."
-                                )
-                                raise ValueError(msg)
-                        except ValueError:
-                            raise
-                        except Exception:  # noqa: BLE001
+            # Embedding config comes from the ``knowledge_base`` row — the sole
+            # authority. No sidecar is read, so ingestion resolves the same model
+            # on any replica.
+            stored_metadata = await self._get_kb_metadata()
+            # A cancelled run restores this status. Only an earlier failure is
+            # kept; "empty" is an API projection of a ready KB with no chunks.
+            if stored_metadata.get("status") == "failed":
+                previous_kb_status = "failed"
+                previous_failure_reason = stored_metadata.get("failure_reason")
+            model_selection = stored_metadata.get("model_selection")
+            if model_selection:
+                model_selection = [model_selection] if isinstance(model_selection, dict) else list(model_selection)
+            else:
+                embedding_model_name = stored_metadata.get("embedding_model")
+                embedding_provider = stored_metadata.get("embedding_provider", "Unknown")
+                if embedding_model_name:
+                    try:
+                        all_options = get_embedding_model_options(user_id=self.user_id)
+                        match = next(
+                            (o for o in all_options if o.get("name") == embedding_model_name),
+                            None,
+                        )
+                        if match:
+                            model_selection = [match]
+                        else:
                             self.log(
-                                f"Failed to look up embedding model '{embedding_model_name}' in registry. "
+                                f"Embedding model '{embedding_model_name}' (provider: {embedding_provider}) "
+                                "from the knowledge base record is no longer available in the model registry. "
                                 "Please re-create this knowledge base with a supported embedding model."
                             )
                             msg = (
-                                f"Could not look up embedding model '{embedding_model_name}' "
-                                f"(provider: {embedding_provider}). "
+                                f"Embedding model '{embedding_model_name}' is no longer recognized. "
+                                "The knowledge base was created with an older format and the model "
+                                "is not available in the current registry. "
                                 "Please re-create the knowledge base with a supported embedding model."
                             )
-                            raise ValueError(msg)  # noqa: B904
-
-                encrypted_key = stored_metadata.get("api_key")
-                if encrypted_key:
-                    try:
-                        api_key = decrypt_api_key(encrypted_key, settings_service)
-                    except (InvalidToken, TypeError, ValueError) as e:
-                        self.log(f"Could not decrypt API key. Please provide it manually. Error: {e}")
-
-            if self.api_key:
-                api_key = self.api_key
-                if model_selection:
-                    self._save_embedding_metadata(
-                        kb_path=kb_path,
-                        model_selection=model_selection,
-                        api_key=api_key,
-                    )
+                            raise ValueError(msg)
+                    except ValueError:
+                        raise
+                    except Exception:  # noqa: BLE001
+                        self.log(
+                            f"Failed to look up embedding model '{embedding_model_name}' in registry. "
+                            "Please re-create this knowledge base with a supported embedding model."
+                        )
+                        msg = (
+                            f"Could not look up embedding model '{embedding_model_name}' "
+                            f"(provider: {embedding_provider}). "
+                            "Please re-create the knowledge base with a supported embedding model."
+                        )
+                        raise ValueError(msg)  # noqa: B904
 
             if not model_selection:
                 msg = "No embedding model configuration found. Please create the knowledge base first."
                 raise ValueError(msg)
 
+            # ``api_key=None`` falls through to the user's variables table and
+            # then the environment inside ``get_embeddings`` — the same
+            # resolution the server-side ingestion path uses. The component input
+            # only overrides it.
             embedding_function = get_embeddings(
                 model=model_selection,
                 user_id=self.user_id,
-                api_key=api_key,
+                api_key=self.api_key if getattr(self, "api_key", None) else None,
                 chunk_size=self.chunk_size,
             )
+
+            kb_path = await self._kb_path()
 
             run_id, run_job_id, run_summary, kb_record_id = await self._begin_ingestion_run(kb_path)
             if kb_record_id is not None:
                 await self._record_kb_status(kb_record_id, "ingesting")
 
-            backend = await self._create_vector_store(df_source, config_list, embedding_function=embedding_function)
-
-            self._save_kb_files(kb_path, config_list)
+            backend, stored_rows = await self._create_vector_store(
+                df_source, config_list, embedding_function=embedding_function, job_id=run_job_id
+            )
 
             try:
-                if not isinstance(backend, BaseVectorStoreBackend):
-                    pass
-                elif backend.backend_type == BackendType.CHROMA and hasattr(backend, "raw_langchain_store"):
-                    self._update_metadata_metrics(kb_path, backend.raw_langchain_store())
-                else:
-                    await self._update_backend_metadata_metrics(kb_path, backend)
                 # Stamp the KB with the file extensions we just ingested so
                 # the Knowledge Bases list renders the correct icon for
                 # flow-driven ingestion (input_df), matching direct upload.
@@ -1274,15 +1359,22 @@ class KnowledgeComponent(Component):
                 # when projecting onto the DataFrame.
                 source_types = self._extract_source_types_from_input(input_value)
                 source_types |= self._extract_source_types_from_df(df_source)
-                self._merge_source_types(kb_path, source_types)
+                # Storage routing returns a guarded proxy with the backend's
+                # methods, so a concrete-class check would skip the refresh.
+                await self._refresh_kb_stats(
+                    kb_record_id=kb_record_id,
+                    backend=backend,
+                    extensions=source_types,
+                )
             finally:
-                if isinstance(backend, BaseVectorStoreBackend):
-                    await backend.teardown()
+                await _finish_despite_cancellation(backend.teardown())
 
             meta: dict[str, Any] = {
-                "kb_id": str(uuid.uuid4()),
+                "kb_id": str(kb_record_id) if kb_record_id is not None else None,
                 "kb_name": self.knowledge_base,
                 "rows": len(df_source),
+                "chunks_created": len(stored_rows),
+                "skipped": len(df_source) - len(stored_rows),
                 "column_metadata": column_metadata,
                 "path": str(kb_path),
                 "config_columns": len(config_list),
@@ -1290,23 +1382,36 @@ class KnowledgeComponent(Component):
             }
 
             if run_summary is not None:
-                run_summary.record_item(
-                    IngestionItemResult(
-                        item_id=self.knowledge_base,
-                        display_name=f"{self.knowledge_base} ({len(df_source)} rows)",
-                        status=IngestionItemStatus.SUCCEEDED,
-                        chunks_created=len(df_source),
-                    ),
-                )
+                for row_index in range(len(df_source)):
+                    stored = row_index in stored_rows
+                    run_summary.record_item(
+                        IngestionItemResult(
+                            item_id=f"{self.knowledge_base}:{row_index}",
+                            display_name=f"{self.knowledge_base} (row {row_index + 1})",
+                            status=IngestionItemStatus.SUCCEEDED if stored else IngestionItemStatus.SKIPPED,
+                            chunks_created=int(stored),
+                        ),
+                    )
 
             if kb_record_id is not None:
-                await self._record_kb_stats(kb_record_id, kb_path)
+                # Stats were already refreshed straight from the backend above.
                 await self._record_kb_status(kb_record_id, "ready")
 
-            self.status = f"✅ KB **{self.knowledge_base}** saved · {len(df_source)} chunks."
+            self.status = (
+                f"✅ KB **{self.knowledge_base}** saved · {len(stored_rows)} chunks "
+                f"· {len(df_source) - len(stored_rows)} rows skipped."
+            )
 
             return Data(data=meta)
 
+        except asyncio.CancelledError:
+            run_status = IngestionRunStatus.CANCELLED
+            run_error = "Flow ingestion was cancelled."
+            raise
+        except KnowledgeIngestionCancelledError as e:
+            run_status = IngestionRunStatus.CANCELLED
+            run_error = str(e)
+            raise
         except (OSError, ValueError, RuntimeError, KeyError) as e:
             run_status = IngestionRunStatus.FAILED
             run_error = str(e) or e.__class__.__name__
@@ -1317,16 +1422,27 @@ class KnowledgeComponent(Component):
             run_error = str(e) or e.__class__.__name__
             raise
         finally:
-            if run_id is not None and run_summary is not None:
-                await self._finalize_ingestion_run(
-                    run_id=run_id,
-                    job_id=run_job_id,
-                    summary=run_summary,
-                    status=run_status,
-                    error_message=run_error,
-                )
-            if kb_record_id is not None and run_status is IngestionRunStatus.FAILED:
-                await self._record_kb_status(kb_record_id, "failed", failure_reason=run_error)
+
+            async def settle_run() -> None:
+                if run_id is not None and run_summary is not None:
+                    await self._finalize_ingestion_run(
+                        run_id=run_id,
+                        job_id=run_job_id,
+                        summary=run_summary,
+                        status=run_status,
+                        error_message=run_error,
+                    )
+                if kb_record_id is not None:
+                    if run_status is IngestionRunStatus.FAILED:
+                        await self._record_kb_status(kb_record_id, "failed", failure_reason=run_error)
+                    elif run_status is IngestionRunStatus.CANCELLED:
+                        await self._record_kb_status(
+                            kb_record_id, previous_kb_status, failure_reason=previous_failure_reason
+                        )
+
+            # A stopped build can cancel this task more than once, and the
+            # writes that make the run terminal must survive every cancel.
+            await _finish_despite_cancellation(settle_run())
 
     async def _begin_ingestion_run(
         self,
@@ -1351,6 +1467,10 @@ class KnowledgeComponent(Component):
             self.log(f"Run-history wiring unavailable; ingestion will not be recorded ({exc}).")
             return None, None, None, None
 
+        job_id: uuid.UUID | None = None
+        run_id: uuid.UUID | None = None
+        summary: IngestionSummary | None = None
+        kb_record_id: uuid.UUID | None = None
         try:
             kb_record = await knowledge_base_service.get_by_user_and_name(user_uuid, self.knowledge_base)
             kb_record_id = kb_record.id if kb_record is not None else None
@@ -1361,16 +1481,6 @@ class KnowledgeComponent(Component):
             job_service = get_job_service()
             raw_flow_id = getattr(self, "flow_id", None)
             flow_id_uuid = uuid.UUID(str(raw_flow_id)) if raw_flow_id else job_id
-            await job_service.create_job(
-                job_id=job_id,
-                flow_id=flow_id_uuid,
-                job_type=JobType.INGESTION,
-                asset_id=kb_record_id,
-                asset_type="knowledge_base",
-                user_id=user_uuid,
-            )
-            await job_service.update_job_status(job_id, JobStatus.IN_PROGRESS)
-
             source = FlowComponentSource(
                 user_id=user_uuid,
                 source_config={
@@ -1378,6 +1488,26 @@ class KnowledgeComponent(Component):
                     "kb_path": str(kb_path),
                     "flow_id": str(flow_id_uuid),
                 },
+            )
+            summary = IngestionSummary(
+                kb_name=self.knowledge_base,
+                source_type=source.source_type.value,
+                user_id=user_uuid,
+                job_id=job_id,
+                source_config=source.describe().get("config") or {},
+                user_metadata=user_metadata,
+            )
+            # Inserted running and already heartbeated, so an orphan sweep in
+            # another worker never sees this live run without a heartbeat.
+            await job_service.create_job(
+                job_id=job_id,
+                flow_id=flow_id_uuid,
+                job_type=JobType.INGESTION,
+                asset_id=kb_record_id,
+                asset_type="knowledge_base",
+                user_id=user_uuid,
+                status=JobStatus.IN_PROGRESS,
+                heartbeat=True,
             )
 
             run_id = await ingestion_run_service.create_run(
@@ -1392,18 +1522,26 @@ class KnowledgeComponent(Component):
                 return None, job_id, None, kb_record_id
             await ingestion_run_service.mark_running(run_id)
 
-            summary = IngestionSummary(
-                kb_name=self.knowledge_base,
-                source_type=source.source_type.value,
-                user_id=user_uuid,
-                job_id=job_id,
-                source_config=source.describe().get("config") or {},
-                user_metadata=user_metadata,
-            )
             self.log(f"Started ingestion run job_id={job_id} kb_name={self.knowledge_base} kb_id={kb_record_id}")
+            # Keeps the job heartbeated until _finalize_ingestion_run stops it.
+            await job_service.start_keep_alive(job_id)
+        except asyncio.CancelledError:
+            # The caller has not received the run ID yet, so it cannot finalize
+            # a cancellation that arrives while tracking is being initialized.
+            if job_id is not None and summary is not None:
+                await _finish_despite_cancellation(
+                    self._finalize_ingestion_run(
+                        run_id=run_id or job_id,
+                        job_id=job_id,
+                        summary=summary,
+                        status=IngestionRunStatus.CANCELLED,
+                        error_message="Flow ingestion was cancelled.",
+                    )
+                )
+            raise
         except Exception as exc:  # noqa: BLE001 — telemetry must never abort ingestion
             self.log(f"Could not begin ingestion-run tracking: {exc}")
-            return None, None, None, None
+            return None, None, None, kb_record_id
         else:
             return run_id, job_id, summary, kb_record_id
 
@@ -1426,6 +1564,9 @@ class KnowledgeComponent(Component):
             return
 
         try:
+            if job_id is not None:
+                # The heartbeat also rewrites job_metadata, so it stops first.
+                await get_job_service().stop_keep_alive(job_id)
             await ingestion_run_service.finalize_run(
                 run_id,
                 summary=summary,
@@ -1433,7 +1574,10 @@ class KnowledgeComponent(Component):
                 error_message=error_message,
             )
             if job_id is not None:
-                terminal_status = JobStatus.COMPLETED if status is not IngestionRunStatus.FAILED else JobStatus.FAILED
+                terminal_status = {
+                    IngestionRunStatus.FAILED: JobStatus.FAILED,
+                    IngestionRunStatus.CANCELLED: JobStatus.CANCELLED,
+                }.get(status, JobStatus.COMPLETED)
                 await get_job_service().update_job_status(job_id, terminal_status, finished_timestamp=True)
         except Exception as exc:  # noqa: BLE001 — telemetry must never re-raise
             self.log(f"Could not finalize ingestion-run tracking: {exc}")
@@ -1460,41 +1604,6 @@ class KnowledgeComponent(Component):
         except Exception as exc:  # noqa: BLE001
             self.log(f"Could not update KB status to {status_value}: {exc}")
 
-    async def _record_kb_stats(self, kb_record_id: uuid.UUID, kb_path: Path) -> None:
-        """Push freshly-refreshed metrics from embedding_metadata.json onto the DB row."""
-        try:
-            from primeagent.api.utils import knowledge_base_service
-        except ImportError:
-            self.log("knowledge_base_service unavailable; KB stats will not sync to DB row.")
-            return
-        metadata_path = kb_path / "embedding_metadata.json"
-        if not metadata_path.exists():
-            self.log(f"No embedding_metadata.json at {metadata_path}; skipping KB stats sync.")
-            return
-        try:
-            metadata = json.loads(metadata_path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            self.log(f"Could not read KB metadata for stats sync: {exc}")
-            return
-        chunks = int(metadata.get("chunks", 0) or 0)
-        words = int(metadata.get("words", 0) or 0)
-        characters = int(metadata.get("characters", 0) or 0)
-        try:
-            await knowledge_base_service.update_stats(
-                kb_record_id,
-                chunks=chunks,
-                words=words,
-                characters=characters,
-                size_bytes=int(metadata.get("size", 0) or 0),
-                source_types=list(metadata.get("source_types") or []),
-                chunk_size=metadata.get("chunk_size"),
-                chunk_overlap=metadata.get("chunk_overlap"),
-                separator=metadata.get("separator"),
-            )
-            self.log(f"Synced KB stats to DB row {kb_record_id}: chunks={chunks} words={words} characters={characters}")
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"Could not sync KB stats to DB row {kb_record_id}: {exc}")
-
     def _parse_user_metadata_dict(self) -> dict[str, Any]:
         """Decode ``metadata_json`` to a dict, or ``{}`` on any error."""
         raw = getattr(self, "metadata_json", None)
@@ -1519,30 +1628,71 @@ class KnowledgeComponent(Component):
             return None
         return self.user_id if isinstance(self.user_id, uuid.UUID) else uuid.UUID(self.user_id)
 
-    def _get_kb_metadata(self, kb_path: Path) -> dict:
-        """Load the knowledge base's embedding metadata file."""
-        raise_error_if_astra_cloud_disable_component(astra_error_msg)
-        return load_kb_metadata(kb_path, log_label=f"knowledge base '{self.knowledge_base}'")
+    async def _get_kb_metadata(self, knowledge_base: str | None = None) -> dict:
+        """Load this knowledge base's embedding config from its database row.
 
-    async def _resolve_backend(self, *, kb_user: str) -> tuple[str, dict[str, Any]]:  # noqa: ARG002
-        """Return ``(backend_type, backend_config)`` for this KB."""
+        The row is the sole authority. There is no on-disk sidecar to fall back
+        to, which is what lets retrieval work identically on a replica whose
+        filesystem never held the KB directory.
+        """
+        raise_error_if_astra_cloud_disable_component(astra_error_msg)
         try:
             from primeagent.api.utils import knowledge_base_service
+        except ImportError:
+            return {}
 
-            user_uuid = self._user_uuid
-            if user_uuid is None:
-                return BackendType.CHROMA.value, {}
-            record = await knowledge_base_service.get_by_user_and_name(user_uuid, self.knowledge_base)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("KB record lookup failed: %s", exc)
-            return BackendType.CHROMA.value, {}
-
-        if record is None:
-            return BackendType.CHROMA.value, {}
-        return (
-            record.backend_type or BackendType.CHROMA.value,
-            record.backend_config or {},
+        user_uuid = self._user_uuid
+        if user_uuid is None:
+            return {}
+        record = await knowledge_base_service.get_by_user_and_name(
+            user_uuid,
+            knowledge_base or self.knowledge_base,
         )
+        if record is None:
+            return {}
+        return knowledge_base_service.record_to_metadata_dict(record)
+
+    async def _backend_from_record(self) -> tuple[str, dict[str, Any]] | None:
+        """Read ``(backend_type, backend_config)`` off the KB's database row.
+
+        Returns ``None`` when there is no row to read — a legacy KB predating the
+        record, or bare wfx with no primeagent installed. A lookup that *fails* is a
+        different situation and is allowed to propagate: guessing a backend after a
+        database error is how vectors end up in a store nothing queries.
+        """
+        try:
+            from primeagent.api.utils import knowledge_base_service
+        except ImportError:
+            return None
+
+        user_uuid = self._user_uuid
+        if user_uuid is None:
+            return None
+        record = await knowledge_base_service.get_by_user_and_name(user_uuid, self.knowledge_base)
+        if record is None:
+            return None
+        return record.backend_type or BackendType.CHROMA.value, record.backend_config or {}
+
+    async def _resolve_backend_config(self) -> tuple[str, dict[str, Any]]:
+        """Resolve this KB's backend from its database row.
+
+        Ingestion and retrieval both land here, so they cannot disagree about
+        where this KB's vectors live. A backend that cannot be resolved raises
+        rather than defaulting to local storage: guessing is how a pod ends up
+        writing vectors to a local directory while queries follow the real config
+        to a remote store and silently find nothing.
+        """
+        resolved = await self._backend_from_record()
+        if resolved is None:
+            msg = (
+                f"Cannot determine the vector-store backend for knowledge base "
+                f"'{self.knowledge_base}': it has no database record. Refusing to fall "
+                f"back to local storage, which would write to a different store than "
+                f"queries read from. If this knowledge base predates database-backed "
+                f"metadata, adopt it with 'primeagent reconcile-kb-from-disk'."
+            )
+            raise ValueError(msg)
+        return resolved
 
     def _resolve_model_selection(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
         """Resolve the ``get_embeddings``-compatible model selection from metadata."""
@@ -1610,59 +1760,73 @@ class KnowledgeComponent(Component):
             return await self.build_kb_info()
         raise_error_if_astra_cloud_disable_component(astra_error_msg)
 
-        # Lazy import: primeagent's user/DB models aren't part of wfx's
-        # standalone install, so ``wfx run <starter>.json`` can't resolve
-        # this symbol at module import time. Deferring to use keeps the
-        # component importable in both environments.
-        from primeagent.services.database.models.user.crud import get_user_by_id
+        if not self.user_id:
+            msg = "User ID is required for fetching Knowledge Base data."
+            raise ValueError(msg)
+
+        # Saved flows can load in standalone wfx, but knowledge retrieval
+        # requires the application's user database and storage services.
+        try:
+            from primeagent.services.database.models.user.crud import get_user_by_id
+        except ModuleNotFoundError as exc:
+            if exc.name != "primeagent":
+                raise
+            msg = "Knowledge Base retrieval requires Primeagent's application services. Run this flow in Primeagent."
+            raise RuntimeError(msg) from None
 
         async with session_scope() as db:
-            if not self.user_id:
-                msg = "User ID is required for fetching Knowledge Base data."
-                raise ValueError(msg)
             current_user = await get_user_by_id(db, self.user_id)
             if not current_user:
                 msg = f"User with ID {self.user_id} not found."
                 raise ValueError(msg)
-            kb_user = current_user.username
-        kb_path = _get_knowledge_bases_root_path() / kb_user / self.knowledge_base
 
-        metadata = self._get_kb_metadata(kb_path)
+        metadata = await self._get_kb_metadata()
         if not metadata:
             msg = f"Metadata not found for knowledge base: {self.knowledge_base}. Ensure it has been indexed."
             raise ValueError(msg)
 
         model_selection = self._resolve_model_selection(metadata)
         chunk_size = metadata.get("chunk_size")
+
+        # Resolve where this KB lives before instantiating embeddings: path
+        # containment is a cheap local check, and a request that will be refused
+        # shouldn't first pay for a credential lookup and a provider client.
+        backend_type, _backend_config = await self._resolve_backend_config()
+
+        # ``api_key=None`` is not "no credential": ``get_embeddings`` resolves the
+        # provider's key from the user's variables table and then the environment,
+        # exactly as the server-side ingestion path does. The component input just
+        # takes precedence when supplied.
         embedding_function = get_embeddings(
             model=model_selection,
             user_id=self.user_id,
+            api_key=self.api_key if getattr(self, "api_key", None) else None,
             chunk_size=chunk_size,
         )
 
-        backend_type, backend_config = await self._resolve_backend(kb_user=kb_user)
-        backend = create_backend(
-            backend_type,
-            kb_name=self.knowledge_base,
-            kb_path=kb_path,
-            backend_config=backend_config,
-            embedding_function=embedding_function,
-            user_id=self.user_id,
-        )
+        from primeagent.api.utils.kb_helpers import backend_for_name
+
+        owner_id = self._user_uuid
+        if owner_id is None:
+            msg = "User ID is required for knowledge base storage."
+            raise ValueError(msg)
+        backend = await backend_for_name(owner_id, self.knowledge_base, embedding_function=embedding_function)
         try:
             user_metadata_filter = _parse_metadata_filter(getattr(self, "metadata_filter", None))
             use_scores = bool(self.search_query)
-            search_k = self.top_k * 4 if user_metadata_filter else self.top_k
+            exact_filter = backend_type == BackendType.SQLITE.value
+            search_k = self.top_k if exact_filter or not user_metadata_filter else self.top_k * 4
+            search_options = {"source_filter": user_metadata_filter} if exact_filter else {}
             results = await backend.similarity_search(
                 query=self.search_query or "",
                 k=search_k,
                 with_scores=use_scores,
+                **search_options,
             )
-            if user_metadata_filter:
+            if user_metadata_filter and not exact_filter:
                 results = [
                     (doc, score) for doc, score in results if _chunk_matches_filter(doc.metadata, user_metadata_filter)
-                ]
-                results = results[: self.top_k]
+                ][: self.top_k]
 
             embeddings_by_key: dict[tuple[str, str], list[float]] = {}
             if self.include_embeddings and results:
@@ -1671,21 +1835,22 @@ class KnowledgeComponent(Component):
                 # so KBs populated by direct file upload — whose chunks carry no
                 # ``_id`` — still resolve. See ``_embedding_match_key``.
                 wanted_keys = {_embedding_match_key(doc.page_content, doc.metadata) for doc, _score in results}
-                async for batch in backend.iter_documents(include_embeddings=True):
-                    for entry in batch:
-                        if entry.embedding is None:
-                            continue
-                        key = _embedding_match_key(entry.content, entry.metadata)
-                        if key in wanted_keys:
-                            embeddings_by_key[key] = entry.embedding
-                    if len(embeddings_by_key) == len(wanted_keys):
-                        break
+                async with aclosing(backend.iter_documents(include_embeddings=True)) as batches:
+                    async for batch in batches:
+                        for entry in batch:
+                            if entry.embedding is None:
+                                continue
+                            key = _embedding_match_key(entry.content, entry.metadata)
+                            if key in wanted_keys:
+                                embeddings_by_key[key] = entry.embedding
+                        if wanted_keys <= embeddings_by_key.keys():
+                            break
 
             data_list: list[Data] = []
             for doc, score in results:
                 kwargs: dict[str, Any] = {"content": doc.page_content}
                 if use_scores:
-                    kwargs["_score"] = -1 * score
+                    kwargs["_score"] = backend.normalize_score(score)
                 if self.include_metadata:
                     kwargs.update(doc.metadata)
                 if self.include_embeddings:

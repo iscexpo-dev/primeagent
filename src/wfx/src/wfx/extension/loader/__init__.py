@@ -41,7 +41,7 @@ Internal layout (all underscore-prefixed; not part of the public surface):
     - ``_discovery``   -- filesystem walk + ``importlib.util`` orchestration.
     - ``_detection``   -- Component subclass identification (MRO heuristic).
     - ``_orchestrator``-- ``load_extension`` / ``discover_inline_bundles``;
-                          path-safety, multi-bundle re-check, identity tuple.
+                          path-safety, bundle selection, identity tuple.
     - ``_plugins``     -- manifest-first precedence over ``primeagent.plugins``;
                           installed-distribution discovery primitives.
 
@@ -52,10 +52,15 @@ discovery layer.  Splitting the loader into small files now keeps each
 follow-on touching one banner-section at a time.
 """
 
+from wfx.extension.loader._bundles_root import (
+    WFX_BUNDLES_ENTRY_POINT_GROUP,
+    load_wfx_bundles_extensions,
+)
 from wfx.extension.loader._discovery import DEFAULT_MODULE_NAMESPACE
 from wfx.extension.loader._orchestrator import (
     discover_inline_bundles,
     load_extension,
+    load_extension_bundles,
     load_inline_bundle,
 )
 from wfx.extension.loader._plugins import (
@@ -73,23 +78,28 @@ from wfx.extension.loader._types import (
     SLOT_OFFICIAL,
     SLOT_VALUES,
     LoadedComponent,
+    LoadedIntegration,
     LoadResult,
 )
 
 __all__ = [
     "DEFAULT_MODULE_NAMESPACE",
+    "WFX_BUNDLES_ENTRY_POINT_GROUP",
     "SLOT_EXTRA",
     "SLOT_OFFICIAL",
     "SLOT_VALUES",
     "LoadResult",
     "LoadedComponent",
+    "LoadedIntegration",
     "discover_inline_bundles",
     "filter_component_entry_points",
     "filter_plugin_entry_points",
     "installed_extension_roots",
     "load_extension",
+    "load_extension_bundles",
     "load_inline_bundle",
     "load_installed_extensions",
+    "load_wfx_bundles_extensions",
     "load_seed_extensions",
     "manifest_owning_distributions",
 ]

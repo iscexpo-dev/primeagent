@@ -18,8 +18,8 @@ from primeagent.services.database.models.flow_version_deployment_attachment.mode
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from sqlmodel.ext.asyncio.session import AsyncSession
     from wfx.services.adapters.deployment.schema import DeploymentType
+    from sqlmodel.ext.asyncio.session import AsyncSession
 
     from primeagent.services.database.models.deployment_provider_account.schemas import DeploymentProviderKey
 

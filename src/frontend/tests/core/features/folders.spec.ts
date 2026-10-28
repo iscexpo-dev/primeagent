@@ -2,6 +2,11 @@ import { readFileSync } from "fs";
 import { expect, test } from "../../fixtures";
 import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
 import { TEXTS } from "../../utils/constants/texts";
+import {
+  getSidebarProjectButton,
+  getSidebarProjectOptionsButton,
+  getSidebarProjectRowById,
+} from "../../utils/project-sidebar";
 import { renameFlow } from "../../utils/rename-flow";
 
 test(
@@ -28,38 +33,43 @@ test(
     } else {
       await expect(page.getByText("MCP Server").first()).toBeVisible();
     }
+    const createdProjectResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/v1/projects/",
+    );
     await page.getByTestId("add-project-button").click();
-    await page
-      .locator("[data-testid='project-sidebar']")
-      .getByText(TEXTS.labelNewProject)
-      .last()
-      .isVisible();
+    const createdResponse = await createdProjectResponse;
+    expect(createdResponse.status()).toBe(201);
+    const createdProject = await createdResponse.json();
+    const projectRow = getSidebarProjectRowById(page, createdProject.id);
+    await expect(projectRow).toBeVisible();
 
-    await page
-      .locator("[data-testid='project-sidebar']")
-      .getByText(TEXTS.labelNewProject)
-      .last()
-      .dblclick();
+    await projectRow.getByTestId(/^sidebar-nav-/).dblclick();
 
-    const element = await page.getByTestId("input-project");
+    const element = page.getByTestId("input-project");
     await element.fill("new project test name");
+    const renamedProjectResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PATCH" &&
+        new URL(response.url()).pathname ===
+          `/api/v1/projects/${createdProject.id}`,
+    );
+    await element.press("Enter");
+    const renamedResponse = await renamedProjectResponse;
+    expect(renamedResponse.status()).toBe(200);
+    expect((await renamedResponse.json()).name).toBe("new project test name");
+    await expect(
+      getSidebarProjectButton(page, "new project test name"),
+    ).toBeVisible({ timeout: 30000 });
 
-    await page.getByText("Starter Project").last().click({
-      force: true,
-    });
+    await getSidebarProjectButton(page, "new project test name").last().hover();
 
-    await page.getByText("new project test name").last().waitFor({
-      state: "visible",
-      timeout: 30000,
-    });
+    await getSidebarProjectOptionsButton(page, "new project test name").waitFor(
+      { state: "visible", timeout: 5000 },
+    );
 
-    await page.getByTestId("sidebar-nav-new project test name").last().hover();
-
-    await page
-      .getByTestId("more-options-button_new-project-test-name")
-      .waitFor({ state: "visible", timeout: 5000 });
-
-    await page.getByTestId("more-options-button_new-project-test-name").click();
+    await getSidebarProjectOptionsButton(page, "new project test name").click();
 
     await page.getByTestId("btn-delete-project").click();
     await page.getByText(TEXTS.delete).last().click();
@@ -80,7 +90,8 @@ test("add a flow into a folder by drag and drop", async ({ page }) => {
 
   // Wait for the target element to be available before evaluation
 
-  await page.waitForSelector('[data-testid="sidebar-nav-Starter Project"]', {
+  await getSidebarProjectButton(page, "Starter Project").waitFor({
+    state: "visible",
     timeout: 100000,
   });
   // Create the DataTransfer and File
@@ -95,7 +106,7 @@ test("add a flow into a folder by drag and drop", async ({ page }) => {
   }, jsonContent);
 
   // Now dispatch
-  await page.getByTestId("sidebar-nav-Starter Project").dispatchEvent("drop", {
+  await getSidebarProjectButton(page, "Starter Project").dispatchEvent("drop", {
     dataTransfer,
   });
   // wait for the file to be uploaded failed with waitforselector
@@ -108,7 +119,7 @@ test("add a flow into a folder by drag and drop", async ({ page }) => {
     expect(true).toBeTruthy();
   }
 
-  await page.getByTestId("sidebar-nav-Starter Project").click();
+  await getSidebarProjectButton(page, "Starter Project").click();
 
   await page.waitForSelector("text=Getting Started:", {
     timeout: 100000,
@@ -168,11 +179,11 @@ test("change flow folder", async ({ page }) => {
   await page.getByTestId("input-project").fill(destinationProjectName);
   await page.keyboard.press("Enter");
   await expect(
-    page.getByTestId(`sidebar-nav-${destinationProjectName}`),
+    getSidebarProjectButton(page, destinationProjectName),
   ).toBeVisible({ timeout: 10000 });
 
   // Go back to the source project where the flow currently lives.
-  await page.getByTestId("sidebar-nav-Starter Project").click();
+  await getSidebarProjectButton(page, "Starter Project").click();
   await expect(
     page.getByTestId("list-card").filter({ hasText: uniqueFlowName }),
   ).toHaveCount(1, { timeout: 10000 });
@@ -184,19 +195,19 @@ test("change flow folder", async ({ page }) => {
     .getByTestId("list-card")
     .filter({ hasText: uniqueFlowName })
     .first()
-    .dragTo(page.getByTestId(`sidebar-nav-${destinationProjectName}`));
+    .dragTo(getSidebarProjectButton(page, destinationProjectName));
 
   // Click the destination folder and verify the moved flow is visible
   // WITHOUT a manual page refresh. This is the behavior that regresses
   // when the patch-flow cache invalidation is incomplete.
-  await page.getByTestId(`sidebar-nav-${destinationProjectName}`).click();
+  await getSidebarProjectButton(page, destinationProjectName).click();
 
   await expect(
     page.getByTestId("list-card").filter({ hasText: uniqueFlowName }),
   ).toHaveCount(1, { timeout: 10000 });
 
   // And the flow must NOT remain in the source project.
-  await page.getByTestId("sidebar-nav-Starter Project").click();
+  await getSidebarProjectButton(page, "Starter Project").click();
   await expect(
     page.getByTestId("list-card").filter({ hasText: uniqueFlowName }),
   ).toHaveCount(0, { timeout: 10000 });

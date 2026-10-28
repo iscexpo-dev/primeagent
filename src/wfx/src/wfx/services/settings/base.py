@@ -108,7 +108,13 @@ class Settings(
     order rationale.
     """
 
-    model_config = SettingsConfigDict(validate_assignment=True, extra="ignore", env_prefix="PRIMEAGENT_")
+    # Settings values are operator config that routinely embeds credentials (database and
+    # cache URLs, API keys). ``hide_input_in_errors`` keeps pydantic from echoing the raw
+    # value as ``input_value=...`` in ValidationError text, which validators cannot
+    # otherwise suppress; their messages still name the field and the problem.
+    model_config = SettingsConfigDict(
+        validate_assignment=True, extra="ignore", env_prefix="PRIMEAGENT_", hide_input_in_errors=True
+    )
 
     async def update_from_yaml(self, file_path: str, *, dev: bool = False) -> None:
         new_settings = await load_settings_from_yaml(file_path)
@@ -139,8 +145,9 @@ class Settings(
 
     @property
     def voice_mode_available(self) -> bool:
-        """Check if voice mode is available by testing webrtcvad import."""
+        """Check whether the optional voice runtime dependencies are installed."""
         try:
+            import openai  # noqa: F401
             import webrtcvad  # noqa: F401
         except ImportError:
             return False

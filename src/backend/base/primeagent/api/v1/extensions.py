@@ -16,12 +16,12 @@ import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
 from wfx.extension.bundle_registry import get_default_registry
 from wfx.extension.errors import ExtensionError
 from wfx.extension.reload import ReloadInProgressError, reload_bundle
 from wfx.log.logger import logger
 from wfx.services.deps import get_extension_events_service, get_settings_service
+from pydantic import BaseModel
 
 from primeagent.api.utils.core import CurrentActiveUser
 
@@ -181,7 +181,7 @@ async def reload_extension_bundle(
             primary.code,
         )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 **primary.to_dict(),
                 "result": result.to_dict(),
@@ -223,7 +223,7 @@ async def get_extension_events(
     """
     if keyspace is not None:
         raise _typed_http_exception(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             error=ExtensionError(
                 code="extension-events-keyspace-forbidden",
                 message=(

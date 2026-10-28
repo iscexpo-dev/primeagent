@@ -112,13 +112,43 @@ describe("mcpServerUtils", () => {
         apiUrl: "https://api.test.com",
         isOAuthProject: false,
         authHeadersFragment: "",
-        transport: "sse",
       });
 
       expect(json).toContain('"mcpServers"');
       expect(json).toContain('"lf-test"');
       expect(json).toContain('"command": "uvx"');
       expect(json).toContain('"mcp-proxy"');
+    });
+
+    it("uses the server name the backend registered", () => {
+      const json = buildMcpServerJson({
+        folderName: "繁體中文專案",
+        backendServerName: "lf-繁體中文專案",
+        selectedPlatform: "macoslinux",
+        apiUrl: "https://api.test.com",
+        isOAuthProject: false,
+        authHeadersFragment: "",
+        transport: "streamablehttp",
+      });
+
+      // Deriving the name here would collapse the Chinese characters to lf-unnamed,
+      // which is not the name the backend stores for this project
+      expect(json).toContain('"lf-繁體中文專案"');
+      expect(json).not.toContain("lf-unnamed");
+    });
+
+    it("derives the name when the backend has not supplied one", () => {
+      const json = buildMcpServerJson({
+        folderName: "test",
+        backendServerName: null,
+        selectedPlatform: "macoslinux",
+        apiUrl: "https://api.test.com",
+        isOAuthProject: false,
+        authHeadersFragment: "",
+        transport: "streamablehttp",
+      });
+
+      expect(json).toContain('"lf-test"');
     });
 
     it("builds JSON with wsl command and uvx arg for WSL platform", () => {
@@ -128,7 +158,6 @@ describe("mcpServerUtils", () => {
         apiUrl: "https://api.test.com",
         isOAuthProject: false,
         authHeadersFragment: "",
-        transport: "sse",
       });
 
       expect(json).toContain('"command": "wsl"');
@@ -142,7 +171,6 @@ describe("mcpServerUtils", () => {
         apiUrl: "https://api.test.com",
         isOAuthProject: false,
         authHeadersFragment: "",
-        transport: "sse",
       });
 
       expect(json).toContain('"command": "cmd"');
@@ -157,7 +185,6 @@ describe("mcpServerUtils", () => {
         apiUrl: "https://api.test.com",
         isOAuthProject: true,
         authHeadersFragment: "",
-        transport: "sse",
       });
 
       expect(json).toContain('"mcp-composer"');
@@ -174,7 +201,6 @@ describe("mcpServerUtils", () => {
         apiUrl: "https://api.test.com",
         isOAuthProject: false,
         authHeadersFragment: '"--headers","x-api-key","test-key"',
-        transport: "sse",
       });
 
       expect(json).toContain('"--headers"');

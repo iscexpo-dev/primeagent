@@ -28,9 +28,19 @@ class TestMCPComponentFlowReload(ComponentTestBaseWithoutClient):
         return []
 
     @pytest.fixture
+    def skipped_outputs(self):
+        return {
+            "component_as_tool": "needs a database user and starts the MCP server in default_kwargs",
+            "response": "calls a tool on the MCP server in default_kwargs",
+        }
+
+    @pytest.fixture
     def default_kwargs(self):
         return {
-            "mcp_server": {"name": "test_server", "config": {"command": "uvx test-mcp-server"}},
+            "mcp_server": {
+                "name": "test_server",
+                "config": {"command": "uvx", "args": ["test-mcp-server"]},
+            },
             "tool": "saved_tool",
             "use_cache": False,
         }

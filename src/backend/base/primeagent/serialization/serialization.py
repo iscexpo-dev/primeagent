@@ -9,9 +9,9 @@ from uuid import UUID
 import numpy as np
 import pandas as pd
 from langchain_core.documents import Document
+from wfx.log.logger import logger
 from pydantic import BaseModel
 from pydantic.v1 import BaseModel as BaseModelV1
-from wfx.log.logger import logger
 
 from primeagent.serialization.constants import MAX_ITEMS_LENGTH, MAX_TEXT_LENGTH
 from primeagent.services.deps import get_settings_service
@@ -304,7 +304,7 @@ def serialize(
             try:
                 return repr(obj)
             except Exception as e:  # noqa: BLE001
-                logger.debug(f"Cannot serialize object {obj}: {e!s}")
+                logger.debug(f"Cannot serialize object of type {type(obj).__name__}: {e!s}")
 
         # Fallback to common serialization patterns
         if hasattr(obj, "model_dump"):
@@ -317,7 +317,7 @@ def serialize(
             return str(obj)
 
     except Exception as e:  # noqa: BLE001
-        logger.debug(f"Cannot serialize object {obj}: {e!s}")
+        logger.debug(f"Cannot serialize object of type {type(obj).__name__}: {e!s}")
         return "[Unserializable Object]"
     return obj
 

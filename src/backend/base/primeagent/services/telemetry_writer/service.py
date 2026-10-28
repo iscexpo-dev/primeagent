@@ -31,18 +31,18 @@ import socket
 import sqlite3
 import tempfile
 import time
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import delete
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
-from sqlmodel import col, select
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from wfx.log.logger import logger
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlmodel import col
 
+from primeagent.api.utils.migration_pause import is_paused, writing
 from primeagent.services.base import Service
 from primeagent.services.database.models.transactions.model import TransactionTable
 from primeagent.services.database.models.vertex_builds.model import VertexBuildTable
@@ -99,6 +99,15 @@ def _read_owner_file(pid_dir: Path) -> dict[str, Any] | None:
         return json.loads((pid_dir / _OWNER_FILE_NAME).read_text())
     except (OSError, ValueError):
         return None
+
+
+def _uniform_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Give every row the same keys; a multi-row insert binds only the first row's keys.
+
+    Rows restored from an outbox written before a column existed lack that key.
+    """
+    keys = {key for row in rows for key in row}
+    return [{key: row.get(key) for key in keys} for row in rows]
 
 
 def _json_default(value: Any) -> Any:
@@ -320,7 +329,13 @@ class TelemetryWriterService(Service):
         self._prune_stale_foreign_outboxes(outbox_root)
 
         self._engine = self._create_dedicated_engine()
-        self._session_maker = async_sessionmaker(self._engine, class_=SQLModelAsyncSession, expire_on_commit=False)
+        # Use SQLAlchemy's AsyncSession (not SQLModel's). This service issues only
+        # Core-style bulk statements via ``session.execute()`` (Table.insert(),
+        # delete(), select().scalars()); it never needs SQLModel's ``exec()``.
+        # SQLModel's AsyncSession marks ``execute()`` as deprecated, so using it
+        # here floods runtime logs with a multi-line DeprecationWarning on every
+        # batch flush and retention sweep.
+        self._session_maker = async_sessionmaker(self._engine, class_=AsyncSession, expire_on_commit=False)
         self._shutdown_event = asyncio.Event()
         self._writer_task = asyncio.create_task(self._run_writer(), name="telemetry-writer")
         self._sweeper_task = asyncio.create_task(self._run_sweeper(), name="telemetry-sweeper")
@@ -709,10 +724,15 @@ class TelemetryWriterService(Service):
         consecutive_failures = 0
         while True:
             should_stop = self._shutdown_event.is_set()
-            tx_batch = self._drain_batch("transactions", batch_size, batch_size_bytes)
-            vb_batch = self._drain_batch("vertex_builds", batch_size, batch_size_bytes)
+            # A paused instance flushes nothing. The rows wait in memory, and teardown spills them to disk.
+            # A flush holds a place from here until it is over, so a pause waits for one that is under way.
+            place = ExitStack()
+            paused = not place.enter_context(writing(name="telemetry_flush"))
+            tx_batch = [] if paused else self._drain_batch("transactions", batch_size, batch_size_bytes)
+            vb_batch = [] if paused else self._drain_batch("vertex_builds", batch_size, batch_size_bytes)
 
             if not tx_batch and not vb_batch:
+                place.close()
                 if should_stop:
                     return
                 await self._wait_or_shutdown(flush_interval, name="telemetry-writer-tick")
@@ -743,7 +763,11 @@ class TelemetryWriterService(Service):
                         f"telemetry_writer: {consecutive_failures} consecutive batch failures, "
                         f"buffer depth tx={len(self._tx_buffer)} vb={len(self._vb_buffer)}"
                     )
+                # Nothing is written while this backs off, so the place is let go before the wait.
+                place.close()
                 await self._wait_or_shutdown(backoff, name="telemetry-writer-backoff")
+            finally:
+                place.close()
 
     async def _flush(self, tx_batch: list[dict], vb_batch: list[dict]) -> None:
         if not tx_batch and not vb_batch:
@@ -752,13 +776,13 @@ class TelemetryWriterService(Service):
             return
         async with self._session_maker() as session:
             if tx_batch:
-                await session.exec(TransactionTable.__table__.insert(), params=tx_batch)
+                await session.execute(TransactionTable.__table__.insert(), params=_uniform_rows(tx_batch))
                 for row in tx_batch:
                     flow_id = row.get("flow_id")
                     if flow_id is not None:
                         self._dirty_tx_flows.add(str(flow_id))
             if vb_batch:
-                await session.exec(VertexBuildTable.__table__.insert(), params=vb_batch)
+                await session.execute(VertexBuildTable.__table__.insert(), params=_uniform_rows(vb_batch))
                 for row in vb_batch:
                     flow_id = row.get("flow_id")
                     if flow_id is not None:
@@ -776,7 +800,9 @@ class TelemetryWriterService(Service):
                 return
             self._heartbeat_owner_file()
             try:
-                await self._run_retention_pass()
+                with writing(name="telemetry_retention") as let_in:
+                    if let_in:
+                        await self._run_retention_pass()
             except Exception:  # noqa: BLE001
                 logger.exception("telemetry_writer: retention sweep failed")
             try:
@@ -785,7 +811,7 @@ class TelemetryWriterService(Service):
                 logger.exception("telemetry_writer: cross-host orphan prune failed")
 
     async def _run_retention_pass(self) -> None:
-        if self._session_maker is None:
+        if self._session_maker is None or is_paused():
             return
         settings = self.settings_service.settings
         max_transactions = int(getattr(settings, "max_transactions_to_keep", 3000))
@@ -817,7 +843,7 @@ class TelemetryWriterService(Service):
                         .order_by(col(TransactionTable.timestamp).desc())
                         .limit(max_transactions)
                     )
-                    await session.exec(
+                    await session.execute(
                         delete(TransactionTable).where(
                             TransactionTable.flow_id == flow_id,
                             col(TransactionTable.id).not_in(keep_subq),
@@ -826,10 +852,14 @@ class TelemetryWriterService(Service):
 
                 for flow_id in vb_flows:
                     vertex_ids = (
-                        await session.exec(
-                            select(VertexBuildTable.id).where(VertexBuildTable.flow_id == flow_id).distinct()
+                        (
+                            await session.execute(
+                                select(VertexBuildTable.id).where(VertexBuildTable.flow_id == flow_id).distinct()
+                            )
                         )
-                    ).all()
+                        .scalars()
+                        .all()
+                    )
                     for vertex_id in vertex_ids:
                         keep_vertex_subq = (
                             select(VertexBuildTable.build_id)
@@ -843,7 +873,7 @@ class TelemetryWriterService(Service):
                             )
                             .limit(max_per_vertex)
                         )
-                        await session.exec(
+                        await session.execute(
                             delete(VertexBuildTable).where(
                                 VertexBuildTable.flow_id == flow_id,
                                 VertexBuildTable.id == vertex_id,
@@ -859,7 +889,7 @@ class TelemetryWriterService(Service):
                     )
                     .limit(max_vertex_builds)
                 )
-                await session.exec(
+                await session.execute(
                     delete(VertexBuildTable).where(col(VertexBuildTable.build_id).not_in(keep_global_subq))
                 )
                 await session.commit()

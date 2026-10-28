@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 import pytest
 import typer
-from typer.testing import CliRunner
 from wfx.__main__ import app
 from wfx.cli.create import (
     _load_template,
@@ -24,6 +23,7 @@ from wfx.cli.create import (
     print_templates,
 )
 from wfx.cli.init import init_command
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

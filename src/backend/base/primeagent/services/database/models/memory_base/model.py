@@ -41,8 +41,30 @@ class MemoryBase(MemoryBaseBase, table=True):  # type: ignore[call-arg]
 class MemoryBaseCreate(MemoryBaseBase):
     user_id: UUID | None = None  # Derived from auth token in the endpoint; not required in request body
 
+    # Vector-store selection for the Memory Base's backing KB. Declared on the
+    # create payload rather than on ``MemoryBaseBase`` so no column is added to
+    # the ``memory_base`` table: the values are persisted on the
+    # ``knowledge_base`` row this Memory Base creates, which is what every read
+    # path resolves against. ``None`` lets the server choose the deployment
+    # default (pgvector when its fixed server environment variable is present).
+    backend_type: str | None = None
+    backend_config: dict = Field(default_factory=dict)
+
+    # Provider that serves ``embedding_model``, as selected by the caller.
+    # Declared here rather than on ``MemoryBaseBase`` for the same reason as the
+    # backend fields above: no column is added to the ``memory_base`` table
+    # because the value is persisted in the backing ``knowledge_base`` row's
+    # ``model_selection``, which every ingestion/retrieval path resolves against.
+    # ``None`` falls back to name-based inference, which cannot see
+    # live-discovered models (e.g. an OpenAI-Compatible endpoint's catalog).
+    embedding_provider: str | None = None
+
     @model_validator(mode="after")
     def preprocessing_defaults(self) -> "MemoryBaseCreate":
+        """Validate storage selection and populate preprocessing defaults when enabled."""
+        if self.backend_type not in (None, "sqlite", "postgres", "opensearch"):
+            msg = "Memory bases support SQLite Local, pgVector and OpenSearch"
+            raise ValueError(msg)
         if self.preprocessing and not self.preproc_model:
             msg = "preproc_model is required when preprocessing is enabled"
             raise ValueError(msg)
@@ -66,6 +88,18 @@ class MemoryBaseRead(MemoryBaseBase):
     id: UUID
     kb_name: str
     created_at: datetime
+    # Vector-store backend of the backing ``knowledge_base`` row (not columns on
+    # the ``memory_base`` table). Populated by the API layer so the Memory Base
+    # Control Center can surface it in the config dropdown. ``backend_config`` is
+    # included so the UI can distinguish Chroma Local from Chroma Cloud (both use
+    # ``backend_type="chroma"``, discriminated by ``backend_config["mode"]``); it
+    # carries only variable names / routing flags, never secrets. Defaults suit a
+    # Memory Base with no resolvable KB row.
+    backend_type: str = "sqlite"
+    backend_config: dict = Field(default_factory=dict)
+    storage_state: str = "ready"
+    storage_kb_id: UUID | None = None
+    active_migration_id: UUID | None = None
 
 
 class MemoryBaseSessionBase(SQLModel):
@@ -89,6 +123,9 @@ class MemoryBaseSession(MemoryBaseSessionBase, table=True):  # type: ignore[call
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    purge_pending: bool = Field(
+        default=False, sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false())
+    )
 
     # FK defined via sa_column so Alembic sees the same shape as the migration:
     # inline ForeignKey on the column with ondelete="CASCADE".

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-microsoft",
+  "version": "0.1.4",
+  "name": "Microsoft 365",
+  "description": "Microsoft 365 and Teams actions backed by delegated Microsoft Graph permissions.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "microsoft",
+      "path": "components/microsoft"
+    }
+  ],
+  "integrations": [
+    {
+      "provider_id": "microsoft",
+      "bundle": "microsoft",
+      "path": "capabilities.v1.json"
+    }
+  ]
+}

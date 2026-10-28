@@ -21,6 +21,7 @@ from .class_registry import (
 from .credentials import (
     get_all_variables_for_provider,
     get_api_key_for_provider,
+    provider_variable_from_env,
     validate_model_provider_key,
 )
 from .instantiation import get_embeddings, get_llm
@@ -32,6 +33,7 @@ from .model_catalog import (
 )
 from .provider_queries import (
     MODELS_DETAILED,
+    get_live_only_providers,
     get_model_provider_metadata,
     get_model_provider_variable_mapping,
     get_model_providers,
@@ -40,6 +42,9 @@ from .provider_queries import (
     get_provider_for_model_name,
     get_provider_from_variable_key,
     get_provider_required_variable_keys,
+    get_provider_secret_variable_key,
+    is_known_model_provider,
+    is_required_provider_variable,
     model_provider_metadata,
 )
 
@@ -57,6 +62,7 @@ __all__ = [
     "get_embedding_model_options",
     "get_embeddings",
     "get_language_model_options",
+    "get_live_only_providers",
     "get_llm",
     "get_model_class",
     "get_model_provider_metadata",
@@ -67,10 +73,14 @@ __all__ = [
     "get_provider_for_model_name",
     "get_provider_from_variable_key",
     "get_provider_required_variable_keys",
+    "get_provider_secret_variable_key",
     "get_unified_models_detailed",
     "handle_model_input_update",
+    "is_known_model_provider",
+    "is_required_provider_variable",
     "model_provider_metadata",
     "normalize_model_names_to_dicts",
+    "provider_variable_from_env",
     "update_model_options_in_build_config",
     "validate_model_provider_key",
 ]

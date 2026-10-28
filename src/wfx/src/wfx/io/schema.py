@@ -39,6 +39,40 @@ _convert_field_type_to_type: dict[FieldTypes, type] = {
     FieldTypes.QUERY: str,
 }
 
+# Serialized component templates carry frontend field-type identifiers as strings.
+# Keep the conversion closed over known identifiers so Pydantic never interprets
+# an untrusted string as a ForwardRef during model rebuilding.
+_serialized_field_type_to_type: dict[str, type] = {
+    FieldTypes.TEXT.value: str,
+    FieldTypes.INTEGER.value: int,
+    FieldTypes.FLOAT.value: float,
+    FieldTypes.BOOLEAN.value: bool,
+    "boolean": bool,
+    FieldTypes.DICT.value: dict,
+    FieldTypes.NESTED_DICT.value: dict,
+    FieldTypes.SORTABLE_LIST.value: list,
+    FieldTypes.ACTION_PICKER.value: list,
+    FieldTypes.DURATION.value: dict,
+    FieldTypes.CONNECTION.value: str,
+    FieldTypes.CONNECTION_REF.value: str,
+    FieldTypes.AUTH.value: dict,
+    FieldTypes.FILE.value: str,
+    FieldTypes.PROMPT.value: str,
+    FieldTypes.MUSTACHE_PROMPT.value: str,
+    FieldTypes.CODE.value: str,
+    FieldTypes.OTHER.value: str,
+    FieldTypes.TABLE.value: dict,
+    FieldTypes.LINK.value: str,
+    FieldTypes.SLIDER.value: float,
+    FieldTypes.TAB.value: str,
+    FieldTypes.QUERY.value: str,
+    FieldTypes.TOOLS.value: list,
+    FieldTypes.MCP.value: dict,
+    FieldTypes.MODEL.value: list,
+    FieldTypes.DATA_DISPLAY.value: dict,
+    FieldTypes.DB_PROVIDER.value: str,
+}
+
 
 _convert_type_to_field_type = {
     str: MessageTextInput,
@@ -54,7 +88,7 @@ _convert_type_to_field_type = {
 # connection handles for non-string fields (MCP tools, dynamic Composio tools, etc.).
 # Without these, int/float/bool/dict inputs render as UI-only widgets with no
 # input port, preventing values from being wired in from other components.
-# See https://github.com/khulnasoft/primeagent/issues/9424
+# See https://github.com/khulnasoft-bot/primeagent/issues/9424
 _SCHEMA_INPUT_TYPES_BY_CLS: dict[type[InputTypes], list[str]] = {
     IntInput: ["Message"],
     FloatInput: ["Message"],
@@ -295,6 +329,8 @@ def create_input_schema(inputs: list["InputTypes"]) -> type[BaseModel]:
         raise TypeError(msg)
     fields = {}
     for input_model in inputs:
+        if input_model.field_type == FieldTypes.CONNECTION_REF:
+            continue
         # Create a Pydantic Field for each input field
         field_type = input_model.field_type
         if isinstance(field_type, FieldTypes):
@@ -309,8 +345,7 @@ def create_input_schema(inputs: list["InputTypes"]) -> type[BaseModel]:
             and input_model.options
             and len(input_model.options) <= MAX_OPTIONS_FOR_TOOL_ENUM
         ):
-            literal_string = f"Literal{input_model.options}"
-            field_type = eval(literal_string, {"Literal": Literal})  # noqa: S307
+            field_type = Literal[tuple(input_model.options)]
         if hasattr(input_model, "is_list") and input_model.is_list:
             field_type = list[field_type]  # type: ignore[valid-type]
         if input_model.name:
@@ -342,8 +377,14 @@ def create_input_schema_from_dict(inputs: list[dotdict], param_key: str | None =
         raise TypeError(msg)
     fields = {}
     for input_model in inputs:
+        if input_model.type == FieldTypes.CONNECTION_REF.value:
+            continue
         # Create a Pydantic Field for each input field
-        field_type = input_model.type
+        try:
+            field_type = _serialized_field_type_to_type[input_model.type]
+        except (KeyError, TypeError) as err:
+            msg = f"Unsupported serialized field type: {input_model.type!r}"
+            raise TypeError(msg) from err
         # Skip enum for large option lists to avoid token waste
         if (
             hasattr(input_model, "options")
@@ -351,8 +392,7 @@ def create_input_schema_from_dict(inputs: list[dotdict], param_key: str | None =
             and input_model.options
             and len(input_model.options) <= MAX_OPTIONS_FOR_TOOL_ENUM
         ):
-            literal_string = f"Literal{input_model.options}"
-            field_type = eval(literal_string, {"Literal": Literal})  # noqa: S307
+            field_type = Literal[tuple(input_model.options)]
         if hasattr(input_model, "is_list") and input_model.is_list:
             field_type = list[field_type]  # type: ignore[valid-type]
         if input_model.name:

@@ -10,8 +10,8 @@ from primeagent.services.database.models.deployment_provider_account.model impor
 from primeagent.services.database.models.deployment_provider_account.schemas import DeploymentProviderKey
 from primeagent.services.database.models.folder.model import Folder
 from primeagent.services.database.models.user.model import User
-from sqlalchemy.ext.asyncio import AsyncSession
 from wfx.services.adapters.deployment.schema import DeploymentType
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _seed_user_provider_and_projects(async_session: AsyncSession):
@@ -72,6 +72,7 @@ async def test_list_deployments_page_filters_by_project_id(async_session: AsyncS
     rows = await list_deployments_page(
         async_session,
         user_id=user.id,
+        row_owner_id=user.id,
         deployment_provider_account_id=provider_account.id,
         offset=0,
         limit=20,
@@ -112,12 +113,14 @@ async def test_count_deployments_by_provider_filters_by_project_id(async_session
     filtered_total = await count_deployments_by_provider(
         async_session,
         user_id=user.id,
+        row_owner_id=user.id,
         deployment_provider_account_id=provider_account.id,
         project_id=project_a.id,
     )
     unfiltered_total = await count_deployments_by_provider(
         async_session,
         user_id=user.id,
+        row_owner_id=user.id,
         deployment_provider_account_id=provider_account.id,
     )
 

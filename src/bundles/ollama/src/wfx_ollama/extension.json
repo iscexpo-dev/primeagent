@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-ollama",
+  "version": "0.2.0",
+  "name": "Ollama",
+  "description": "Ollama model components as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": [
+      "1"
+    ]
+  },
+  "bundles": [
+    {
+      "name": "ollama",
+      "path": "components/ollama"
+    }
+  ]
+}

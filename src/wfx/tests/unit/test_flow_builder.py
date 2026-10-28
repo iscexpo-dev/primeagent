@@ -5,6 +5,7 @@ no I/O, no network.
 """
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -123,6 +124,161 @@ def _fresh_flow(name="Test Flow"):
 # ---------------------------------------------------------------------------
 
 
+class TestConfigureValidation:
+    @pytest.fixture
+    def configured_flow(self):
+        registry = {
+            "Configurable": _make_template(
+                "Configurable",
+                template_fields={
+                    "_type": "CustomComponent",
+                    "operator": {"type": "str", "options": ["equals", "contains"], "value": "equals"},
+                    "temperature": {"type": "float", "range_spec": {"min": 0.0, "max": 1.0}, "value": 0.1},
+                    # Shipped default below its own range (Agent.max_tokens: 0 = no limit).
+                    "max_tokens": {"type": "int", "range_spec": {"min": 1, "max": 10}, "value": 0},
+                    "model": {"type": "model", "value": [], "options": []},
+                    "input_value": {"type": "str", "value": "EXISTING_GLOBAL", "load_from_db": True},
+                },
+            ),
+        }
+        flow = _fresh_flow()
+        component_id = add_component(flow, "Configurable", registry)["id"]
+        return flow, component_id
+
+    @pytest.mark.parametrize(
+        ("invalid_params", "message"),
+        [
+            ({"operator": "greater_than"}, "Expected one of"),
+            ({"temperature": -0.1}, "temperature"),
+            ({"temperature": 42.0}, "temperature"),
+            ({"temperature": 10**400}, "temperature"),
+            ({"temperature": "0.5"}, "Expected a number"),
+            ({"temperature": True}, "Expected a number"),
+            ({"temperature": float("nan")}, "temperature"),
+            ({"temperature": float("inf")}, "temperature"),
+            ({"max_tokens": 11}, "max_tokens"),
+            ({"not_a_field": "x"}, "Unknown parameter"),
+            ({"_type": "x"}, "reserved template entry"),
+        ],
+    )
+    def test_rejects_invalid_params_atomically(self, configured_flow, invalid_params, message):
+        flow, component_id = configured_flow
+        params = {"input_value": "literal", "model": '{"provider": "OpenAI", "name": "gpt-4o"}', **invalid_params}
+        before = deepcopy(flow)
+        original_model = params["model"]
+
+        with pytest.raises(ValueError, match=message):
+            configure_component(flow, component_id, params)
+
+        assert flow == before
+        assert params["model"] == original_model
+
+    @pytest.mark.parametrize("temperature", [0.0, 0.5, 1.0])
+    def test_accepts_valid_values_and_normalizes_model(self, configured_flow, temperature):
+        flow, component_id = configured_flow
+        params = {
+            "operator": "contains",
+            "temperature": temperature,
+            "input_value": "literal",
+            "model": '{"provider": "OpenAI", "name": "gpt-4o"}',
+        }
+        configure_component(flow, component_id, params)
+
+        fields = flow["data"]["nodes"][0]["data"]["node"]["template"]
+        assert fields["operator"]["value"] == "contains"
+        assert fields["temperature"]["value"] == temperature
+        assert fields["input_value"]["load_from_db"] is False
+        assert fields["model"]["value"] == params["model"] == [{"provider": "OpenAI", "name": "gpt-4o"}]
+
+    def test_accepts_current_value_even_outside_range(self, configured_flow):
+        flow, component_id = configured_flow
+        fields = flow["data"]["nodes"][0]["data"]["node"]["template"]
+        configure_component(flow, component_id, {"max_tokens": 0})
+        assert fields["max_tokens"]["value"] == 0
+        configure_component(flow, component_id, {"max_tokens": 5})
+        with pytest.raises(ValueError, match="max_tokens"):
+            configure_component(flow, component_id, {"max_tokens": 0})
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ({"type": "str", "options": ["known"], "value": "known", "combobox": True}, "custom"),
+            ({"type": "str", "options": ["a", "b"], "value": ["a"], "list": True}, ["a", "b"]),
+            ({"type": "str", "options": [], "value": ""}, "custom"),
+            ({"type": "str", "options": ["a"], "value": "a"}, None),
+            (
+                {"type": "duration", "options": ["Minutes", "Hours", "Days"], "value": {"unit": "Days", "value": 3}},
+                {"unit": "Hours", "value": 2},
+            ),
+            # Gate is by type: a structured value is accepted even after a scalar was written.
+            (
+                {"type": "duration", "options": ["Minutes", "Hours", "Days"], "value": "Hours"},
+                {"unit": "Hours", "value": 2},
+            ),
+            (
+                {"type": "sortableList", "options": [{"name": "Local"}, {"name": "AWS"}], "value": [{"name": "Local"}]},
+                [{"name": "AWS"}],
+            ),
+            ({"type": "tab", "options": ["JSON", "Table"], "value": "JSON"}, "Data"),
+            ({"type": "tab", "options": ["JSON", "Table"], "value": "JSON"}, "DataFrame"),
+            ({"type": "tab", "options": ["JSON", "Table"], "value": "JSON"}, ""),
+        ],
+    )
+    def test_preserves_option_compatibility(self, configured_flow, field, value):
+        flow, component_id = configured_flow
+        fields = flow["data"]["nodes"][0]["data"]["node"]["template"]
+        fields["choice"] = field
+        configure_component(flow, component_id, {"choice": value})
+        assert fields["choice"]["value"] == value
+
+    def test_rejects_invalid_list_selection(self, configured_flow):
+        flow, component_id = configured_flow
+        fields = flow["data"]["nodes"][0]["data"]["node"]["template"]
+        fields["choice"] = {"type": "str", "options": ["a", "b"], "value": ["a"], "list": True}
+        before = deepcopy(flow)
+        with pytest.raises(ValueError, match="Expected one of"):
+            configure_component(flow, component_id, {"choice": ["a", "invalid"]})
+        assert flow == before
+
+    def test_open_list_field_requires_a_list(self, configured_flow):
+        """Action-picker and multiselect fields ship options=[] but still take lists."""
+        flow, component_id = configured_flow
+        fields = flow["data"]["nodes"][0]["data"]["node"]["template"]
+        fields["decisions"] = {"type": "actionPicker", "options": [], "value": ["Approve"], "list": True}
+        configure_component(flow, component_id, {"decisions": ["Approve", "Reject"]})
+        assert fields["decisions"]["value"] == ["Approve", "Reject"]
+        with pytest.raises(ValueError, match="Expected a list"):
+            configure_component(flow, component_id, {"decisions": "Approve"})
+        # An already malformed scalar is not re-affirmed by the re-set shortcut.
+        fields["decisions"]["value"] = "Approve"
+        with pytest.raises(ValueError, match="Expected a list"):
+            configure_component(flow, component_id, {"decisions": "Approve"})
+
+    @pytest.mark.parametrize("combobox", [False, True])
+    def test_rejects_scalar_for_list_options(self, configured_flow, combobox):
+        flow, component_id = configured_flow
+        fields = flow["data"]["nodes"][0]["data"]["node"]["template"]
+        fields["choice"] = {
+            "type": "str",
+            "options": ["a", "b"],
+            "value": ["a"],
+            "list": True,
+            "combobox": combobox,
+        }
+        before = deepcopy(flow)
+        with pytest.raises(ValueError, match="Expected a list"):
+            configure_component(flow, component_id, {"choice": "a"})
+        assert flow == before
+
+    @pytest.mark.parametrize("node_data", [{}, {"node": {}}])
+    def test_unknown_field_does_not_create_template(self, node_data):
+        flow = {"data": {"nodes": [{"id": "test", "data": node_data}]}}
+        before = deepcopy(flow)
+        with pytest.raises(ValueError, match="Unknown parameter"):
+            configure_component(flow, "test", {"unknown": "value"})
+        assert flow == before
+
+
 class TestFlow:
     def test_empty_flow_structure(self):
         flow = empty_flow(name="My Flow", description="desc")
@@ -201,6 +357,18 @@ class TestComponent:
         configure_component(flow, r["id"], {"input_value": "Hello"})
         node = flow["data"]["nodes"][0]
         assert node["data"]["node"]["template"]["input_value"]["value"] == "Hello"
+
+    def test_configure_component_marks_explicit_value_as_literal(self):
+        flow = _fresh_flow()
+        r = add_component(flow, "ChatInput", REGISTRY)
+        field = flow["data"]["nodes"][0]["data"]["node"]["template"]["input_value"]
+        field["value"] = "EXISTING_GLOBAL"
+        field["load_from_db"] = True
+
+        configure_component(flow, r["id"], {"input_value": "Hello"})
+
+        assert field["value"] == "Hello"
+        assert field["load_from_db"] is False
 
     def test_configure_nonexistent_raises(self):
         flow = _fresh_flow()
@@ -475,14 +643,25 @@ TOOL_REGISTRY = {
             },
         },
     ),
-    # Component without any tool_mode input — should NOT auto-flip.
+    # Component without any tool_mode input — should NOT auto-flip, even though
+    # its output carries tool_mode=True (the serialized default: 89 of the 127
+    # bundled components have it, ChatInput included).
     "PlainOutput": _make_template(
         "Plain Output",
-        outputs=[{"name": "data", "types": ["Data"]}],
+        outputs=[{"name": "data", "types": ["Data"], "tool_mode": True}],
         template_fields={
             "value": {"type": "str", "show": True, "input_types": ["Message"]},
         },
     ),
+    # Mirrors RunFlow: no tool_mode input, but the class opts into a synthesized
+    # toolset output via add_tool_output — the other half of _handle_tool_mode.
+    "ExplicitToolOutput": {
+        "display_name": "Explicit Tool Output",
+        "base_classes": [],
+        "outputs": [{"name": "data", "types": ["Data"]}],
+        "template": {"value": {"type": "str", "show": True}},
+        "add_tool_output": True,
+    },
     # Agent target with a `tools` input that accepts Tool type.
     "Agent": _make_template(
         "Agent",
@@ -581,14 +760,86 @@ class TestConnectComponentAsTool:
 
         PlainOutput has no tool_mode=True input — connecting via
         component_as_tool is meaningless and must surface as a domain error,
-        not be silently auto-enabled.
+        not be silently auto-enabled. Its OUTPUT carries tool_mode=True, which
+        marks what a toolset would expose rather than whether one exists.
         """
         flow = _fresh_flow()
         source = add_component(flow, "PlainOutput", TOOL_REGISTRY)["id"]
         target = add_component(flow, "Agent", TOOL_REGISTRY)["id"]
 
-        with pytest.raises(ValueError, match=r"component_as_tool|tool_mode"):
+        with pytest.raises(ValueError, match=r"component_as_tool|tool mode"):
             add_connection(flow, source, "component_as_tool", target, "tools")
+
+        # The refusal must leave the node untouched — no dead tool mode behind it.
+        src_node = next(n for n in flow["data"]["nodes"] if n["data"]["id"] == source)
+        assert src_node["data"]["node"].get("tool_mode", False) is False
+        assert {o["name"] for o in src_node["data"]["node"]["outputs"]} == {"data"}
+        assert flow["data"]["edges"] == []
+
+    def test_should_auto_flip_when_source_declares_add_tool_output(self):
+        """RunFlow-shaped source: no tool_mode input, explicit add_tool_output."""
+        flow = _fresh_flow()
+        source = add_component(flow, "ExplicitToolOutput", TOOL_REGISTRY)["id"]
+        target = add_component(flow, "Agent", TOOL_REGISTRY)["id"]
+
+        add_connection(flow, source, "component_as_tool", target, "tools")
+
+        src_node = next(n for n in flow["data"]["nodes"] if n["data"]["id"] == source)
+        assert src_node["data"]["node"]["tool_mode"] is True
+        assert [o["name"] for o in src_node["data"]["node"]["outputs"]] == ["component_as_tool"]
+
+    def test_should_accept_stale_node_whose_capability_only_shows_in_the_registry(self):
+        """A tool-capable node saved before add_tool_output was serialized still connects.
+
+        ``add_tool_output`` only started being written into templates this
+        release, so every previously saved RunFlow node carries neither
+        capability signal — and RunFlow is the one bundled component that has no
+        ``tool_mode`` input to fall back on. Refusing those would break the exact
+        wiring RunFlow exists for, so the registry entry for the node's type is
+        consulted before giving up.
+        """
+        flow = _fresh_flow()
+        source = add_component(flow, "ExplicitToolOutput", TOOL_REGISTRY)["id"]
+        target = add_component(flow, "Agent", TOOL_REGISTRY)["id"]
+        src_node = next(n for n in flow["data"]["nodes"] if n["data"]["id"] == source)
+        # Age the node back to a pre-flag template.
+        src_node["data"]["node"].pop("add_tool_output", None)
+        assert src_node["data"]["type"] == "ExplicitToolOutput"
+
+        add_connection(flow, source, "component_as_tool", target, "tools", registry=TOOL_REGISTRY)
+
+        assert src_node["data"]["node"]["tool_mode"] is True
+        assert len(flow["data"]["edges"]) == 1
+
+    def test_should_still_reject_a_stale_node_that_is_not_tool_capable(self):
+        """The registry fallback widens the check to the live definition, not to everything."""
+        flow = _fresh_flow()
+        source = add_component(flow, "PlainOutput", TOOL_REGISTRY)["id"]
+        target = add_component(flow, "Agent", TOOL_REGISTRY)["id"]
+
+        with pytest.raises(ValueError, match=r"predates the capability flag"):
+            add_connection(flow, source, "component_as_tool", target, "tools", registry=TOOL_REGISTRY)
+
+        assert flow["data"]["edges"] == []
+
+    def test_should_reject_pre_flipped_node_without_tool_mode_capability(self):
+        """A node already carrying the toolset output is re-checked, not trusted.
+
+        Nodes in this shape exist because the guard used to accept output-side
+        tool_mode and flip anything. Trusting the flipped state would keep
+        building on a node whose component_as_tool output nothing can produce.
+        """
+        flow = _fresh_flow()
+        source = add_component(flow, "PlainOutput", TOOL_REGISTRY)["id"]
+        target = add_component(flow, "Agent", TOOL_REGISTRY)["id"]
+        src_node = next(n for n in flow["data"]["nodes"] if n["data"]["id"] == source)
+        src_node["data"]["node"]["tool_mode"] = True
+        src_node["data"]["node"]["outputs"] = [{"name": "component_as_tool", "types": ["Tool"]}]
+
+        with pytest.raises(ValueError, match=r"component_as_tool|tool mode"):
+            add_connection(flow, source, "component_as_tool", target, "tools")
+
+        assert flow["data"]["edges"] == []
 
     def test_should_not_touch_source_when_connecting_via_normal_output(self):
         """Non-tool edges must not flip tool_mode (regression guard)."""

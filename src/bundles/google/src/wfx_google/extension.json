@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-google",
+  "version": "0.3.5",
+  "name": "Google",
+  "description": "Google and Gemini components as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "google",
+      "path": "components/google"
+    }
+  ],
+  "integrations": [
+    {
+      "provider_id": "google",
+      "bundle": "google",
+      "path": "capabilities.v1.json"
+    }
+  ]
+}

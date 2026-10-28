@@ -1,6 +1,8 @@
 from wfx.inputs import (
     BoolInput,
     CodeInput,
+    ConnectionRefInput,
+    DataDisplayInput,
     DataFrameInput,
     DataInput,
     DBProviderInput,
@@ -35,7 +37,9 @@ from wfx.template import Output
 __all__ = [
     "BoolInput",
     "CodeInput",
+    "ConnectionRefInput",
     "DBProviderInput",
+    "DataDisplayInput",
     "DataFrameInput",
     "DataInput",
     "DefaultPromptField",

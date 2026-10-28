@@ -15,6 +15,12 @@ from tests.api_keys import has_api_key
 
 
 class TestFlowBuilderPrompt:
+    def test_should_use_declared_configuration_constraints(self):
+        assert "exact, case-sensitive values" in FLOW_BUILDER_PROMPT
+        assert "`combobox` allows free-text" in FLOW_BUILDER_PROMPT
+        assert "within `range_spec` bounds" in FLOW_BUILDER_PROMPT
+        assert "does not apply any of its parameter changes" in FLOW_BUILDER_PROMPT
+
     def test_should_mention_search_components_tool(self):
         assert "search_components" in FLOW_BUILDER_PROMPT
 
@@ -238,6 +244,45 @@ class TestFlowBuilderPromptLegacyComponents:
         )
 
 
+class TestFlowBuilderPromptLoopRecipe:
+    """The prompt's canonical loop spec must stay buildable against the LIVE registry.
+
+    loop_flow eval regression: the 0/3 failure came from a stale recipe — it
+    named legacy components (`ParseData`, `MessagetoData`) that
+    search_components hides, and did not cover the Message-consuming body
+    head (Agent), so `L.item -> A.input_value` failed on type mismatch and
+    the agent burned its recursion budget re-discovering components.
+    """
+
+    @staticmethod
+    def _canonical_loop_spec() -> str:
+        section = FLOW_BUILDER_PROMPT.split("## Loops and branching", 1)[1]
+        block = section.split("```", 2)
+        assert len(block) >= 3, "Loops section must contain a fenced canonical spec"
+        return "name: Loop Recipe\n" + block[1].strip()
+
+    def test_loop_recipe_must_not_use_legacy_components(self):
+        section = FLOW_BUILDER_PROMPT.split("## Loops and branching", 1)[1].split("## ", 1)[0]
+        assert "ParseData" not in section, "legacy component in the loop recipe (hidden from search_components)"
+        assert "MessagetoData" not in section, "legacy component in the loop recipe (hidden from search_components)"
+
+    def test_loop_recipe_spec_builds_against_live_registry(self):
+        from wfx.graph.flow_builder.builder import build_flow_from_spec
+
+        result = build_flow_from_spec(self._canonical_loop_spec())
+        assert "error" not in result, f"canonical loop recipe no longer builds: {result}"
+        edges = result["flow"]["data"]["edges"]
+        feedback = [
+            e for e in edges if "name" in e["data"]["targetHandle"] and "fieldName" not in e["data"]["targetHandle"]
+        ]
+        assert feedback, "canonical loop recipe must produce an output-shaped feedback edge"
+
+    def test_loop_recipe_covers_the_message_consuming_body_head(self):
+        section = FLOW_BUILDER_PROMPT.split("## Loops and branching", 1)[1].split("## ", 1)[0]
+        assert "ParserComponent" in section, "recipe must show how a Data item reaches a Message input"
+        assert "Agent" in section, "recipe must cover the loop-body-with-Agent request shape"
+
+
 class TestFlowBuilderPromptProposePlan:
     """propose_plan is OPTIONAL — used only for genuinely ambiguous or
     large/destructive whole-canvas replacements. Clear/specified requests
@@ -427,6 +472,18 @@ class TestFilesystemToolsInToolkit:
     files. The wrapper emits ``file_written`` only on successful writes.
     """
 
+    @pytest.fixture(autouse=True, params=[False, True], ids=["authenticated", "auto-login"])
+    def filesystem_user_context(self, request, monkeypatch):
+        from primeagent.agentic.services.user_components_context import current_user_id, set_current_user_id
+        from primeagent.services.deps import get_settings_service
+
+        # Requests bind a user before building tools, including when auto-login is enabled.
+        previous_user_id = current_user_id()
+        monkeypatch.setattr(get_settings_service().auth_settings, "AUTO_LOGIN", request.param)
+        set_current_user_id("filesystem-toolkit-test-user")
+        yield
+        set_current_user_id(previous_user_id)
+
     async def test_toolkit_should_include_filesystem_tools(self):
         from primeagent.agentic.flows.flow_builder_assistant import build_toolkit
 
@@ -486,11 +543,15 @@ class TestFilesystemToolsInToolkit:
         edit_tool = next(t for t in tools if t.name == "edit_file")
 
         # Arrange — write then drain the write event so only the edit event is observed.
-        write_tool.func(path="DOCS.md", content="hello world")
+        import json
+
+        result = json.loads(write_tool.func(path="DOCS.md", content="hello world"))
+        assert result.get("status") in {"created", "updated"}, result
         drain_file_events()
 
         # Act
-        edit_tool.func(path="DOCS.md", old_string="hello", new_string="hi")
+        result = json.loads(edit_tool.func(path="DOCS.md", old_string="hello", new_string="hi"))
+        assert result.get("status") == "ok", result
 
         # Assert
         events = drain_file_events()
@@ -506,7 +567,10 @@ class TestFilesystemToolsInToolkit:
 
         tools = await build_toolkit()
         write_tool = next(t for t in tools if t.name == "write_file")
-        write_tool.func(path="DOCS.md", content="x")
+        import json
+
+        result = json.loads(write_tool.func(path="DOCS.md", content="x"))
+        assert result.get("status") in {"created", "updated"}, result
 
         [event] = drain_file_events()
         path = event["path"]
@@ -543,10 +607,14 @@ class TestFilesystemToolsInToolkit:
         write_tool = next(t for t in tools if t.name == "write_file")
         read_tool = next(t for t in tools if t.name == "read_file")
 
-        write_tool.func(path="DOCS.md", content="content")
+        import json
+
+        result = json.loads(write_tool.func(path="DOCS.md", content="content"))
+        assert result.get("status") in {"created", "updated"}, result
         drain_file_events()  # discard write event
 
-        read_tool.func(path="DOCS.md")
+        result = json.loads(read_tool.func(path="DOCS.md"))
+        assert "content" in result, result
         assert drain_file_events() == []
 
 
@@ -573,6 +641,7 @@ class TestFlowBuilderPromptFilesystem:
     not has_api_key("OPENAI_API_KEY"),
     reason="OPENAI_API_KEY required for intent classification test",
 )
+@pytest.mark.api_key_required
 class TestIntentClassificationBuildFlow:
     """Test that the intent classifier correctly identifies build_flow requests.
 

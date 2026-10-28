@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from wfx.extension.errors import ExtensionError
+    from wfx.integrations import IntegrationCapabilityManifest
 
 # ---------------------------------------------------------------------------
 # Slot names
@@ -94,6 +95,19 @@ class LoadedComponent:
         return f"ext:{self.bundle}:{self.class_name}@{self.slot}"
 
 
+@dataclass(frozen=True)
+class LoadedIntegration:
+    """Validated provider capability metadata exposed by the extension loader."""
+
+    extension_id: str
+    extension_version: str
+    bundle: str
+    provider_id: str
+    manifest_path: Path
+    capability_manifest: IntegrationCapabilityManifest
+    distribution: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # LoadResult
 # ---------------------------------------------------------------------------
@@ -129,6 +143,7 @@ class LoadResult:
     """
 
     components: list[LoadedComponent] = field(default_factory=list)
+    integrations: list[LoadedIntegration] = field(default_factory=list)
     errors: list[ExtensionError] = field(default_factory=list)
     warnings: list[ExtensionError] = field(default_factory=list)
     extension_id: str | None = None
@@ -137,6 +152,12 @@ class LoadResult:
     slot: Literal["official", "extra"] | None = None
     source_path: Path | None = None
     distribution: str | None = None
+    # True when the bundle came from a manifest-less ``wfx.bundles``
+    # metapackage root.  Provenance flag (not derivable from the other
+    # fields): the reload pipeline uses it to refuse hot reload with a
+    # typed ``reload-manifestless-unsupported`` instead of routing the
+    # record through load_extension and failing manifest-not-found.
+    manifestless: bool = False
 
     @property
     def ok(self) -> bool:

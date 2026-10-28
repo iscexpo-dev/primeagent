@@ -49,7 +49,7 @@ export const usePatchInstallMCP: useMutationFunctionType<
 
   const mutation: UseMutationResult<
     PatchInstallMCPResponse,
-    any,
+    unknown,
     PatchInstallMCPBody
   > = mutate(["usePatchInstallMCP", params.project_id], patchInstallMCP, {
     ...options,

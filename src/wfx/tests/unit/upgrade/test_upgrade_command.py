@@ -4,9 +4,9 @@ import json
 
 import pytest
 import typer
-from typer.testing import CliRunner
 from wfx.__main__ import app
 from wfx.cli.upgrade import upgrade_command
+from typer.testing import CliRunner
 
 runner = CliRunner()
 

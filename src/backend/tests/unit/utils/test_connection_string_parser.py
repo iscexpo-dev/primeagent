@@ -1,20 +1,8 @@
-import pytest
-from primeagent.utils.connection_string_parser import transform_connection_string
+from primeagent.utils import connection_string_parser as primeagent_parser
+from wfx.utils import connection_string_parser as wfx_parser
 
 
-@pytest.mark.parametrize(
-    ("connection_string", "expected"),
-    [
-        ("protocol:user:password@host", "protocol:user:password@host"),
-        ("protocol:user@host", "protocol:user@host"),
-        ("protocol:user:pass@word@host", "protocol:user:pass%40word@host"),
-        ("protocol:user:pa:ss:word@host", "protocol:user:pa:ss:word@host"),
-        ("user:password@host", "user:password@host"),
-        ("protocol::password@host", "protocol::password@host"),
-        ("protocol:user:password@", "protocol:user:password@"),
-        ("protocol:user:pa@ss@word@host", "protocol:user:pa%40ss%40word@host"),
-    ],
-)
-def test_transform_connection_string(connection_string, expected):
-    result = transform_connection_string(connection_string)
-    assert result == expected
+def test_primeagent_reexports_wfx_helper():
+    """The primeagent module is a shim; behavior is tested in src/wfx/tests/unit/utils."""
+    assert primeagent_parser.transform_connection_string is wfx_parser.transform_connection_string
+    assert primeagent_parser.transform_connection_string("protocol:user:p/ss@host") == "protocol:user:p%2Fss@host"

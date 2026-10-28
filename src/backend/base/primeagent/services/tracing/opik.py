@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from typing_extensions import override
 from wfx.log.logger import logger
+from typing_extensions import override
 
 from primeagent.schema.data import Data
 from primeagent.schema.message import Message

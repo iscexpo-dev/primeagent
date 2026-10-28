@@ -3,6 +3,11 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID
 
+from wfx.base.knowledge_bases.backends.opensearch import opensearch_env_configured
+from wfx.base.knowledge_bases.backends.postgres import postgres_env_configured, resolve_default_kb_backend
+from wfx.graph.schema import RunOutputs
+from wfx.services.settings.base import Settings
+from wfx.services.settings.feature_flags import FEATURE_FLAGS, FeatureFlags
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -12,9 +17,6 @@ from pydantic import (
     field_validator,
     model_serializer,
 )
-from wfx.graph.schema import RunOutputs
-from wfx.services.settings.base import Settings
-from wfx.services.settings.feature_flags import FEATURE_FLAGS, FeatureFlags
 
 from primeagent.schema.dotdict import dotdict
 from primeagent.schema.graph import Tweaks
@@ -194,6 +196,12 @@ class CustomComponentRequest(BaseModel):
     code: str
     frontend_node: dict | None = None
 
+    def get_class_name(self) -> str | None:
+        """Read an optional class identity from the saved frontend template."""
+        metadata = (self.frontend_node or {}).get("metadata")
+        class_name = metadata.get("component_class_name") if isinstance(metadata, dict) else None
+        return class_name if isinstance(class_name, str) and class_name else None
+
 
 class CustomComponentResponse(BaseModel):
     data: dict
@@ -226,6 +234,15 @@ class ComponentListRead(BaseModel):
 class UsersResponse(BaseModel):
     total_count: int
     users: list[UserRead]
+    deletion_requests: dict[str, str] = Field(
+        default_factory=dict,
+        description="Status of each listed user's open account deletion request, keyed by user id.",
+    )
+
+
+class PasswordResetRequest(BaseModel):
+    current_password: str
+    password: str
 
 
 class ApiKeyResponse(BaseModel):
@@ -363,12 +380,7 @@ class SimplifiedAPIRequest(BaseModel):
     )
 
 
-# (alias) type ReactFlowJsonObject<NodeData = any, EdgeData = any> = {
-#     nodes: Node<NodeData>[];
-#     edges: Edge<EdgeData>[];
-#     viewport: Viewport;
-# }
-# import ReactFlowJsonObject
+# Mirrors the frontend's ReactFlowJsonObject shape: { nodes, edges, viewport }.
 class FlowDataRequest(BaseModel):
     nodes: list[dict]
     edges: list[dict]
@@ -388,16 +400,18 @@ class BaseConfigResponse(BaseModel):
     voice_mode_available: bool
     frontend_timeout: int
     mcp_base_url: str
-    # Mode A only: gates the palette Bundle-header Reload action.  Surfaced
-    # at runtime so the packaged frontend (built once with the env var
-    # default) can still light up the button when an operator turns the
-    # backend reload route on -- the build-time Vite flag gates first-paint,
-    # but ``wfx extension dev`` and ``--env-file PRIMEAGENT_ENABLE_EXTENSION_RELOAD=true``
-    # opt in after the build is frozen, so the UI consults this field too.
+    # Runtime mirror of PRIMEAGENT_ENABLE_EXTENSION_RELOAD: the packaged frontend is built
+    # before an operator can opt in, so the palette Reload button consults this field too.
     enable_extension_reload: bool
     # Mirrors ``PRIMEAGENT_AUTHZ_ENABLED``. EE/custom frontends gate the Access
     # Control settings entry on this flag; OSS UI ignores it until wired.
     authz_enabled: bool = False
+    # Signals that at least one component or template is governed without
+    # exposing the policy contents through the public config response.
+    catalog_governance_enabled: bool = False
+    # The editor uses the same policy as the build path when deciding whether
+    # drifted built-in components must block a run.
+    substitute_outdated_component_code: bool
 
 
 class PublicConfigResponse(BaseConfigResponse):
@@ -411,12 +425,19 @@ class PublicConfigResponse(BaseConfigResponse):
     allow_custom_components: bool
 
     @classmethod
-    def from_settings(cls, settings: Settings, auth_settings) -> "PublicConfigResponse":
+    def from_settings(
+        cls,
+        settings: Settings,
+        auth_settings,
+        *,
+        catalog_governance_enabled: bool = False,
+    ) -> "PublicConfigResponse":
         """Create a PublicConfigResponse instance using values from a Settings object.
 
         Parameters:
             settings (Settings): The Settings object containing configuration values.
             auth_settings: Auth settings (for ``authz_enabled``).
+            catalog_governance_enabled: Whether any catalog policy currently restricts resources.
 
         Returns:
             PublicConfigResponse: An instance populated with public-safe configuration values.
@@ -430,7 +451,9 @@ class PublicConfigResponse(BaseConfigResponse):
             mcp_base_url=settings.mcp_base_url,
             enable_extension_reload=settings.enable_extension_reload,
             allow_custom_components=settings.allow_custom_components,
+            substitute_outdated_component_code=settings.substitute_outdated_component_code,
             authz_enabled=bool(getattr(auth_settings, "AUTHZ_ENABLED", False)),
+            catalog_governance_enabled=catalog_governance_enabled,
         )
 
 
@@ -461,14 +484,55 @@ class ConfigResponse(BaseConfigResponse):
     hide_starter_projects: bool
     mcp_servers_locked: bool
     custom_component_admin_only: bool
+    # Whether the server serves the A2A surface at all (PRIMEAGENT_A2A_ENABLED, default off). The
+    # publish-as-agent UI reads this to explain, rather than 404, when A2A is disabled server-side.
+    a2a_enabled: bool = False
+    # Mirrors PRIMEAGENT_AGENTIC_EXPERIENCE (default on) so the Assistant panel
+    # can explain, rather than 404, when the experience is disabled server-side.
+    agentic_experience: bool = True
+    # Mirrors PRIMEAGENT_ASSISTANT_MAX_MESSAGE_LENGTH so the Assistant composer enforces the same
+    # cap the API does. A UI-only constant drifted below the API's and silently truncated long
+    # prompts before they were ever sent.
+    assistant_max_message_length: int = 2000
+    # True when local Chroma may back a knowledge base or memory base — i.e. on
+    # the dev profile. The production profile refuses it (vectors on the serving
+    # box's own disk don't survive a restart and can't be shared across
+    # replicas), so the vector-store picker hides the option rather than offering
+    # a choice the create endpoint always rejects with 422.
+    local_vector_store_available: bool = True
+    # The backend a new knowledge base or memory base lands on when the client
+    # names none (``resolve_default_kb_backend``): ``postgres`` when pgVector is
+    # provisioned via env, else ``opensearch`` when it is, else ``sqlite``. The UI
+    # defaults its provider picker to this instead of assuming pgVector, so an
+    # OpenSearch-only deployment never offers a backend that is not configured.
+    default_vector_store_backend: str = "sqlite"
+    # Only provider IDs are exposed. Connection values stay on the server.
+    configured_vector_store_backends: list[str] = Field(default_factory=list)
+    # The component types an administrator blocked, for authenticated callers
+    # only. ``catalog_governance_enabled`` says a policy exists somewhere; it
+    # cannot say which component in front of you it applies to, and a missing
+    # template is equally an uninstalled bundle, an imported flow or the
+    # caller's own component. The editor needs the identities to name a cause
+    # truthfully. It reveals nothing the palette does not: these are exactly
+    # the components already withheld from ``/all`` for this caller.
+    blocked_component_types: list[str] = []
 
     @classmethod
-    def from_settings(cls, settings: Settings, auth_settings) -> "ConfigResponse":
+    def from_settings(
+        cls,
+        settings: Settings,
+        auth_settings,
+        *,
+        catalog_governance_enabled: bool = False,
+        blocked_component_types: list[str] | None = None,
+    ) -> "ConfigResponse":
         """Create a ConfigResponse instance using values from a Settings object and AuthSettings.
 
         Parameters:
             settings (Settings): The Settings object containing configuration values.
             auth_settings: The AuthSettings object containing authentication configuration values.
+            catalog_governance_enabled: Whether any catalog policy currently restricts resources.
+            blocked_component_types: Component types this caller may not use.
 
         Returns:
             ConfigResponse: An instance populated with configuration and feature flag values.
@@ -495,7 +559,10 @@ class ConfigResponse(BaseConfigResponse):
             default_folder_name=DEFAULT_FOLDER_NAME,
             hide_getting_started_progress=settings.hide_getting_started_progress,
             allow_custom_components=settings.allow_custom_components,
+            substitute_outdated_component_code=settings.substitute_outdated_component_code,
             authz_enabled=bool(getattr(auth_settings, "AUTHZ_ENABLED", False)),
+            catalog_governance_enabled=catalog_governance_enabled,
+            blocked_component_types=sorted(blocked_component_types or []),
             embedded_mode=settings.embedded_mode,
             hide_logout_button=settings.hide_logout_button or settings.embedded_mode,
             hide_new_project_button=settings.hide_new_project_button or settings.embedded_mode,
@@ -503,6 +570,19 @@ class ConfigResponse(BaseConfigResponse):
             hide_starter_projects=settings.hide_starter_projects or settings.embedded_mode,
             mcp_servers_locked=settings.mcp_servers_locked,
             custom_component_admin_only=settings.custom_component_admin_only,
+            a2a_enabled=settings.a2a_enabled,
+            agentic_experience=settings.agentic_experience,
+            assistant_max_message_length=settings.assistant_max_message_length,
+            local_vector_store_available=settings.deployment_profile != "prod",
+            default_vector_store_backend=resolve_default_kb_backend(),
+            configured_vector_store_backends=[
+                backend
+                for backend, configured in (
+                    ("postgres", postgres_env_configured()),
+                    ("opensearch", opensearch_env_configured()),
+                )
+                if configured
+            ],
         )
 
 
@@ -560,6 +640,10 @@ class MCPProjectResponse(BaseModel):
 
     tools: list[MCPSettings]
     auth_settings: AuthSettings | None = None
+    # The MCP server name the backend derives for this project, which client installs use
+    # unless another project already holds it there. Sent so clients show it instead of
+    # deriving their own and disagreeing about non-Latin names.
+    server_name: str | None = None
 
 
 class ComposerUrlResponse(BaseModel):

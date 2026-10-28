@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-amazon",
+  "version": "0.2.2",
+  "name": "Amazon",
+  "description": "Amazon component(s) as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "amazon",
+      "path": "components/amazon"
+    }
+  ]
+}

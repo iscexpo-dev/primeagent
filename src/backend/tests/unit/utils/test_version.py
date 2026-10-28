@@ -57,11 +57,14 @@ class TestComputeNonPrereleaseVersion:
         result = _compute_non_prerelease_version(version)
         assert result == "1.0.0"
 
-    def test_compute_version_no_dot_before_keyword(self):
-        """Test computing version without dot before keyword."""
-        version = "1.0.0a1"
+    @pytest.mark.parametrize(
+        "version",
+        ["1.13.0a1", "1.13.0b2", "1.13.0rc0", "1.13.0", "1.13.0+local", "1.13.0.dev1+local"],
+    )
+    def test_compute_pep440_base_version(self, version):
+        """Preserve every release digit regardless of the suffix separator."""
         result = _compute_non_prerelease_version(version)
-        assert result == "1.0."
+        assert result == "1.13.0"
 
     def test_compute_version_complex_format(self):
         """Test computing version with complex format."""
@@ -72,6 +75,17 @@ class TestComputeNonPrereleaseVersion:
 
 class TestGetVersionInfo:
     """Test cases for _get_version_info function."""
+
+    @pytest.mark.parametrize("version", ["1.13.0rc0", "1.13.0+local", "1.13.0.dev1+local"])
+    @patch("primeagent.utils.version.metadata")
+    def test_get_version_info_preserves_full_version(self, mock_metadata, version):
+        mock_metadata.version.return_value = version
+
+        result = _get_version_info()
+
+        assert result["version"] == version
+        assert result["main_version"] == "1.13.0"
+        assert result["package"] == ("Primeagent Nightly" if ".dev" in version else "Primeagent")
 
     @patch("primeagent.utils.version.metadata")
     def test_get_version_info_primeagent_package(self, mock_metadata):
@@ -105,7 +119,7 @@ class TestGetVersionInfo:
         assert result["version"] == "1.0.0.dev123"
         assert result["main_version"] == "1.0.0"
         # A `.dev` version is labeled a nightly regardless of which package name resolved it.
-        assert result["package"] == "Primeagent Base Nightly"
+        assert result["package"] == "Primeagent Nightly"
 
     @patch("primeagent.utils.version.metadata")
     def test_get_version_info_nightly_package(self, mock_metadata):
@@ -149,7 +163,7 @@ class TestGetVersionInfo:
 
         assert result["version"] == "1.0.0.a1"
         assert result["main_version"] == "1.0.0"
-        assert result["package"] == "Primeagent Base Nightly"
+        assert result["package"] == "Primeagent Nightly"
 
     @patch("primeagent.utils.version.metadata")
     def test_get_version_info_canonical_dev_is_nightly(self, mock_metadata):

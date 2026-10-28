@@ -160,8 +160,11 @@ _WINDOWS_FORBIDDEN_CHARS = frozenset('<>"|?*')
 #   * literals — exact basename match (e.g. `.env`, `.netrc`)
 #   * prefixes — basename startswith (e.g. `id_rsa`, `id_rsa.pub`, `id_ed25519`)
 #   * suffixes — basename endswith (e.g. `cert.pem`, `private.key`)
-#   * fragments — any DIRECTORY component equals the fragment (e.g. `.ssh/`,
-#     `.aws/config`); the basename itself is not matched against fragments.
+#   * fragments — any path component equals the fragment, including the
+#     basename (e.g. `.ssh/`, `.aws/config`, or a bare `.ssh` request). Matching
+#     the basename too prevents requesting a protected directory directly (which
+#     would leak its existence) and stops a `**/*` glob from returning the
+#     protected directory entry itself even when its children are filtered.
 _DENY_BASENAME_LITERALS = frozenset({".env", ".netrc", ".pgpass", ".htpasswd", "authorized_keys"})
 _DENY_BASENAME_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials")
 _DENY_BASENAME_SUFFIXES = (".pem", ".key", ".pfx", ".p12")
@@ -174,6 +177,8 @@ def _check_deny_list(path: str) -> str | None:
         return None
     *directories, basename = parts
     folded = basename.casefold()
+    if folded in _DENY_PATH_FRAGMENTS:
+        return f"Access to {basename!r} is denied: name matches a protected directory"
     if (
         folded in _DENY_BASENAME_LITERALS
         or folded.startswith(_DENY_BASENAME_PREFIXES)
@@ -436,7 +441,7 @@ class FileSystemToolComponent(Component):
 
         auto_login = self._resolve_auto_login()
         user_id = self._resolve_user_id()
-        if auto_login:
+        if self._uses_shared_workspace():
             mode = "shared"
         elif user_id:
             mode = "isolated"
@@ -680,8 +685,14 @@ class FileSystemToolComponent(Component):
         pinned = _pinned_user_id_var.get()
         if pinned is not None:
             return pinned
-        candidates: list[object | None] = [getattr(self, "_user_id", None)]
         graph = getattr(self, "graph", None)
+        candidates: list[object | None] = []
+        # Serving-plane: an identified end user owns the files they write during their session, so
+        # their id wins the sandbox namespace over the executing service account. None on editor /
+        # anonymous / feature-off runs -> falls through to the SID exactly as before (strict BC).
+        if graph is not None:
+            candidates.append(getattr(graph, "end_user_id", None))
+        candidates.append(getattr(self, "_user_id", None))
         if graph is not None:
             candidates.append(getattr(graph, "user_id", None))
 
@@ -722,12 +733,31 @@ class FileSystemToolComponent(Component):
         except AttributeError:
             return True
 
+    def _uses_shared_workspace(self) -> bool:
+        """Keep standalone synthetic identities stable without relaxing user isolation."""
+        if getattr(self, "_force_isolation", False):
+            return False
+        if self._resolve_auto_login():
+            return True
+        graph = getattr(self, "graph", None)
+        principal = getattr(graph, "execution_principal", None)
+        generated_user = getattr(graph, "_headless_filesystem_user_id", None)
+        return bool(
+            generated_user
+            and principal is not None
+            and principal.kind == "headless_operator"
+            and principal.family == "wfx_headless"
+            and not getattr(graph, "end_user_id", None)
+            and generated_user == graph.user_id == self._resolve_user_id()
+        )
+
     def _validate_root(self) -> Path:
         """Resolve and authorize the effective sandbox root.
 
         Dispatch:
           - ``_force_isolation=True``    → <BASE>/users/<hash(user_id)>/<sub_path>
           - AUTO_LOGIN=True              → <BASE>/shared/<sub_path>
+          - standalone synthetic user    → <BASE>/shared/<sub_path>
           - AUTO_LOGIN=False + user_id   → <BASE>/users/<hash(user_id)>/<sub_path>
           - any mode with no user_id     → PermissionError (caught by callers)
 
@@ -746,7 +776,7 @@ class FileSystemToolComponent(Component):
                 raise PermissionError(msg)
             return self._isolated_user_root(config=config, user_id=user_id)
 
-        if self._resolve_auto_login():
+        if self._uses_shared_workspace():
             return self._shared_root(config=config)
 
         user_id = self._resolve_user_id()

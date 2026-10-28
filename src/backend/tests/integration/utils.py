@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import os
 import uuid
@@ -103,7 +104,7 @@ class JSONFlow:
 
 def download_flow_from_github(name: str, version: str) -> JSONFlow:
     response = requests.get(
-        f"https://raw.githubusercontent.com/khulnasoft/primeagent/v{version}/src/backend/base/primeagent/initial_setup/starter_projects/{name}.json",
+        f"https://raw.githubusercontent.com/khulnasoft-bot/primeagent/v{version}/src/backend/base/primeagent/initial_setup/starter_projects/{name}.json",
         timeout=10,
     )
     response.raise_for_status()
@@ -114,7 +115,7 @@ def download_flow_from_github(name: str, version: str) -> JSONFlow:
 def download_component_from_github(module: str, file_name: str, version: str) -> Component:
     version_string = f"v{version}" if version != "main" else version
     response = requests.get(
-        f"https://raw.githubusercontent.com/khulnasoft/primeagent/{version_string}/src/backend/base/primeagent/components/{module}/{file_name}.py",
+        f"https://raw.githubusercontent.com/khulnasoft-bot/primeagent/{version_string}/src/backend/base/primeagent/components/{module}/{file_name}.py",
         timeout=10,
     )
     response.raise_for_status()
@@ -129,7 +130,9 @@ async def run_json_flow(
 
 
 async def run_flow(graph: Graph, run_input: Any | None = None, session_id: str | None = None) -> dict[str, Any]:
-    graph.prepare()
+    # Source validation and parameter preparation are synchronous and can block
+    # the event loop on a cold or loaded runner.
+    await asyncio.to_thread(graph.prepare)
     graph_run_inputs = [InputValueRequest(input_value=run_input, type="chat")] if run_input else []
 
     flow_id = str(uuid.uuid4())
@@ -155,9 +158,11 @@ async def run_single_component(
     run_input: Any | None = None,
     session_id: str | None = None,
     input_type: str | None = "chat",
+    user_id: str | None = None,
+    flow_id: str | None = None,
 ) -> dict[str, Any]:
-    user_id = str(uuid.uuid4())
-    flow_id = str(uuid.uuid4())
+    user_id = user_id or str(uuid.uuid4())
+    flow_id = flow_id or str(uuid.uuid4())
     graph = Graph(user_id=user_id, flow_id=flow_id)
 
     def _add_component(clazz: type, inputs: dict | None = None) -> str:
@@ -179,7 +184,7 @@ async def run_single_component(
         return component_id
 
     component_id = _add_component(clazz, inputs)
-    graph.prepare()
+    await asyncio.to_thread(graph.prepare)
     graph_run_inputs = [InputValueRequest(input_value=run_input, type=input_type)] if run_input else []
 
     _, _ = await run_graph_internal(

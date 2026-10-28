@@ -1,28 +1,29 @@
 """Integration tests for the connector endpoints in their trimmed-down state.
 
 The catalog (``GET /knowledge_bases/connectors``) and dispatcher
-(``POST /{kb_name}/ingest/connector``) endpoints are kept as
-framework infrastructure even though only ``file_upload`` and
-``folder`` are registered in this phase. The cloud-connector
-sources (S3 / Google Drive / OneDrive / SharePoint) are stubbed
-out at the registry layer; the catalog must hide them and the
-dispatcher must reject them as 400 typos rather than 500s.
+(``POST /{kb_name}/ingest/connector``) endpoints publish the registered
+sources: ``folder`` plus the connection-backed ``google_drive``,
+``onedrive`` and ``sharepoint`` sources (``file_upload`` is registered but
+hidden because it has its own endpoint). The remaining cloud-connector
+source (S3) is stubbed out at the registry layer; the catalog must hide it
+and the dispatcher must reject it as a 400 typo rather than a 500.
 """
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from primeagent.api.utils import knowledge_base_service
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
 
 
-_STUBBED_SOURCE_TYPES = ("s3", "google_drive", "onedrive", "sharepoint")
+_STUBBED_SOURCE_TYPES = ("s3",)
+_CONNECTION_BACKED_SOURCE_TYPES = ("onedrive", "sharepoint")
 
 
 class TestConnectorCatalog:
@@ -38,6 +39,9 @@ class TestConnectorCatalog:
         assert "folder" in types
         assert "file_upload" not in types
 
+        # Google Drive runs on a managed connection and is offered.
+        assert "google_drive" in types
+
         # Stubbed cloud connectors must NOT appear in the catalog so
         # the UI picker doesn't surface a non-functional choice.
         for stubbed in _STUBBED_SOURCE_TYPES:
@@ -45,14 +49,31 @@ class TestConnectorCatalog:
                 f"{stubbed!r} is stubbed in this phase and must be hidden from the connector catalog"
             )
 
+        # The connection-backed Microsoft sources are registered and publish
+        # the provider and scopes a connection picker binds on.
+        by_type = {entry["source_type"]: entry for entry in entries}
+        for source_type in _CONNECTION_BACKED_SOURCE_TYPES:
+            assert source_type in types
+            entry = by_type[source_type]
+            assert entry["provider_key"] == "microsoft"
+            assert entry["required_scopes"] == ["Files.Read"]
+            assert entry["requires_credentials"] is True
+
+        drive = by_type["google_drive"]
+        assert drive["provider_key"] == "google"
+        assert drive["required_scopes"] == ["https://www.googleapis.com/auth/drive.file"]
+        assert drive["requires_credentials"] is True
+
+        # A variable-backed source publishes no provider to bind on.
+        assert by_type["folder"]["provider_key"] is None
+        assert by_type["folder"]["required_scopes"] == []
+
 
 class TestConnectorIngest:
-    @patch("primeagent.api.v1.knowledge_bases.KBAnalysisHelper.get_metadata")
     @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
     async def test_unknown_source_type_returns_400(
         self,
         mock_root,
-        mock_meta,
         client: AsyncClient,
         logged_in_headers,
         active_user,
@@ -61,20 +82,11 @@ class TestConnectorIngest:
         mock_root.return_value = tmp_path
         kb_dir = tmp_path / active_user.username / "connector_kb_bad"
         kb_dir.mkdir(parents=True)
-        (kb_dir / "embedding_metadata.json").write_text(
-            json.dumps(
-                {
-                    "id": "00000000-0000-0000-0000-000000000002",
-                    "embedding_provider": "OpenAI",
-                    "embedding_model": "x",
-                }
-            )
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_dir.name,
+            model_selection={"name": "x", "provider": "OpenAI"},
         )
-        mock_meta.return_value = {
-            "id": "00000000-0000-0000-0000-000000000002",
-            "embedding_provider": "OpenAI",
-            "embedding_model": "x",
-        }
 
         response = await client.post(
             "api/v1/knowledge_bases/connector_kb_bad/ingest/connector",
@@ -85,12 +97,10 @@ class TestConnectorIngest:
         assert "nonsense" in response.json()["detail"].lower()
 
     @pytest.mark.parametrize("source_type", _STUBBED_SOURCE_TYPES)
-    @patch("primeagent.api.v1.knowledge_bases.KBAnalysisHelper.get_metadata")
     @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
     async def test_stubbed_source_type_returns_400(
         self,
         mock_root,
-        mock_meta,
         source_type,
         client: AsyncClient,
         logged_in_headers,
@@ -105,20 +115,11 @@ class TestConnectorIngest:
         mock_root.return_value = tmp_path
         kb_dir = tmp_path / active_user.username / f"connector_kb_{source_type}"
         kb_dir.mkdir(parents=True)
-        (kb_dir / "embedding_metadata.json").write_text(
-            json.dumps(
-                {
-                    "id": "00000000-0000-0000-0000-000000000003",
-                    "embedding_provider": "OpenAI",
-                    "embedding_model": "x",
-                }
-            )
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_dir.name,
+            model_selection={"name": "x", "provider": "OpenAI"},
         )
-        mock_meta.return_value = {
-            "id": "00000000-0000-0000-0000-000000000003",
-            "embedding_provider": "OpenAI",
-            "embedding_model": "x",
-        }
 
         response = await client.post(
             f"api/v1/knowledge_bases/connector_kb_{source_type}/ingest/connector",
@@ -126,6 +127,78 @@ class TestConnectorIngest:
             json={"source_type": source_type, "source_config": {}},
         )
         assert response.status_code == 400
+
+    @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
+    async def test_google_drive_without_a_connection_returns_400(
+        self,
+        mock_root,
+        client: AsyncClient,
+        logged_in_headers,
+        active_user,
+        tmp_path,
+    ):
+        mock_root.return_value = tmp_path
+        kb_dir = tmp_path / active_user.username / "connector_kb_drive_no_connection"
+        kb_dir.mkdir(parents=True)
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_dir.name,
+            model_selection={"name": "x", "provider": "OpenAI"},
+        )
+
+        response = await client.post(
+            f"api/v1/knowledge_bases/{kb_dir.name}/ingest/connector",
+            headers=logged_in_headers,
+            json={"source_type": "google_drive", "source_config": {}},
+        )
+
+        assert response.status_code == 400
+        assert "managed Google connection" in response.json()["detail"]
+
+    @patch("primeagent.api.v1.knowledge_bases.get_task_service")
+    @patch("primeagent.api.v1.knowledge_bases.get_job_service")
+    @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
+    async def test_google_drive_unusable_connection_keeps_its_typed_error(
+        self,
+        mock_root,
+        mock_job_service,
+        mock_task_service,
+        client: AsyncClient,
+        logged_in_headers,
+        active_user,
+        tmp_path,
+    ):
+        """A resolution failure is the caller's to fix, so it must not collapse into a 500."""
+        from wfx.base.knowledge_bases.ingestion_sources import GoogleDriveSource
+        from wfx.integrations.errors import ConnectionNotAuthorizedError
+
+        mock_root.return_value = tmp_path
+        kb_dir = tmp_path / active_user.username / "connector_kb_drive_denied"
+        kb_dir.mkdir(parents=True)
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_dir.name,
+            model_selection={"name": "x", "provider": "OpenAI"},
+        )
+        js = AsyncMock()
+        mock_job_service.return_value = js
+        ts = AsyncMock()
+        mock_task_service.return_value = ts
+        denial = ConnectionNotAuthorizedError(provider="google", reason="non-interactive-opt-in-required")
+
+        with patch.object(GoogleDriveSource, "validate_config", AsyncMock(side_effect=denial)):
+            response = await client.post(
+                f"api/v1/knowledge_bases/{kb_dir.name}/ingest/connector",
+                headers=logged_in_headers,
+                json={"source_type": "google_drive", "source_config": {"connection": "google/work"}},
+            )
+
+        assert response.status_code == 403
+        detail = response.json()["detail"]
+        assert detail["error_code"] == "connection-not-authorized"
+        assert "allow_non_interactive" in detail["hint"]
+        js.create_job.assert_not_awaited()
+        ts.fire_and_forget_task.assert_not_awaited()
 
     async def test_rejects_unbounded_chunk_parameters(self, client: AsyncClient, logged_in_headers):
         response = await client.post(
@@ -142,17 +215,147 @@ class TestConnectorIngest:
         assert response.status_code == 422
         assert "chunk_size" in response.text
 
-
-class TestFolderIngest:
     @patch("primeagent.api.v1.knowledge_bases.get_task_service")
     @patch("primeagent.api.v1.knowledge_bases.get_job_service")
     @patch("primeagent.api.v1.knowledge_bases.get_settings_service")
-    @patch("primeagent.api.v1.knowledge_bases.KBAnalysisHelper.get_metadata")
+    @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
+    async def test_folder_connector_rejects_request_controlled_allowed_root(
+        self,
+        mock_root,
+        mock_settings_service,
+        mock_job_service,
+        mock_task_service,
+        client: AsyncClient,
+        logged_in_headers,
+        active_user,
+        tmp_path,
+    ):
+        configured_root = tmp_path / "configured"
+        configured_root.mkdir()
+        untrusted_root = tmp_path / "request-controlled"
+        untrusted_folder = untrusted_root / "docs"
+        untrusted_folder.mkdir(parents=True)
+
+        mock_settings_service.return_value = SimpleNamespace(
+            settings=SimpleNamespace(
+                kb_allowed_folder_roots=[str(configured_root)],
+                kb_folder_max_file_size_bytes=4096,
+            )
+        )
+        mock_root.return_value = tmp_path
+        kb_dir = tmp_path / active_user.username / "connector_kb_untrusted_root"
+        kb_dir.mkdir(parents=True)
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_dir.name,
+            model_selection={"name": "text-embedding-3-small", "provider": "OpenAI"},
+        )
+
+        js = AsyncMock()
+        js.create_job = AsyncMock()
+        js.execute_with_status = AsyncMock()
+        mock_job_service.return_value = js
+        ts = AsyncMock()
+        ts.fire_and_forget_task = AsyncMock()
+        mock_task_service.return_value = ts
+
+        response = await client.post(
+            "api/v1/knowledge_bases/connector_kb_untrusted_root/ingest/connector",
+            headers=logged_in_headers,
+            json={
+                "source_type": "folder",
+                "source_config": {
+                    "path": str(untrusted_folder),
+                    "allowed_roots": [str(untrusted_root)],
+                    "max_file_size_bytes": 2**63,
+                },
+            },
+        )
+
+        assert response.status_code == 400
+        assert "outside the configured allow-list" in response.json()["detail"]
+        js.create_job.assert_not_awaited()
+        ts.fire_and_forget_task.assert_not_awaited()
+
+    @patch("primeagent.api.v1.knowledge_bases.get_task_service")
+    @patch("primeagent.api.v1.knowledge_bases.get_job_service")
+    @patch("primeagent.api.v1.knowledge_bases.get_settings_service")
+    @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
+    async def test_folder_connector_uses_operator_security_settings(
+        self,
+        mock_root,
+        mock_settings_service,
+        mock_job_service,
+        mock_task_service,
+        client: AsyncClient,
+        logged_in_headers,
+        active_user,
+        tmp_path,
+    ):
+        configured_root = tmp_path / "configured"
+        configured_folder = configured_root / "docs"
+        configured_folder.mkdir(parents=True)
+        request_root = tmp_path / "request-controlled"
+        request_root.mkdir()
+
+        mock_settings_service.return_value = SimpleNamespace(
+            settings=SimpleNamespace(
+                kb_allowed_folder_roots=[str(configured_root)],
+                kb_folder_max_file_size_bytes=4096,
+            )
+        )
+        mock_root.return_value = tmp_path
+        kb_dir = tmp_path / active_user.username / "connector_kb_configured_root"
+        kb_dir.mkdir(parents=True)
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_dir.name,
+            model_selection={"name": "text-embedding-3-small", "provider": "OpenAI"},
+        )
+
+        js = AsyncMock()
+        js.create_job = AsyncMock()
+        js.execute_with_status = AsyncMock()
+        mock_job_service.return_value = js
+        ts = AsyncMock()
+        ts.fire_and_forget_task = AsyncMock()
+        mock_task_service.return_value = ts
+
+        response = await client.post(
+            "api/v1/knowledge_bases/connector_kb_configured_root/ingest/connector",
+            headers=logged_in_headers,
+            json={
+                "source_type": "folder",
+                "source_config": {
+                    "path": str(configured_folder),
+                    "allowed_roots": [str(request_root)],
+                    "max_file_size_bytes": 1,
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        fire_call = ts.fire_and_forget_task.await_args
+        assert fire_call is not None
+        passed_source = fire_call.kwargs["source"]
+        assert passed_source.source_config["allowed_roots"] == [str(configured_root)]
+        assert passed_source.source_config["max_file_size_bytes"] == 4096
+
+
+class TestFolderIngest:
+    def test_request_schema_does_not_expose_file_size_policy(self):
+        from primeagent.api.v1.knowledge_bases import IngestFolderRequest
+
+        properties = IngestFolderRequest.model_json_schema()["properties"]
+        assert "max_file_size_bytes" not in properties
+
+    @patch("primeagent.api.v1.knowledge_bases.get_task_service")
+    @patch("primeagent.api.v1.knowledge_bases.get_job_service")
+    @patch("primeagent.api.v1.knowledge_bases.get_settings_service")
     @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
     async def test_dispatches_folder_source_with_settings_allow_list(
         self,
         mock_root,
-        mock_meta,
         mock_settings_service,
         mock_job_service,
         mock_task_service,
@@ -167,16 +370,19 @@ class TestFolderIngest:
         (folder / "readme.md").write_text("hello")
 
         mock_settings_service.return_value = SimpleNamespace(
-            settings=SimpleNamespace(kb_allowed_folder_roots=[str(allowed_root)])
+            settings=SimpleNamespace(
+                kb_allowed_folder_roots=[str(allowed_root)],
+                kb_folder_max_file_size_bytes=4096,
+            )
         )
         mock_root.return_value = tmp_path
         kb_dir = tmp_path / active_user.username / "folder_kb"
         kb_dir.mkdir(parents=True)
-        mock_meta.return_value = {
-            "id": "00000000-0000-0000-0000-000000000004",
-            "embedding_provider": "OpenAI",
-            "embedding_model": "text-embedding-3-small",
-        }
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_dir.name,
+            model_selection={"name": "text-embedding-3-small", "provider": "OpenAI"},
+        )
 
         js = AsyncMock()
         js.create_job = AsyncMock()
@@ -189,7 +395,12 @@ class TestFolderIngest:
         response = await client.post(
             "api/v1/knowledge_bases/folder_kb/ingest/folder",
             headers=logged_in_headers,
-            json={"path": str(folder), "chunk_size": 500, "chunk_overlap": 100},
+            json={
+                "path": str(folder),
+                "max_file_size_bytes": 1,
+                "chunk_size": 500,
+                "chunk_overlap": 100,
+            },
         )
 
         assert response.status_code == 200
@@ -199,15 +410,14 @@ class TestFolderIngest:
         assert passed_source.source_type.value == "folder"
         assert passed_source.source_config["path"] == str(folder)
         assert passed_source.source_config["allowed_roots"] == [str(allowed_root)]
+        assert passed_source.source_config["max_file_size_bytes"] == 4096
 
     @patch("primeagent.api.v1.knowledge_bases.get_job_service")
     @patch("primeagent.api.v1.knowledge_bases.get_settings_service")
-    @patch("primeagent.api.v1.knowledge_bases.KBAnalysisHelper.get_metadata")
     @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
     async def test_rejects_folder_outside_settings_allow_list_before_job(
         self,
         mock_root,
-        mock_meta,
         mock_settings_service,
         mock_job_service,
         client: AsyncClient,
@@ -221,16 +431,19 @@ class TestFolderIngest:
         outside_folder.mkdir()
 
         mock_settings_service.return_value = SimpleNamespace(
-            settings=SimpleNamespace(kb_allowed_folder_roots=[str(allowed_root)])
+            settings=SimpleNamespace(
+                kb_allowed_folder_roots=[str(allowed_root)],
+                kb_folder_max_file_size_bytes=4096,
+            )
         )
         mock_root.return_value = tmp_path
         kb_dir = tmp_path / active_user.username / "folder_kb"
         kb_dir.mkdir(parents=True)
-        mock_meta.return_value = {
-            "id": "00000000-0000-0000-0000-000000000005",
-            "embedding_provider": "OpenAI",
-            "embedding_model": "text-embedding-3-small",
-        }
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_dir.name,
+            model_selection={"name": "text-embedding-3-small", "provider": "OpenAI"},
+        )
 
         response = await client.post(
             "api/v1/knowledge_bases/folder_kb/ingest/folder",
@@ -242,12 +455,10 @@ class TestFolderIngest:
         assert "outside the configured allow-list" in response.json()["detail"]
         mock_job_service.assert_not_called()
 
-    @patch("primeagent.api.v1.knowledge_bases.KBAnalysisHelper.get_metadata")
     @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
     async def test_folder_ingest_with_real_settings_returns_400_not_500(
         self,
         mock_root,
-        mock_meta,
         client: AsyncClient,
         logged_in_headers,
         active_user,
@@ -273,11 +484,11 @@ class TestFolderIngest:
         mock_root.return_value = tmp_path
         kb_dir = tmp_path / active_user.username / "folder_kb_real_settings"
         kb_dir.mkdir(parents=True)
-        mock_meta.return_value = {
-            "id": "00000000-0000-0000-0000-000000000006",
-            "embedding_provider": "OpenAI",
-            "embedding_model": "text-embedding-3-small",
-        }
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_dir.name,
+            model_selection={"name": "text-embedding-3-small", "provider": "OpenAI"},
+        )
 
         # ``tmp_path`` exists and is a directory, so validation advances past the
         # path checks to the allow-list gate (empty by default → actionable 400).
@@ -307,12 +518,10 @@ class TestFolderIngest:
         assert response.status_code == 422
         assert "chunk_size" in response.text
 
-    @patch("primeagent.api.v1.knowledge_bases.KBAnalysisHelper.get_metadata")
     @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
     async def test_folder_ingest_blocked_for_memory_base_kb(
         self,
         mock_root,
-        mock_meta,
         client: AsyncClient,
         logged_in_headers,
         active_user,
@@ -320,16 +529,18 @@ class TestFolderIngest:
     ):
         # Memory-Base-managed KBs must not be mutable through the
         # generic folder-ingest endpoint — they are owned by the
-        # Memory Base APIs.
+        # Memory Base APIs. The guard reads the ``source_types`` marker off the
+        # knowledge_base row (not an on-disk sidecar), so seed such a row.
+        from primeagent.api.utils import knowledge_base_service
+
         mock_root.return_value = tmp_path
-        kb_dir = tmp_path / active_user.username / "mb_kb"
-        kb_dir.mkdir(parents=True)
-        mock_meta.return_value = {
-            "id": "00000000-0000-0000-0000-0000000000aa",
-            "embedding_provider": "OpenAI",
-            "embedding_model": "text-embedding-3-small",
-            "source_types": ["memory"],
-        }
+        (tmp_path / active_user.username / "mb_kb").mkdir(parents=True)
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name="mb_kb",
+            model_selection={"name": "text-embedding-3-small", "provider": "OpenAI"},
+            source_types=["memory"],
+        )
 
         response = await client.post(
             "api/v1/knowledge_bases/mb_kb/ingest/folder",
@@ -340,27 +551,26 @@ class TestFolderIngest:
         assert response.status_code == 403
         assert "managed by a Memory Base" in response.json()["detail"]
 
-    @patch("primeagent.api.v1.knowledge_bases.KBAnalysisHelper.get_metadata")
     @patch("primeagent.api.v1.knowledge_bases.KBStorageHelper.get_root_path")
     async def test_connector_ingest_blocked_for_memory_base_kb(
         self,
         mock_root,
-        mock_meta,
         client: AsyncClient,
         logged_in_headers,
         active_user,
         tmp_path,
     ):
-        # Same guard for the generic connector dispatcher.
+        # Same guard for the generic connector dispatcher — driven off the row.
+        from primeagent.api.utils import knowledge_base_service
+
         mock_root.return_value = tmp_path
-        kb_dir = tmp_path / active_user.username / "mb_connector_kb"
-        kb_dir.mkdir(parents=True)
-        mock_meta.return_value = {
-            "id": "00000000-0000-0000-0000-0000000000bb",
-            "embedding_provider": "OpenAI",
-            "embedding_model": "text-embedding-3-small",
-            "source_types": ["memory"],
-        }
+        (tmp_path / active_user.username / "mb_connector_kb").mkdir(parents=True)
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name="mb_connector_kb",
+            model_selection={"name": "text-embedding-3-small", "provider": "OpenAI"},
+            source_types=["memory"],
+        )
 
         response = await client.post(
             "api/v1/knowledge_bases/mb_connector_kb/ingest/connector",

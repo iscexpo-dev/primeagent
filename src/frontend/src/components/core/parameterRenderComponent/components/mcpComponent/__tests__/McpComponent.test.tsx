@@ -2,10 +2,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import type { APIClassType } from "@/types/api";
+import { axe } from "@/utils/a11y-test";
 import McpComponent from "../index";
 
 const mockRefetchMCPServers = jest.fn();
 const mockMutateTemplate = jest.fn();
+const mockUpdateBuildStatus = jest.fn();
 const mockSetErrorData = jest.fn();
 const mockPostTemplateValue = { mutateAsync: jest.fn() };
 
@@ -50,12 +52,12 @@ jest.mock("@/stores/alertStore", () => ({
 
 jest.mock("@/stores/flowStore", () => {
   const mockFlowState = {
-    updateBuildStatus: jest.fn(),
+    updateBuildStatus: mockUpdateBuildStatus,
   };
   const useFlowStoreMock = jest.fn(
     (selector?: (state: typeof mockFlowState) => unknown) =>
       selector ? selector(mockFlowState) : mockFlowState,
-  ) as jest.Mock & { getState: () => typeof mockFlowState };
+  );
   useFlowStoreMock.getState = () => mockFlowState;
   return {
     __esModule: true,
@@ -112,12 +114,73 @@ describe("McpComponent", () => {
     );
   });
 
+  const defaultProps = () => ({
+    id: "mcp-server",
+    value: { name: "broken-server", config: {} },
+    disabled: false,
+    handleOnNewValue: jest.fn(),
+    editNode: false,
+    nodeId: "MCPTools-1",
+    nodeClass: {
+      template: { code: { value: "code" } },
+      tool_mode: false,
+    } as APIClassType,
+    handleNodeClass: jest.fn(),
+  });
+
+  it("should_have_no_axe_violations with a server error shown", async () => {
+    const { container } = render(<McpComponent {...defaultProps()} />);
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("should_have_no_axe_violations in the unsaved-config (clear/save) state", async () => {
+    const { container } = render(
+      <McpComponent
+        {...defaultProps()}
+        value={{ name: "", config: { command: "test" } }}
+      />,
+    );
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("names the save button when a pending server config is shown", () => {
+    render(
+      <McpComponent
+        {...defaultProps()}
+        value={{ name: "", config: { command: "test" } }}
+      />,
+    );
+
+    expect(screen.getByTestId("save-mcp-server-button")).toHaveAccessibleName(
+      "Save server",
+    );
+  });
+
+  it("names the server-select button by its current value, and the clear button distinctly", () => {
+    render(<McpComponent {...defaultProps()} />);
+    expect(screen.getByTestId("mcp-server-dropdown")).toHaveAccessibleName(
+      "broken-server",
+    );
+
+    render(
+      <McpComponent
+        {...defaultProps()}
+        value={{ name: "", config: { command: "test" } }}
+      />,
+    );
+    expect(
+      screen.getAllByTestId("mcp-server-dropdown")[1],
+    ).toHaveAccessibleName("Clear selected server");
+  });
+
   it("shows the MCP server error and refreshes the node on demand", async () => {
     const user = userEvent.setup();
     const nodeClass = {
       template: { code: { value: "code" } },
       tool_mode: false,
-    } as unknown as APIClassType;
+    } as APIClassType;
 
     render(
       <McpComponent

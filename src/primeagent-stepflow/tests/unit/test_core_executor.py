@@ -161,7 +161,7 @@ class TestCoreExecutorWithRealComponent:
         import importlib
 
         try:
-            module = importlib.import_module("primeagent.components.prompts.prompt")
+            module = importlib.import_module("prime.khulnasoft.components.prompts.prompt")
             component_class = module.PromptComponent
 
             # Verify we can instantiate
@@ -169,9 +169,9 @@ class TestCoreExecutorWithRealComponent:
             assert instance is not None
             assert hasattr(instance, "build_prompt")
         except ModuleNotFoundError:
-            # primeagent.components.prompts may not be available in all environments
+            # prime.khulnasoft.components.prompts may not be available in all environments
             # Skip test if not available
-            pytest.skip("primeagent.components.prompts not available")
+            pytest.skip("prime.khulnasoft.components.prompts not available")
 
     @pytest.mark.asyncio
     async def test_import_chat_input_component(self, executor, mock_context):

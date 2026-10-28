@@ -4,7 +4,9 @@ import { addLegacyComponents } from "../../utils/add-legacy-components";
 import { adjustScreenView } from "../../utils/adjust-screen-view";
 import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
 import { TEXTS } from "../../utils/constants/texts";
+import { openFlowCard } from "../../utils/flow/open-flow-card";
 import { renameFlow } from "../../utils/rename-flow";
+import { waitForFlowSave } from "../../utils/wait-for-flow-save";
 
 async function verifyTextareaValue(
   page: Page,
@@ -14,11 +16,14 @@ async function verifyTextareaValue(
   await page
     .getByTestId("textarea_str_input_value")
     .waitFor({ state: "visible" });
+  const saved = waitForFlowSave(page);
   await page.getByTestId("textarea_str_input_value").fill(value);
 
   await expect(page.getByTestId("textarea_str_input_value")).toHaveValue(value);
 
-  await page.waitForTimeout(500);
+  // Autosave is debounced well past any fixed sleep this test could take, so
+  // leaving the node before the write lands would discard the value.
+  await saved;
 
   await page.getByTestId("icon-ChevronLeft").first().click();
 
@@ -28,7 +33,7 @@ async function verifyTextareaValue(
   });
 
   await page.waitForTimeout(500);
-  await page.getByText(flowName).first().click();
+  await openFlowCard(page, flowName);
 
   await page.waitForSelector('[data-testid="textarea_str_input_value"]', {
     timeout: 5000,

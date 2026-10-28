@@ -5,11 +5,7 @@ from packaging import version as pkg_version
 
 
 def _compute_non_prerelease_version(prerelease_version: str) -> str:
-    prerelease_keywords = ["a", "b", "rc", "dev", "post"]
-    for keyword in prerelease_keywords:
-        if keyword in prerelease_version:
-            return prerelease_version.split(keyword)[0][:-1]
-    return prerelease_version
+    return pkg_version.Version(prerelease_version).base_version
 
 
 def _get_version_info():
@@ -25,9 +21,9 @@ def _get_version_info():
     """
     package_options = [
         ("primeagent", "Primeagent"),
-        ("primeagent-base", "Primeagent Base"),
+        ("primeagent-base", "Primeagent"),
         ("primeagent-nightly", "Primeagent Nightly"),
-        ("primeagent-base-nightly", "Primeagent Base Nightly"),
+        ("primeagent-base-nightly", "Primeagent Nightly"),
     ]
     __version__ = None
     for pkg_name, display_name in package_options:

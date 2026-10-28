@@ -1,6 +1,9 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+pytest.importorskip("wfx_bundles")
+
 from wfx.components.xai.xai import XAIModelComponent
 from wfx.custom.custom_component.component import Component
 from wfx.custom.utils import build_custom_component_template
@@ -37,6 +40,12 @@ class TestXAIComponent(ComponentTestBaseWithoutClient):
     @pytest.fixture
     def file_names_mapping(self):
         return []
+
+    @pytest.fixture
+    def skipped_outputs(self):
+        return {
+            "text_output": "sends the prompt to a live LLM",
+        }
 
     def test_initialization(self, component_class):
         component = component_class()

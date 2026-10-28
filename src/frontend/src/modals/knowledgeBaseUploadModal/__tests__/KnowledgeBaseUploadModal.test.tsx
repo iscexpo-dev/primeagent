@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { BrowserRouter } from "react-router-dom";
+import type { EnabledModelsResponse } from "@/controllers/API/queries/models/use-get-enabled-models";
+import { useUtilityStore } from "@/stores/utilityStore";
 
 // ── Mocks (must precede component imports) ──────────────────────────────────
 
@@ -85,8 +87,36 @@ const MODEL_PROVIDERS = [
   },
 ];
 
+let mockModelProvidersResult: Record<string, unknown>;
+type MockEnabledModelsResult = {
+  data: EnabledModelsResponse;
+  isLoading: boolean;
+  isFetching: boolean;
+  isError: boolean;
+  isSuccess: boolean;
+  fetchStatus: "idle" | "fetching" | "paused";
+};
+let mockEnabledModelsResult: MockEnabledModelsResult;
+let mockGlobalVariablesResult: Record<string, unknown>;
+const mockUseGetModelProviders = jest.fn();
+const mockUseGetEnabledModels = jest.fn();
+
 jest.mock("@/controllers/API/queries/models/use-get-model-providers", () => ({
-  useGetModelProviders: () => ({ data: MODEL_PROVIDERS, isLoading: false }),
+  useGetModelProviders: (...args: unknown[]) => {
+    mockUseGetModelProviders(...args);
+    return mockModelProvidersResult;
+  },
+}));
+
+jest.mock("@/controllers/API/queries/models/use-get-enabled-models", () => ({
+  useGetEnabledModels: (...args: unknown[]) => {
+    mockUseGetEnabledModels(...args);
+    return mockEnabledModelsResult;
+  },
+}));
+
+jest.mock("@/controllers/API/queries/variables", () => ({
+  useGetGlobalVariables: () => mockGlobalVariablesResult,
 }));
 
 const mockSetSuccessData = jest.fn();
@@ -176,8 +206,53 @@ const fillRequiredFields = async (
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("KnowledgeBaseUploadModal", () => {
+  beforeAll(() => {
+    HTMLElement.prototype.scrollIntoView = jest.fn();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
+    useUtilityStore.getState().setVectorStoreConfig({
+      localVectorStoreAvailable: true,
+      defaultVectorStoreBackend: undefined,
+      configuredVectorStoreBackends: [],
+    });
+    mockModelProvidersResult = {
+      data: MODEL_PROVIDERS,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isSuccess: true,
+      fetchStatus: "idle",
+    };
+    mockEnabledModelsResult = {
+      data: {
+        enabled_models: {
+          OpenAI: {
+            "text-embedding-3-small": true,
+            "text-embedding-3-large": true,
+            "gpt-4": true,
+          },
+          HuggingFace: {
+            "sentence-transformers/all-MiniLM-L6-v2": true,
+          },
+        },
+      },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isSuccess: true,
+      fetchStatus: "idle",
+    };
+    mockGlobalVariablesResult = {
+      data: [],
+      isFetched: true,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      isSuccess: true,
+      fetchStatus: "idle",
+    };
     mockMutateAsync.mockResolvedValue({ id: "test_kb", name: "test_kb" });
     mockApiPost.mockResolvedValue({ data: { files: [] } });
   });
@@ -215,12 +290,14 @@ describe("KnowledgeBaseUploadModal", () => {
       expect(screen.getByText("Embedding Model")).toBeInTheDocument();
     });
 
-    it("renders DB Provider selector defaulting to Chroma", () => {
+    it("renders DB Provider selector defaulting to SQLite", () => {
       render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
         wrapper: createWrapper(),
       });
       expect(screen.getByText("DB Provider")).toBeInTheDocument();
-      expect(screen.getByTestId("kb-db-provider")).toHaveTextContent("Chroma");
+      expect(screen.getByTestId("kb-db-provider")).toHaveTextContent(
+        "SQLite Local",
+      );
     });
 
     it("renders Ingest Content section open by default", () => {
@@ -240,34 +317,12 @@ describe("KnowledgeBaseUploadModal", () => {
       render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
         wrapper: createWrapper(),
       });
-      expect(screen.getByText("DB Provider")).toBeInTheDocument();
-      expect(screen.getByTestId("kb-db-provider")).toHaveTextContent("Chroma");
-    });
-
-    it("renders Ingest Content section open by default", () => {
-      // Section heading + add-button labels are now driven by i18n keys
-      // (knowledge.configureSources / knowledge.addSources) but the English
-      // copy is intentionally kept as "Ingest Content" / "Add Files".
-      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
-        wrapper: createWrapper(),
-      });
-      expect(screen.getByText(/Ingest Content/i)).toBeInTheDocument();
       expect(
-        screen.getByRole("button", { name: /Add Files/i }),
-      ).toBeInTheDocument();
-    });
-
-    it("toggles the advanced configuration from the footer", async () => {
-      const user = userEvent.setup();
-      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
-        wrapper: createWrapper(),
-      });
-      await user.click(
-        screen.getByRole("button", { name: /Hide Configuration/i }),
-      );
+        screen.queryByRole("button", { name: /Hide Configuration/i }),
+      ).not.toBeInTheDocument();
       expect(
-        screen.getByRole("button", { name: /^Ingest Content$/i }),
-      ).toBeInTheDocument();
+        screen.queryByRole("button", { name: /^Ingest Content$/i }),
+      ).not.toBeInTheDocument();
     });
 
     it("disables chunking inputs until at least one source is added", async () => {
@@ -315,6 +370,18 @@ describe("KnowledgeBaseUploadModal", () => {
   // ── Embedding Model Filtering ──────────────────────────────────────────────
 
   describe("Embedding Model Filtering", () => {
+    it("requests the global provider catalog for runtime use", () => {
+      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
+        wrapper: createWrapper(),
+      });
+
+      expect(mockUseGetModelProviders).toHaveBeenCalledWith({
+        includeDeprecated: true,
+        purpose: "use",
+      });
+      expect(mockUseGetEnabledModels).toHaveBeenCalledWith({ purpose: "use" });
+    });
+
     it("includes only embeddings-type models in the select options", () => {
       render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
         wrapper: createWrapper(),
@@ -348,6 +415,123 @@ describe("KnowledgeBaseUploadModal", () => {
       ).map((o) => (o as HTMLOptionElement).value);
 
       expect(optionValues).not.toContain("disabled-embedding");
+    });
+
+    it("excludes a model disabled in the latest global enabled-model catalog", () => {
+      mockEnabledModelsResult = {
+        ...mockEnabledModelsResult,
+        data: {
+          enabled_models: {
+            OpenAI: {
+              "text-embedding-3-small": true,
+              "text-embedding-3-large": false,
+            },
+          },
+        },
+      };
+      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
+        wrapper: createWrapper(),
+      });
+
+      const optionValues = Array.from(
+        screen.getByTestId("embedding-model-select").querySelectorAll("option"),
+      ).map((o) => (o as HTMLOptionElement).value);
+      expect(optionValues).toContain("text-embedding-3-small");
+      expect(optionValues).not.toContain("text-embedding-3-large");
+      expect(optionValues).not.toContain(
+        "sentence-transformers/all-MiniLM-L6-v2",
+      );
+    });
+
+    it("does not leak same-name LLM authorization into embedding options", () => {
+      mockModelProvidersResult = {
+        ...mockModelProvidersResult,
+        data: [
+          {
+            provider: "OpenAI",
+            is_enabled: true,
+            icon: "OpenAI",
+            models: [
+              { model_name: "shared", metadata: { model_type: "llm" } },
+              {
+                model_name: "shared",
+                metadata: { model_type: "embeddings" },
+              },
+            ],
+          },
+        ],
+      };
+      mockEnabledModelsResult = {
+        ...mockEnabledModelsResult,
+        data: {
+          enabled_models: { OpenAI: { shared: true } },
+          enabled_models_by_type: {
+            OpenAI: {
+              llm: { shared: true },
+              embeddings: { shared: false },
+            },
+          },
+        },
+      };
+      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
+        wrapper: createWrapper(),
+      });
+
+      const optionValues = Array.from(
+        screen.getByTestId("embedding-model-select").querySelectorAll("option"),
+      ).map((o) => (o as HTMLOptionElement).value);
+      expect(optionValues).not.toContain("shared");
+    });
+
+    it("masks stale options and disables progression during a global policy refresh", async () => {
+      const user = userEvent.setup();
+      const view = render(
+        <KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />,
+        { wrapper: createWrapper() },
+      );
+      await fillRequiredFields(user);
+
+      mockModelProvidersResult = {
+        ...mockModelProvidersResult,
+        isFetching: true,
+      };
+      view.rerender(
+        <KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />,
+      );
+
+      expect(
+        screen.getByTestId("embedding-model-select").querySelectorAll("option"),
+      ).toHaveLength(1);
+      expect(screen.getByRole("button", { name: /Next Step/i })).toBeDisabled();
+    });
+
+    it("fails closed when global DB-provider variables cannot be refreshed", async () => {
+      mockGlobalVariablesResult = {
+        ...mockGlobalVariablesResult,
+        isError: true,
+        isSuccess: false,
+      };
+      const user = userEvent.setup();
+      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
+        wrapper: createWrapper(),
+      });
+      await fillRequiredFields(user);
+
+      expect(screen.getByRole("button", { name: /Next Step/i })).toBeDisabled();
+    });
+
+    it("fails closed when global DB-provider variables are paused", async () => {
+      mockGlobalVariablesResult = {
+        ...mockGlobalVariablesResult,
+        fetchStatus: "paused",
+      };
+      const user = userEvent.setup();
+      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
+        wrapper: createWrapper(),
+      });
+      await fillRequiredFields(user);
+
+      expect(screen.getByRole("button", { name: /Next Step/i })).toBeDisabled();
     });
   });
 
@@ -481,13 +665,44 @@ describe("KnowledgeBaseUploadModal", () => {
           column_config: [
             { column_name: "text", vectorize: true, identifier: true },
           ],
-          // Phase 4 backend picker defaults: new KBs land on the
-          // local Chroma store until the user picks a different one.
-          backend_type: "chroma",
+          backend_type: "sqlite",
           backend_config: {},
         }),
       );
     });
+
+    it.each([
+      ["postgres", "Postgres pgVector"],
+      ["opensearch", "OpenSearch"],
+    ])(
+      "submits SQLite when selected instead of the server's %s default",
+      async (defaultBackend, defaultLabel) => {
+        useUtilityStore.getState().setVectorStoreConfig({
+          localVectorStoreAvailable: true,
+          defaultVectorStoreBackend: defaultBackend,
+        });
+        const user = userEvent.setup();
+        render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
+          wrapper: createWrapper(),
+        });
+        expect(screen.getByTestId("kb-db-provider")).toHaveTextContent(
+          defaultLabel,
+        );
+        await user.click(screen.getByTestId("kb-db-provider"));
+        await user.click(screen.getByRole("option", { name: /SQLite Local/ }));
+        await advanceToReview(user);
+        expect(screen.getByText("SQLite Local")).toBeInTheDocument();
+        await user.click(screen.getByTestId("kb-create-button"));
+        await waitFor(() =>
+          expect(mockMutateAsync).toHaveBeenCalledWith(
+            expect.objectContaining({
+              backend_type: "sqlite",
+              backend_config: {},
+            }),
+          ),
+        );
+      },
+    );
 
     it("calls setSuccessData with the knowledge base name after creation", async () => {
       const user = userEvent.setup();
@@ -844,6 +1059,34 @@ describe("KnowledgeBaseUploadModal", () => {
         expect(screen.getByText("Hello from chunk one")).toBeInTheDocument(),
       );
     });
+
+    it("disables the create button when chunk preview fails", async () => {
+      const user = userEvent.setup();
+      // The backend rejects e.g. chunk_overlap > chunk_size with a 422; the
+      // create button must grey out so the rejected config can't be submitted.
+      mockApiPost.mockRejectedValue({
+        response: {
+          data: {
+            detail:
+              "Chunk overlap (200) can't be larger than chunk size (100).",
+          },
+        },
+      });
+      render(<KnowledgeBaseUploadModal open={true} setOpen={jest.fn()} />, {
+        wrapper: createWrapper(),
+      });
+      const fileInput = document.getElementById(
+        "file-input",
+      ) as HTMLInputElement;
+      await user.upload(
+        fileInput,
+        new File(["hello world"], "test.txt", { type: "text/plain" }),
+      );
+      await navigateToStep2(user);
+      await waitFor(() =>
+        expect(screen.getByTestId("kb-create-button")).toBeDisabled(),
+      );
+    });
   });
 
   // ── Add Sources Mode ───────────────────────────────────────────────────────
@@ -854,6 +1097,44 @@ describe("KnowledgeBaseUploadModal", () => {
       embeddingModel: "text-embedding-3-small",
       embeddingProvider: "OpenAI",
     };
+
+    it.each(["ui4 test", "Customer #1?"])(
+      "preserves the stored name %s when adding files",
+      async (name) => {
+        const user = userEvent.setup();
+        const onSubmit = jest.fn();
+        render(
+          <KnowledgeBaseUploadModal
+            open={true}
+            setOpen={jest.fn()}
+            onSubmit={onSubmit}
+            existingKnowledgeBase={{ ...existingKB, name }}
+          />,
+          { wrapper: createWrapper() },
+        );
+        const file = new File(["content"], "notes.txt", {
+          type: "text/plain",
+        });
+        await user.upload(
+          document.getElementById("file-input") as HTMLInputElement,
+          file,
+        );
+        await user.click(screen.getByRole("button", { name: /Next Step/i }));
+        await user.click(await screen.findByTestId("kb-create-button"));
+
+        await waitFor(() =>
+          expect(mockApiPost).toHaveBeenCalledWith(
+            `/api/v1/knowledge_bases/${encodeURIComponent(name)}/ingest`,
+            expect.any(FormData),
+            expect.any(Object),
+          ),
+        );
+        expect(mockMutateAsync).not.toHaveBeenCalled();
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ sourceName: name, dirName: name }),
+        );
+      },
+    );
 
     it("disables the name input", async () => {
       render(
@@ -934,6 +1215,181 @@ describe("KnowledgeBaseUploadModal", () => {
         expect(screen.getByTestId("kb-create-button")).toHaveTextContent(
           "Add Files",
         ),
+      );
+    });
+
+    it("disables add-sources submission when the global model policy refresh fails", async () => {
+      mockEnabledModelsResult = {
+        ...mockEnabledModelsResult,
+        isError: true,
+        isSuccess: false,
+      };
+      render(
+        <KnowledgeBaseUploadModal
+          open={true}
+          setOpen={jest.fn()}
+          existingKnowledgeBase={existingKB}
+          hideAdvanced={true}
+        />,
+        { wrapper: createWrapper() },
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId("kb-create-button")).toBeDisabled(),
+      );
+    });
+
+    it.each([undefined, "Unknown"])(
+      "recovers an existing model when the legacy provider is %s",
+      async (embeddingProvider) => {
+        render(
+          <KnowledgeBaseUploadModal
+            open={true}
+            setOpen={jest.fn()}
+            existingKnowledgeBase={{
+              name: existingKB.name,
+              embeddingModel: existingKB.embeddingModel,
+              embeddingProvider,
+            }}
+            hideAdvanced={true}
+          />,
+          { wrapper: createWrapper() },
+        );
+
+        await waitFor(() =>
+          expect(screen.getByTestId("kb-create-button")).toBeEnabled(),
+        );
+        expect(screen.getByText(existingKB.embeddingModel)).toBeInTheDocument();
+      },
+    );
+
+    it("does not replace a known but unavailable provider with another provider", async () => {
+      render(
+        <KnowledgeBaseUploadModal
+          open={true}
+          setOpen={jest.fn()}
+          existingKnowledgeBase={{
+            ...existingKB,
+            embeddingProvider: "Unavailable Provider",
+          }}
+          hideAdvanced={true}
+        />,
+        { wrapper: createWrapper() },
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId("kb-create-button")).toBeDisabled(),
+      );
+    });
+
+    it("fails closed when an unknown legacy provider has ambiguous model matches", async () => {
+      mockModelProvidersResult = {
+        ...mockModelProvidersResult,
+        data: [
+          ...MODEL_PROVIDERS,
+          {
+            provider: "Azure AI Foundry",
+            is_enabled: true,
+            icon: "Azure",
+            models: [
+              {
+                model_name: existingKB.embeddingModel,
+                metadata: { model_type: "embeddings" },
+              },
+            ],
+          },
+        ],
+      };
+      mockEnabledModelsResult = {
+        ...mockEnabledModelsResult,
+        data: {
+          ...mockEnabledModelsResult.data,
+          enabled_models: {
+            ...mockEnabledModelsResult.data.enabled_models,
+            "Azure AI Foundry": {
+              [existingKB.embeddingModel]: true,
+            },
+          },
+        },
+      };
+
+      render(
+        <KnowledgeBaseUploadModal
+          open={true}
+          setOpen={jest.fn()}
+          existingKnowledgeBase={{
+            ...existingKB,
+            embeddingProvider: "Unknown",
+          }}
+          hideAdvanced={true}
+        />,
+        { wrapper: createWrapper() },
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId("kb-create-button")).toBeDisabled(),
+      );
+    });
+
+    it("clears a recovered legacy model when a policy refresh makes it ambiguous", async () => {
+      const legacyKnowledgeBase = {
+        ...existingKB,
+        embeddingProvider: "Unknown",
+      };
+      const { rerender } = render(
+        <KnowledgeBaseUploadModal
+          open={true}
+          setOpen={jest.fn()}
+          existingKnowledgeBase={legacyKnowledgeBase}
+          hideAdvanced={true}
+        />,
+        { wrapper: createWrapper() },
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId("kb-create-button")).toBeEnabled(),
+      );
+
+      mockModelProvidersResult = {
+        ...mockModelProvidersResult,
+        data: [
+          ...MODEL_PROVIDERS,
+          {
+            provider: "Azure AI Foundry",
+            is_enabled: true,
+            icon: "Azure",
+            models: [
+              {
+                model_name: existingKB.embeddingModel,
+                metadata: { model_type: "embeddings" },
+              },
+            ],
+          },
+        ],
+      };
+      mockEnabledModelsResult = {
+        ...mockEnabledModelsResult,
+        data: {
+          ...mockEnabledModelsResult.data,
+          enabled_models: {
+            ...mockEnabledModelsResult.data.enabled_models,
+            "Azure AI Foundry": {
+              [existingKB.embeddingModel]: true,
+            },
+          },
+        },
+      };
+      rerender(
+        <KnowledgeBaseUploadModal
+          open={true}
+          setOpen={jest.fn()}
+          existingKnowledgeBase={legacyKnowledgeBase}
+          hideAdvanced={true}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId("kb-create-button")).toBeDisabled(),
       );
     });
   });

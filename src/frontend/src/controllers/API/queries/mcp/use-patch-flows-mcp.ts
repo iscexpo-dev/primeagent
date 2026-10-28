@@ -42,7 +42,7 @@ export const usePatchFlowsMCP: useMutationFunctionType<
 
   const mutation: UseMutationResult<
     PatchFlowMCPResponse,
-    any,
+    unknown,
     PatchFlowMCPRequest
   > = mutate(["usePatchFlowsMCP", params.project_id], patchFlowMCP, {
     onSuccess: (data, variables, onMutateResult, context) => {

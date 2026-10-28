@@ -25,6 +25,7 @@ from wfx.utils.flow_requirements import generate_requirements_from_flow
 
 from primeagent.services.adapters.deployment.watsonx_orchestrate.constants import ErrorPrefix
 from primeagent.services.adapters.deployment.watsonx_orchestrate.core.retry import retry_create
+from primeagent.services.adapters.deployment.watsonx_orchestrate.eligibility import get_wxo_flow_eligibility_error
 from primeagent.services.adapters.deployment.watsonx_orchestrate.payloads import (
     WatsonxFlowArtifactProviderData,
     WatsonxToolRefBinding,
@@ -119,10 +120,7 @@ def verify_primeagent_owned(tool: dict[str, Any], *, tool_id: str) -> None:
     """
     binding = tool.get("binding")
     if not isinstance(binding, dict) or "primeagent" not in binding:
-        msg = (
-            f"Cannot modify tool '{tool_id}': it does not have a Primeagent binding"
-            " and may not be managed by Primeagent."
-        )
+        msg = f"Cannot modify tool '{tool_id}': it does not have a Primeagent binding and may not be managed by Primeagent."
         raise InvalidContentError(message=msg)
 
 
@@ -288,6 +286,10 @@ def create_wxo_flow_tool(
     technical_tool_name = flow_provider_data.tool_name
     flow_id = flow_definition["id"]
     flow_name = flow_definition["name"]
+    eligibility_error = get_wxo_flow_eligibility_error(flow_definition.get("data"))
+    if eligibility_error:
+        msg = f"Flow '{flow_name}' cannot be deployed as a Watsonx Orchestrate tool. {eligibility_error}"
+        raise InvalidContentError(message=msg)
     logger.debug(
         "create_wxo_flow_tool",
         primeagent_flow_name=flow_name,

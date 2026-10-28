@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-confluent",
+  "version": "0.2.0",
+  "name": "IBM Confluent",
+  "description": "IBM Confluent components (Kafka producer/consumer, Tableflow Iceberg reader, Real-Time Context Engine MCP tools) as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "confluent",
+      "path": "components/confluent"
+    }
+  ]
+}

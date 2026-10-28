@@ -1,8 +1,8 @@
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlmodel import select
 from wfx.services.deps import session_scope_readonly
+from sqlmodel import select
 
 from primeagent.services.database.models.flow.model import Flow
 from primeagent.services.database.models.user.model import User, UserRead

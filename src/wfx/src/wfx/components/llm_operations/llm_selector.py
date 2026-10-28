@@ -332,8 +332,7 @@ If no model seems suitable, pick the first model in the list (index 0) as a fall
 
                 model_specs_for_judge.append({"index": i, "primeagent_name": primeagent_model_name, "specs": spec_dict})
                 self.log(
-                    f"Prepared specs for Primeagent model {i}"
-                    f" ('{primeagent_model_name}'): {spec_dict.get('name', 'N/A')}"
+                    f"Prepared specs for Primeagent model {i} ('{primeagent_model_name}'): {spec_dict.get('name', 'N/A')}"
                 )
 
             estimated_tokens = len(self.input_value.split()) * 1.3

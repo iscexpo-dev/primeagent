@@ -4,7 +4,7 @@ The Primeagent Executor (WFX) is a command-line tool that serves and runs flows 
 
 Running a flow with WFX is similar to running flows with the `--backend-only` environment variable enabled, but even more lightweight because the Primeagent package and all of its dependencies don't need to be installed.
 
-WFX uses a no-op database interface called [`NoopSession`](https://github.com/khulnasoft/primeagent/blob/main/src/wfx/src/wfx/services/session.py) for all operations that require persistent state.
+WFX uses a no-op database interface called [`NoopSession`](https://github.com/khulnasoft-bot/primeagent/blob/main/src/wfx/src/wfx/services/session.py) for all operations that require persistent state.
 There is no `primeagent.db` database file when using WFX.
 You can run flows with the API, but any stateful operations that depend on the Primeagent database, like saving flows, storing messages, or managing users **will not** persist data.
 Operations that depend on `primeagent.db` will not work as they do in the full Primeagent application.
@@ -43,7 +43,7 @@ If the `primeagent` package is installed in the same Python environment as `wfx`
 - Create or download a flow JSON file. For example, download the Simple Agent flow from the repository:
 
   ```bash
-  curl -o simple-agent-flow.json "https://raw.githubusercontent.com/khulnasoft/primeagent/main/src/backend/base/primeagent/initial_setup/starter_projects/Simple%20Agent.json"
+  curl -o simple-agent-flow.json "https://raw.githubusercontent.com/khulnasoft-bot/primeagent/main/src/backend/base/primeagent/initial_setup/starter_projects/Simple%20Agent.json"
   ```
 
 - Create an [OpenAI API key](https://platform.openai.com/api-keys).
@@ -58,7 +58,7 @@ WFX can be installed in multiple ways. If you have installed Primeagent OSS vers
 1. Clone the Primeagent repository:
 
    ```bash
-   git clone https://github.com/khulnasoft/primeagent
+   git clone https://github.com/khulnasoft-bot/primeagent
    ```
 
 2. Change directory to `primeagent/src/wfx`:
@@ -435,9 +435,13 @@ uv run wfx serve my-flow.json --upgrade-flow=safe
 | `--no-env-fallback` / `--env-fallback` | Disable process-environment fallback for credential resolution. Use with per-request `PRIMEAGENT_REQUEST_VARIABLES`. Default: `--env-fallback`. |
 | `--port`, `-p` | Port to bind the server to. Default: `8000`. |
 | `--stdin` | Read JSON flow content from `stdin`. Example: `cat flow.json | uv run wfx serve --stdin`. |
+| `--max-requests` | Recycle each worker after N requests to bound memory (gunicorn, Unix, `--workers > 1`). Default: every ~1000 (10% jitter); `0` disables; `1` = every request. Worker hygiene, **not** per-request isolation. Not applied on Windows. |
+| `--reset-environ` / `--no-reset-environ` | Snapshot/restore `os.environ` around each flow run so one request's env mutations or request-scoped credentials can't leak into the next on a warm worker. **A strict per-request isolation mechanism** (any worker, any platform). Default: `--no-reset-environ` (off). |
+| `--use-sync-workers` / `--use-async-workers` | Multi-worker only (`--workers > 1`, Unix). gunicorn's blocking `sync` worker serves one request at a time per worker, so the kernel routes each to an idle worker. With `--max-requests 1` it is **the other strict per-request isolation mechanism** (each request gets a fresh process). Uses the `a2wsgi` bridge, which ships with wfx on Unix. Default: `--use-async-workers`. |
+| `--timeout` | Worker timeout in seconds (gunicorn, Unix, `--workers > 1`): a worker that doesn't finish a request in this many seconds is killed and restarted. Raise it for long flows, especially with `--use-sync-workers`. Default: `120`. No effect on Windows. |
 | `--upgrade-flow` | Compatibility mode: `check` reports issues and fails, `safe` applies safe upgrades in memory. |
 | `--verbose`, `-v` | Show diagnostic output and execution details. |
-| `--workers`, `-w` | Number of uvicorn worker processes. Default: `1`. Use with `--flow-dir` for multi-worker flow sharing. |
+| `--workers`, `-w` | Number of worker processes. Use with `--flow-dir` for multi-worker flow sharing. Default: `1`. |
 
 ## Run the simple agent flow with `wfx run`
 
@@ -597,6 +601,18 @@ Install dependencies and set your OpenAI API key, then run:
 ```bash
 uv run wfx run simple_agent.py "How are you?" --verbose
 ```
+
+### Human-in-the-loop with `wfx run`
+
+When a flow contains a pausing node (such as **Human Input**) and the terminal is interactive, `wfx run` automatically pauses at each decision point and prompts on the terminal; the run then continues down the chosen branch. Use `--human-input` / `--no-human-input` to force the behavior either way.
+
+CLI HITL is **interactive-session only**:
+
+- Checkpoints are held **in memory** — if the process exits while paused, the run is lost.
+- There is **no durable resume**: a paused run cannot be resumed later, from another terminal, or after a restart (no `--resume <id>`).
+- A **non-interactive** run (piped stdin, CI, or `--no-human-input`) does **not** pause: the pausing node is passed through and the run continues; the CLI prints a warning so this is never silent.
+
+For durable pause/resume that survives restarts, run the flow through the Primeagent server's v2 workflows API instead.
 
 ## wfx-mcp
 

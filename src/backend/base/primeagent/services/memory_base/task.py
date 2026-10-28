@@ -3,17 +3,19 @@
 Design principles enforced here:
 - Cursor atomicity: cursor_id is NEVER updated before ingestion confirms success.
 - Retry safety: If a job fails, cursor_id remains at the last known good position.
-- Serialization: A per-(memory_base_id, session_id) distributed lock prevents concurrent
-  jobs from racing to write the same messages into Chroma. Uses PostgreSQL advisory locks
-  for cross-worker safety, with an in-process asyncio.Lock fallback for SQLite (dev/test).
-  The lock is acquired before any DB or Chroma access and released in a finally block.
+- Serialization: The KB storage fence spans validated message reads, vector writes,
+  and tracking commits. Preprocessing runs outside it and revalidates its snapshot.
+  A per-session ingestion lock also coordinates duplicate ingestion jobs.
 - Live cursor: After acquiring the lock, the current cursor_id is re-read from the DB
   (not the dispatch-time snapshot) so the pending message fetch always starts from the
   true latest position, even if a prior job advanced the cursor while this job waited.
-- Path safety: kb_path is validated against kb_root before any filesystem operation.
+- Path safety: SQLite storage uses the authoritative owner UUID, KB UUID, and generation.
+  Remote stores require no local vector directory.
 
-The actual Chroma write logic is shared with KB file ingestion via
-``KBIngestionHelper.write_documents_to_chroma`` — no duplicate batching/retry code here.
+The write goes through whichever backend the KB is configured with, resolved from the
+``knowledge_base`` row. SQLite, OpenSearch, and pgVector use the same guarded interface. The
+batching/retry logic is shared with KB file ingestion via
+``KBIngestionHelper.write_documents_to_backend`` — no duplicate code here.
 
 Document building and KB metadata sync live in ``document_builders.py``.
 """
@@ -22,19 +24,24 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import types
+import json
 import weakref
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from langchain_chroma import Chroma
+from wfx.log.logger import logger
+from wfx.workflow.end_user_identity import end_user_id_from_scoped_session
 from sqlalchemy import text
 from sqlmodel import Session, col, select
-from wfx.base.vectorstores.chroma_security import chroma_langchain_collection_kwargs
-from wfx.log.logger import logger
 
-from primeagent.api.utils.kb_helpers import KBIngestionHelper, KBStorageHelper
+from primeagent.api.utils.kb_helpers import (
+    KBIngestionHelper,
+    backend_for_name,
+    resolve_backend_selection,
+    resolve_local_store_path,
+)
 from primeagent.services.database.models.memory_base.model import (
     MemoryBasePreprocessingOutput,
     MemoryBaseSession,
@@ -42,17 +49,25 @@ from primeagent.services.database.models.memory_base.model import (
 )
 from primeagent.services.database.models.message.model import MessageTable
 from primeagent.services.deps import get_settings_service, session_scope
+from primeagent.services.knowledge_base_storage.runtime import StorageUnavailableError, operation, resolve_record
 from primeagent.services.memory_base.document_builders import (
     build_documents_from_messages,
     build_preprocessed_document,
-    sync_kb_metadata,
+    sync_kb_stats_to_record,
 )
-from primeagent.services.memory_base.kb_path_helpers import hash_session_id, validate_kb_path
+from primeagent.services.memory_base.kb_path_helpers import hash_session_id
 from primeagent.services.memory_base.preprocessing import DEFAULT_KILL_PHRASE, run_preprocessing
+from primeagent.services.memory_base.provider_scope import (
+    MemoryProviderPolicies,
+    preflight_memory_provider_use,
+    resolve_memory_provider_scope,
+)
+from primeagent.services.model_provider_policy_scope import scoped_model_provider_policy_for_flow
 
 if TYPE_CHECKING:
     import uuid
-    from pathlib import Path
+
+    from wfx.services.model_provider_policy import ModelProviderPolicySnapshot
 
     from primeagent.services.jobs.service import JobService
 
@@ -70,7 +85,8 @@ class IngestionRequest:
     flow_id: uuid.UUID
     kb_name: str
     kb_username: str
-    user_id: uuid.UUID
+    owner_user_id: uuid.UUID
+    actor_user_id: uuid.UUID
     embedding_provider: str
     embedding_model: str
     cursor_id: uuid.UUID | None
@@ -184,13 +200,99 @@ async def _read_live_cursor(db: Session, memory_base_id: uuid.UUID, session_id: 
     return result.first()
 
 
+async def _read_live_session_id(db: Session, memory_base_id: uuid.UUID, session_id: str) -> uuid.UUID | None:
+    """Read the tracking identity to detect a session purged and recreated during preprocessing."""
+    result = await db.exec(
+        select(MemoryBaseSession.id)
+        .where(MemoryBaseSession.memory_base_id == memory_base_id)
+        .where(MemoryBaseSession.session_id == session_id)
+    )
+    return result.first()
+
+
 async def ingest_memory_task(*, request: IngestionRequest) -> dict:
+    """Re-resolve and bind trusted provider scope before distributed ingestion."""
+    async with session_scope() as db:
+        provider_scope = await resolve_memory_provider_scope(
+            db,
+            memory_base_id=request.memory_base_id,
+            owner_user_id=request.owner_user_id,
+            actor_user_id=request.actor_user_id,
+        )
+
+    provider_policies = await preflight_memory_provider_use(
+        provider_scope,
+        embedding_provider=request.embedding_provider,
+        preprocessing=request.preprocessing,
+        preproc_model=request.preproc_model,
+    )
+    with scoped_model_provider_policy_for_flow(
+        provider_scope.flow,
+        user_id=request.actor_user_id,
+        is_superuser=provider_scope.is_superuser,
+    ):
+        record = await resolve_record(request.owner_user_id, provider_scope.memory_base.kb_name)
+        async with operation(record, shared=True):
+            pass
+        return await _ingest_memory_task_in_scope(
+            request=request, provider_policies=provider_policies, storage_record=record
+        )
+
+
+async def _build_embeddings_for_owner(
+    *,
+    provider: str,
+    model: str,
+    owner_user_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    provider_policy: ModelProviderPolicySnapshot,
+):
+    """Build with owner variables while preserving the actor's scoped decision."""
+    if owner_user_id == actor_user_id:
+        user_stub = type("MemoryCredentialOwner", (), {"id": owner_user_id})()
+        return await KBIngestionHelper.build_embeddings(provider, model, user_stub)
+
+    from wfx.base.models.unified_models import get_embeddings
+    from wfx.base.models.unified_models.class_registry import (
+        EMBEDDING_PARAM_MAPPINGS,
+        EMBEDDING_PROVIDER_CLASS_MAPPING,
+    )
+
+    embedding_class = EMBEDDING_PROVIDER_CLASS_MAPPING.get(provider)
+    param_mapping = EMBEDDING_PARAM_MAPPINGS.get(provider)
+    if not embedding_class or not param_mapping:
+        msg = f"Embedding provider '{provider}' is not registered"
+        raise ValueError(msg)
+    selected_option = {
+        "name": model,
+        "provider": provider,
+        "category": provider,
+        "icon": provider,
+        "metadata": {
+            "embedding_class": embedding_class,
+            "param_mapping": param_mapping,
+            "model_type": "embeddings",
+        },
+    }
+    return get_embeddings(
+        model=[selected_option],
+        user_id=owner_user_id,
+        provider_policy=provider_policy,
+    )
+
+
+async def _ingest_memory_task_in_scope(
+    *,
+    request: IngestionRequest,
+    provider_policies: MemoryProviderPolicies,
+    storage_record=None,
+) -> dict:
     """Ingest pending output messages from a session into the target Knowledge Base.
 
     Accepts a single ``IngestionRequest`` dataclass that bundles all required parameters.
 
     Serialization: acquires a per-(memory_base_id, session_id) distributed lock before
-    any DB or Chroma access.  Uses PostgreSQL advisory locks for cross-worker
+    any message or vector-store access.  Uses PostgreSQL advisory locks for cross-worker
     serialization (multi-worker safe) with an in-process asyncio.Lock fallback for
     SQLite.  Concurrent jobs for the same session wait up to max_ingestion_timeout_secs;
     if the lock cannot be acquired in time, asyncio.TimeoutError is re-raised so
@@ -205,7 +307,8 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
     flow_id = request.flow_id
     kb_name = request.kb_name
     kb_username = request.kb_username
-    user_id = request.user_id
+    owner_user_id = request.owner_user_id
+    actor_user_id = request.actor_user_id
     embedding_provider = request.embedding_provider
     embedding_model = request.embedding_model
     cursor_id = request.cursor_id
@@ -216,6 +319,11 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
     preproc_instructions = request.preproc_instructions
     preproc_kill_phrase = request.preproc_kill_phrase or DEFAULT_KILL_PHRASE
 
+    # Serving plane: recover the end-user id from the scoped session id (the one identity
+    # signal every ingestion path carries — live run, regenerate, manual trigger — since a
+    # graph is not available here). None off / editor / anonymous, so nothing is stamped.
+    end_user_id = end_user_id_from_scoped_session(session_id)
+
     hashed_sid = hash_session_id(session_id)
     await logger.adebug(
         "Ingestion job started | memory_base=%s session=%s dispatch_cursor=%s job=%s",
@@ -224,18 +332,13 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
         cursor_id,
         task_job_id,
     )
-    kb_root = KBStorageHelper.get_root_path()
-    if not kb_root:
-        msg = "Knowledge base root path is not configured"
-        raise RuntimeError(msg)
-
-    kb_path: Path = kb_root / kb_username / kb_name
-
-    # ---- Path traversal guard ----
-    validate_kb_path(kb_root, kb_path)
+    # The on-disk path is resolved later, once the backend is known — a Memory Base
+    # on a remote vector store needs no local directory, so requiring one up front
+    # would fail an ingestion that has no business touching this box's filesystem.
 
     # ---- 0. Acquire per-session serialization lock ----
     async with session_scope() as db:
+        storage_stack = AsyncExitStack()
         try:
             lock_handle = await _acquire_session_lock(db, memory_base_id, session_id)
         except asyncio.TimeoutError:
@@ -248,8 +351,13 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
             raise
 
         try:
+            if storage_record is None:
+                storage_record = await resolve_record(owner_user_id, kb_name)
+            async with operation(storage_record, shared=True):
+                pass
             # ---- 0b. Re-read live cursor inside the lock ----
             live_cursor_id = await _read_live_cursor(db, memory_base_id, session_id)
+            live_session_id = await _read_live_session_id(db, memory_base_id, session_id)
             await logger.adebug(
                 "Ingestion lock acquired | memory_base=%s session=%s live_cursor=%s job=%s",
                 memory_base_id,
@@ -271,6 +379,36 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
                 )
                 return {"message": "No pending messages", "ingested": 0}
 
+            async def validate_source_snapshot() -> None:
+                """Refuse writes derived from messages purged or changed during a provider call."""
+                async with operation(storage_record), session_scope() as fresh:
+                    current_session_id = await _read_live_session_id(fresh, memory_base_id, session_id)
+                    current_cursor = await _read_live_cursor(fresh, memory_base_id, session_id)
+                    current_messages = await _fetch_pending_messages(
+                        fresh, flow_id=flow_id, session_id=session_id, cursor_id=current_cursor
+                    )
+                # Compare only the fields that define what gets embedded, not the whole
+                # row. A just-produced output message is still being finalized when
+                # ingestion is dispatched: the flow writes token ``usage``, flips
+                # ``properties.state`` to "complete" and may restamp presentation
+                # metadata after the row first appears. None of that changes the text
+                # the documents were built from, so diffing ``model_dump()`` wholesale
+                # aborted every ingestion that raced its own message's finalization
+                # (it then "worked on retry" once the row settled). ``_source_identity``
+                # still detects a real edit (text / content changed) or a purge (id gone).
+                originals = {message.id: _source_identity(message) for message in messages}
+                current = {
+                    message.id: _source_identity(message) for message in current_messages if message.id in originals
+                }
+                if current_session_id != live_session_id or current_cursor != live_cursor_id or current != originals:
+                    msg = "Memory source messages changed during preprocessing. Retry ingestion."
+                    raise StorageUnavailableError(msg)
+
+            async def fence_preprocessing_snapshot() -> None:
+                """Keep preprocessing history commits serialized with session purges."""
+                await storage_stack.enter_async_context(operation(storage_record))
+                await validate_source_snapshot()
+
             # ---- 2. Build documents (preprocessing → Phase A; raw → direct) ----
             # ``preproc_row`` is non-None only on the preprocessing path; in Phase B
             # we flip its status from "processed" to "ingested" inside the same
@@ -283,6 +421,7 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
                 preproc_row = await _get_pending_preproc_row(db, memory_base_id, session_id)
 
                 if preproc_row is not None:
+                    await fence_preprocessing_snapshot()
                     # Resume: restrict the working batch to the messages this row
                     # was built from.  Do NOT call the LLM again — the prior
                     # judgment (and cost) is preserved across crashes.
@@ -314,11 +453,14 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
                         preproc_model=preproc_model,
                         preproc_instructions=preproc_instructions,
                         kill_phrase=preproc_kill_phrase,
-                        user_id=user_id,
+                        owner_user_id=owner_user_id,
+                        actor_user_id=actor_user_id,
+                        provider_policy=provider_policies.preprocessing,
                     )
+                    await fence_preprocessing_snapshot()
                     if result.status == "skipped":
                         # Kill phrase — record the skip, advance the cursor, but
-                        # never write to Chroma. _mark_messages_ingested still
+                        # never write vectors. _mark_messages_ingested still
                         # runs so the same batch is not re-evaluated next job.
                         await _insert_preproc_row(
                             db,
@@ -367,10 +509,11 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
                     flow_id=str(flow_id),
                     job_id=job_id_str,
                     preproc_output_id=str(preproc_row.id),
+                    end_user_id=end_user_id,
                 )
             else:
                 documents = build_documents_from_messages(
-                    messages, session_id=session_id, flow_id=str(flow_id), job_id=job_id_str
+                    messages, session_id=session_id, flow_id=str(flow_id), job_id=job_id_str, end_user_id=end_user_id
                 )
 
             if not documents:
@@ -378,31 +521,60 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
 
             # ---- 3. Check cancellation before touching the vector store ----
             if await KBIngestionHelper.is_job_cancelled(job_service, task_job_id):
-                return {"message": "Job cancelled before ingestion", "ingested": 0}
+                # A normal return makes execute_with_status record COMPLETED.
+                # Preserve cooperative cancellation through the job wrapper.
+                msg = "PRIMEAGENT_USER_CANCELLED"
+                raise asyncio.CancelledError(msg)
 
-            # ---- 4. Open Chroma, write, then sync KB metadata ----
-            user_stub = types.SimpleNamespace(id=user_id)
-            embeddings = await KBIngestionHelper.build_embeddings(embedding_provider, embedding_model, user_stub)
+            # ---- 4. Open the KB's vector-store backend, write, then sync metadata ----
+            embeddings = await _build_embeddings_for_owner(
+                provider=embedding_provider,
+                model=embedding_model,
+                owner_user_id=owner_user_id,
+                actor_user_id=actor_user_id,
+                provider_policy=provider_policies.embedding,
+            )
+            # Provider calls and retry back-off never retain an exclusive KB
+            # lease. Every batch validates the live source under its write
+            # lease, and the final tracking commit validates once more.
+            await storage_stack.aclose()
 
-            client = KBStorageHelper.get_fresh_chroma_client(kb_path)
+            # Resolved from the knowledge_base row, so an ingestion running on a
+            # replica that has never touched this KB's directory still writes to
+            # the configured store instead of silently creating a local one.
+            backend_type, backend_config = await resolve_backend_selection(user_id=owner_user_id, kb_name=kb_name)
+            # Compatibility path for legacy cleanup only. Active SQLite routing
+            # is resolved by the guarded backend from immutable record identity.
+            kb_path = resolve_local_store_path(
+                kb_name,
+                kb_username,
+                backend_type=backend_type,
+                backend_config=backend_config,
+            )
+            backend = await backend_for_name(
+                owner_user_id,
+                kb_name,
+                embedding_function=embeddings,
+                before_write=validate_source_snapshot,
+                expected_record=storage_record,
+            )
             written = 0
             try:
-                chroma = Chroma(
-                    client=client,
-                    embedding_function=embeddings,
-                    collection_name=kb_name,
-                    **chroma_langchain_collection_kwargs(),
-                )
+                await backend.ensure_ready()
 
-                written = await KBIngestionHelper.write_documents_to_chroma(
+                written = await KBIngestionHelper.write_documents_to_backend(
                     documents=documents,
-                    chroma=chroma,
+                    backend=backend,
                     task_job_id=task_job_id,
                     job_service=job_service,
                 )
 
                 if written == len(documents):
-                    await asyncio.to_thread(sync_kb_metadata, kb_path=kb_path, chroma=chroma)
+                    try:
+                        await sync_kb_stats_to_record(user_id=owner_user_id, kb_name=kb_name, backend=backend)
+                    except Exception as exc:  # noqa: BLE001 -- cached counters cannot undo a confirmed write
+                        await logger.awarning("Memory metrics refresh lagged: %s", exc)
+                await fence_preprocessing_snapshot()
             except Exception:
                 await logger.aerror(
                     "Ingestion write failed | memory_base=%s session=%s job=%s. Rolling back partial writes...",
@@ -410,15 +582,30 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
                     hashed_sid,
                     task_job_id,
                 )
-                await KBIngestionHelper.cleanup_chroma_chunks_by_job(task_job_id, kb_path, kb_name)
+                await KBIngestionHelper.cleanup_chroma_chunks_by_job(
+                    task_job_id,
+                    kb_path,
+                    kb_name,
+                    backend_type=backend_type,
+                    backend_config=backend_config,
+                    user_id=owner_user_id,
+                )
                 raise
             finally:
-                KBStorageHelper.release_chroma_resources(kb_path)
+                await backend.teardown()
 
             if written < len(documents):
                 await logger.awarning("Ingestion job %s was cancelled. Cleaning up partial data...", task_job_id)
-                await KBIngestionHelper.cleanup_chroma_chunks_by_job(task_job_id, kb_path, kb_name)
-                return {"message": "Job cancelled during ingestion", "ingested": 0}
+                await KBIngestionHelper.cleanup_chroma_chunks_by_job(
+                    task_job_id,
+                    kb_path,
+                    kb_name,
+                    backend_type=backend_type,
+                    backend_config=backend_config,
+                    user_id=owner_user_id,
+                )
+                msg = "PRIMEAGENT_USER_CANCELLED"
+                raise asyncio.CancelledError(msg)
 
             # ---- 5. Phase B (preprocessing only) — flip preproc row to ingested ----
             # Staged in the same DB session as the ingestion-record writes and cursor
@@ -453,7 +640,29 @@ async def ingest_memory_task(*, request: IngestionRequest) -> dict:
             return {"message": "Success", "ingested": ingested_count}
 
         finally:
-            await _release_session_lock(db, lock_handle)
+            try:
+                await storage_stack.aclose()
+            finally:
+                await _release_session_lock(db, lock_handle)
+
+
+def _source_identity(message: MessageTable) -> tuple:
+    """Content fingerprint used to detect source edits/purges during ingestion.
+
+    Only the fields that determine the embedded documents are compared — the
+    text, the content blocks, and the error/category flags that decide whether a
+    message is ingested at all. Volatile presentation and bookkeeping metadata
+    (``properties`` such as token ``usage`` and ``state``, ``edit``,
+    ``session_metadata``) is deliberately excluded: the flow finalizes those on
+    the triggering output message after ingestion has already been dispatched,
+    and treating that as a source change aborted otherwise-valid ingestions.
+    """
+    return (
+        message.text,
+        json.dumps(message.content_blocks or [], sort_keys=True, default=str),
+        message.error,
+        message.category,
+    )
 
 
 async def _fetch_pending_messages(
@@ -548,7 +757,7 @@ async def _get_pending_preproc_row(
     """Return the oldest ``processed`` preproc row for this session, if any.
 
     A non-None return means a previous job's LLM output has not yet been
-    written to Chroma. Phase A reuses it instead of re-invoking the LLM.
+    written to vector storage. Phase A reuses it instead of re-invoking the LLM.
     """
     stmt = (
         select(MemoryBasePreprocessingOutput)
@@ -573,7 +782,7 @@ async def _insert_preproc_row(
     source_message_ids: list[str],
     model_used: str,
 ) -> MemoryBasePreprocessingOutput:
-    """Insert a fresh preproc-output row and commit so it survives a Chroma crash.
+    """Insert a fresh preproc-output row and commit so it survives a vector-store failure.
 
     For ``status='processed'`` this is the durable artifact that lets the next
     job retry only the KB write. For ``status='skipped'`` it's the audit record
@@ -615,7 +824,7 @@ async def _update_preproc_row_status(
         immediately because there is no follow-up batch.
 
     ``job_id`` is updated to ``task_job_id`` so ``cleanup_chroma_chunks_by_job``
-    keys remain consistent on retry — after a failed-then-cleaned Chroma write
+    keys remain consistent on retry — after a failed-then-cleaned vector write
     the original job_id no longer matches any docs.
     """
     row.status = status

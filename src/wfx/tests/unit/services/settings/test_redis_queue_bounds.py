@@ -6,8 +6,8 @@ features were added to close, so Pydantic must reject them at config load.
 """
 
 import pytest
-from pydantic import ValidationError
 from wfx.services.settings.base import Settings
+from pydantic import ValidationError
 
 
 def test_redis_queue_startup_grace_s_rejects_negative(monkeypatch):

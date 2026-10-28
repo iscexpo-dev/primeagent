@@ -5,16 +5,22 @@ import hashlib
 import os
 import platform
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import httpx
 from wfx.log.logger import logger
+from wfx.services.telemetry.constants import IBM_PRODUCT_PROPERTIES, get_ibm_common_event
+from wfx.services.telemetry.identity import get_hashed_user_id, get_or_create_anonymous_id, is_installation_user_id
+from wfx.services.telemetry.privacy import get_safe_payload_properties
 
 from primeagent.services.base import Service
+from primeagent.services.telemetry.context import get_current_telemetry_user_id
 from primeagent.services.telemetry.opentelemetry import OpenTelemetry
+from primeagent.services.telemetry.run_event_store import append_run_event
 from primeagent.services.telemetry.schema import (
-    MAX_TELEMETRY_URL_SIZE,
+    MAX_TELEMETRY_PAYLOAD_SIZE,
     ComponentIndexPayload,
     ComponentInputsPayload,
     ComponentPayload,
@@ -29,8 +35,27 @@ from primeagent.services.telemetry.schema import (
 from primeagent.utils.version import get_version_info
 
 if TYPE_CHECKING:
-    from pydantic import BaseModel
     from wfx.services.settings.service import SettingsService
+    from pydantic import BaseModel
+
+    from primeagent.services.telemetry.schema import IntegrationActionPayload
+
+
+def database_dialect(database_url: str | None) -> str:
+    """Return only the engine name of a database URL, such as ``sqlite`` or ``postgresql``.
+
+    The rest of the URL carries a host and often credentials, so nothing but the
+    backend name may reach a telemetry payload.
+    """
+    if not database_url:
+        return "unknown"
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    try:
+        return make_url(database_url).get_backend_name()
+    except (ArgumentError, ValueError):
+        return "unknown"
 
 
 class TelemetryService(Service):
@@ -39,19 +64,25 @@ class TelemetryService(Service):
     def __init__(self, settings_service: SettingsService):
         super().__init__()
         self.settings_service = settings_service
-        self.base_url = settings_service.settings.telemetry_base_url
+        self.base_url = settings_service.settings.segment_api_url
+        self.segment_write_key = settings_service.settings.segment_write_key
+        self.do_not_track = (
+            os.getenv("DO_NOT_TRACK", "false").lower() in {"1", "true"} or settings_service.settings.do_not_track
+        )
+        self.anonymous_id = (
+            get_or_create_anonymous_id(settings_service.settings.config_dir)
+            if self.segment_write_key and not self.do_not_track
+            else ""
+        )
         self.telemetry_queue: asyncio.Queue = asyncio.Queue()
-        self.client = httpx.AsyncClient(timeout=10.0)  # Set a reasonable timeout
+        self.client: httpx.AsyncClient | None = None
         self.running = False
         self._stopping = False
+        self._start_time = datetime.now(timezone.utc)
 
         self.ot = OpenTelemetry(prometheus_enabled=settings_service.settings.prometheus_enabled)
         self.architecture: str | None = None
         self.worker_task: asyncio.Task | None = None
-        # Check for do-not-track settings
-        self.do_not_track = (
-            os.getenv("DO_NOT_TRACK", "False").lower() == "true" or settings_service.settings.do_not_track
-        )
         self.log_package_version_task: asyncio.Task | None = None
         self.log_package_email_task: asyncio.Task | None = None
         self.client_type = self._get_client_type()
@@ -66,39 +97,57 @@ class TelemetryService(Service):
 
     async def telemetry_worker(self) -> None:
         while self.running:
-            func, payload, path = await self.telemetry_queue.get()
+            func, payload, path, user_id = await self.telemetry_queue.get()
             try:
-                await func(payload, path)
+                await func(payload, path, user_id)
             except Exception:  # noqa: BLE001
                 await logger.aerror("Error sending telemetry data")
             finally:
                 self.telemetry_queue.task_done()
 
-    async def send_telemetry_data(self, payload: BaseModel, path: str | None = None) -> None:
-        if self.do_not_track:
+    async def send_telemetry_data(
+        self, payload: BaseModel, path: str | None = None, user_id: str | None = None
+    ) -> None:
+        if self.do_not_track or not self.segment_write_key or self.client is None:
             await logger.adebug("Telemetry tracking is disabled.")
             return
 
         if payload.client_type is None:
             payload.client_type = self.client_type
 
-        url = f"{self.base_url}"
-        if path:
-            url = f"{url}/{path}"
-
         try:
-            payload_dict = payload.model_dump(by_alias=True, exclude_none=True, exclude_unset=True)
+            payload_dict = get_safe_payload_properties(payload)
+            event_anonymous_id = str(uuid.uuid4()) if isinstance(payload, EmailPayload) else self.anonymous_id
 
             # Add common fields to all payloads except VersionPayload
             if not isinstance(payload, VersionPayload):
                 payload_dict.update(self.common_telemetry_fields)
-            # Add timestamp dynamically
-            if "timestamp" not in payload_dict:
-                payload_dict["timestamp"] = datetime.now(timezone.utc).isoformat()
-
-            response = await self.client.get(url, params=payload_dict)
-            if response.status_code != httpx.codes.OK:
-                await logger.aerror(f"Failed to send telemetry data: {response.status_code} {response.text}")
+            payload_dict.update(IBM_PRODUCT_PROPERTIES)
+            payload_dict["instanceId"] = event_anonymous_id
+            payload_dict["subscriptionId"] = event_anonymous_id
+            event, process_type, legacy_event = get_ibm_common_event(path)
+            payload_dict["object"] = legacy_event
+            if process_type is not None:
+                payload_dict["processType"] = process_type
+            else:
+                payload_dict.update({"action": "registered", "name": "Email", "namespace": "Primeagent"})
+            body = {
+                "anonymousId": event_anonymous_id,
+                "event": event,
+                "messageId": str(uuid.uuid4()),
+                "properties": payload_dict,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            body["userId"] = (
+                get_hashed_user_id(event_anonymous_id)
+                if isinstance(payload, EmailPayload)
+                else user_id
+                if is_installation_user_id(user_id)
+                else get_hashed_user_id(self.anonymous_id)
+            )
+            response = await self.client.post(self.base_url, auth=(self.segment_write_key, ""), json=body)
+            if not response.is_success:
+                await logger.awarning(f"Telemetry request failed with status {response.status_code}")
             else:
                 await logger.adebug("Telemetry data sent successfully.")
         except httpx.HTTPStatusError as err:
@@ -109,10 +158,18 @@ class TelemetryService(Service):
             await logger.aerror(f"Unexpected error occurred: {err}.")
 
     async def log_package_run(self, payload: RunPayload) -> None:
+        # Recorded before the do-not-track gate in _queue_event: enterprise
+        # metering must see every run even when outbound telemetry is off.
+        # The store is process-local and bounded; see run_event_store.
+        append_run_event(payload)
         await self._queue_event((self.send_telemetry_data, payload, "run"))
 
     async def log_package_deployment(self, payload: DeploymentPayload) -> None:
         await self._queue_event((self.send_telemetry_data, payload, "deployment"))
+
+    async def log_integration_action(self, payload: IntegrationActionPayload) -> None:
+        """Queue an integration event through the normal tracking-consent boundary."""
+        await self._queue_event((self.send_telemetry_data, payload, "integration_action"))
 
     async def log_package_deployment_provider(self, payload: DeploymentPayload) -> None:
         await self._queue_event((self.send_telemetry_data, payload, "deployment_provider"))
@@ -122,12 +179,12 @@ class TelemetryService(Service):
 
     async def log_package_shutdown(self) -> None:
         payload = ShutdownPayload(time_running=(datetime.now(timezone.utc) - self._start_time).seconds)
-        await self._queue_event(payload)
+        await self._queue_event((self.send_telemetry_data, payload, "shutdown"))
 
     async def _queue_event(self, payload) -> None:
-        if self.do_not_track or self._stopping:
+        if self.do_not_track or not self.segment_write_key or self._stopping:
             return
-        await self.telemetry_queue.put(payload)
+        await self.telemetry_queue.put((*payload, get_current_telemetry_user_id()))
 
     def _get_primeagent_desktop(self) -> bool:
         # Coerce to bool, could be 1, 0, True, False, "1", "0", "True", "False"
@@ -170,6 +227,7 @@ class TelemetryService(Service):
             backend_only=self.settings_service.settings.backend_only,
             arch=self.architecture,
             auto_login=self.settings_service.auth_settings.AUTO_LOGIN,
+            database_dialect=database_dialect(self.settings_service.settings.database_url),
             client_type=self.client_type,
         )
         await self._queue_event((self.send_telemetry_data, payload, None))
@@ -189,8 +247,7 @@ class TelemetryService(Service):
         Args:
             payload: Component inputs payload to log
         """
-        # Split payload if it exceeds URL size limit
-        chunks = payload.split_if_needed(max_url_size=MAX_TELEMETRY_URL_SIZE)
+        chunks = payload.split_if_needed(max_payload_size=MAX_TELEMETRY_PAYLOAD_SIZE)
 
         # Queue each chunk separately
         for chunk in chunks:
@@ -221,11 +278,12 @@ class TelemetryService(Service):
         await self._queue_event((self.send_telemetry_data, payload, "exception"))
 
     def start(self) -> None:
-        if self.running or self.do_not_track:
+        if self.running or self.do_not_track or not self.segment_write_key:
             return
         try:
             self.running = True
             self._start_time = datetime.now(timezone.utc)
+            self.client = httpx.AsyncClient(timeout=10.0)
             self.worker_task = asyncio.create_task(self.telemetry_worker())
             self.log_package_version_task = asyncio.create_task(self.log_package_version())
             if self._get_primeagent_desktop():
@@ -270,9 +328,16 @@ class TelemetryService(Service):
                     self.log_package_email_task,
                     "Cancel telemetry log package email task",
                 )
-            await self.client.aclose()
+            if self.client:
+                await self.client.aclose()
+                self.client = None
         except Exception:  # noqa: BLE001
             await logger.aexception("Error stopping tracing service")
 
     async def teardown(self) -> None:
         await self.stop()
+        # Unconditional, and separate from stop(): the OTLP application telemetry is gated on
+        # OTEL_* env, not on do_not_track, so it can be live even when product analytics is off
+        # (stop() early-returns in that case). Off the event loop: the final export can block on
+        # the network. A no-op when no provider was installed.
+        await asyncio.to_thread(self.ot.shutdown)

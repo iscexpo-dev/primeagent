@@ -8,13 +8,14 @@ Create Date: 2025-04-10 10:17:32.493181
 Phase: EXPAND
 """
 
+# ruff: noqa: S608
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 import sqlmodel
 from alembic import op
 from primeagent.utils import migration
-from sqlalchemy import inspect
 
 # revision identifiers, used by Alembic.
 revision: str = "1b8b740a6fa3"
@@ -41,7 +42,7 @@ def constraint_exists(constraint_name: str, conn) -> bool:
     Returns:
         bool: True if the constraint exists, False otherwise
     """
-    inspector = inspect(conn)
+    inspector = sa.inspect(conn)
 
     # Get all table names
     tables = inspector.get_table_names()
@@ -91,7 +92,8 @@ def upgrade() -> None:
 
         # Copy data - use a window function to ensure build_id uniqueness across SQLite, PostgreSQL and MySQL
         # Filter out rows where the original 'id' (vertex id) is NULL, as the new table requires it.
-        op.execute(f"""
+        op.execute(
+            f"""
             INSERT INTO "{temp_table_name}" (timestamp, id, data, artifacts, params, build_id, flow_id, valid)
             SELECT timestamp, id, data, artifacts, params, build_id, flow_id, valid
             FROM (
@@ -101,7 +103,8 @@ def upgrade() -> None:
                 WHERE id IS NOT NULL -- Ensure vertex id is not NULL
             ) sub
             WHERE rn = 1
-        """)  # noqa: S608
+        """
+        )
 
         # Drop original table and rename temp table
         if conn.dialect.name == "postgresql":
@@ -137,14 +140,17 @@ def upgrade() -> None:
         )
 
         # Copy data - explicitly list columns and filter out rows where id is NULL
-        op.execute(f"""
+        op.execute(
+            f"""
             INSERT INTO "{temp_table_name}" (
                 timestamp, vertex_id, target_id, inputs, outputs, status, id, flow_id, error
             )
-            SELECT timestamp, vertex_id, target_id, inputs, outputs, status, id, flow_id, error
+            SELECT
+                timestamp, vertex_id, target_id, inputs, outputs, status, id, flow_id, error
             FROM "transaction"
             WHERE id IS NOT NULL
-        """)  # noqa: S608
+        """
+        )
 
         # Drop original table and rename temp table
         if conn.dialect.name == "postgresql":
@@ -184,16 +190,19 @@ def upgrade() -> None:
         )
 
         # Copy data - explicitly list columns and filter out rows where id is NULL
-        op.execute(f"""
+        op.execute(
+            f"""
             INSERT INTO "{temp_table_name}" (
                 timestamp, sender, sender_name, session_id, text, id, flow_id, files, error, edit,
                 properties, category, content_blocks
             )
-            SELECT timestamp, sender, sender_name, session_id, text, id, flow_id, files, error,
-                edit, properties, category, content_blocks
+            SELECT
+                timestamp, sender, sender_name, session_id, text, id, flow_id, files, error, edit,
+                properties, category, content_blocks
             FROM "message"
             WHERE id IS NOT NULL
-        """)  # noqa: S608
+        """
+        )
 
         # Drop original table and rename temp table
         if conn.dialect.name == "postgresql":
@@ -244,7 +253,8 @@ def downgrade() -> None:
         # Copy data - use a window function to ensure build_id uniqueness.
         # Filter out rows where build_id is NULL (PK constraint)
         # No need to filter by 'id' here as the target column allows NULLs.
-        op.execute(f"""
+        op.execute(
+            f"""
             INSERT INTO "{temp_table_name}" (timestamp, id, data, artifacts, params, build_id, flow_id, valid)
             SELECT timestamp, id, data, artifacts, params, build_id, flow_id, valid
             FROM (
@@ -254,7 +264,8 @@ def downgrade() -> None:
                 WHERE build_id IS NOT NULL -- Ensure primary key is not NULL
             ) sub
             WHERE rn = 1
-        """)  # noqa: S608
+        """
+        )
 
         # Drop original table and rename temp table
         if conn.dialect.name == "postgresql":
@@ -298,14 +309,17 @@ def downgrade() -> None:
         )
 
         # Copy data - explicitly list columns and filter out rows where id is NULL
-        op.execute(f"""
+        op.execute(
+            f"""
             INSERT INTO "{temp_table_name}" (
                 timestamp, vertex_id, target_id, inputs, outputs, status, id, flow_id, error
             )
-            SELECT timestamp, vertex_id, target_id, inputs, outputs, status, id, flow_id, error
+            SELECT
+                timestamp, vertex_id, target_id, inputs, outputs, status, id, flow_id, error
             FROM "transaction"
             WHERE id IS NOT NULL
-        """)  # noqa: S608
+        """
+        )
 
         # Drop original table and rename temp table
         if conn.dialect.name == "postgresql":
@@ -353,16 +367,19 @@ def downgrade() -> None:
         )
 
         # Copy data - explicitly list columns and filter out rows where id is NULL
-        op.execute(f"""
+        op.execute(
+            f"""
             INSERT INTO "{temp_table_name}" (
                 timestamp, sender, sender_name, session_id, text, id, flow_id, files, error, edit,
                 properties, category, content_blocks
             )
-            SELECT timestamp, sender, sender_name, session_id, text, id, flow_id, files, error,
-                edit, properties, category, content_blocks
+            SELECT
+                timestamp, sender, sender_name, session_id, text, id, flow_id, files, error, edit,
+                properties, category, content_blocks
             FROM "message"
             WHERE id IS NOT NULL
-        """)  # noqa: S608
+        """
+        )
 
         # Drop original table and rename temp table
         if conn.dialect.name == "postgresql":

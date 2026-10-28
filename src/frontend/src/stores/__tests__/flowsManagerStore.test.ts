@@ -9,6 +9,7 @@ jest.mock("lodash", () => ({
 // Mock constants
 jest.mock("@/constants/constants", () => ({
   SAVE_DEBOUNCE_TIME: 1000,
+  AUTOSAVE_DEBOUNCE_TIME: 2000,
 }));
 
 // Mock flowStore
@@ -42,7 +43,7 @@ describe("useFlowsManagerStore", () => {
     description: "Test Description 1",
     data: { nodes: [], edges: [] },
     is_component: false,
-  } as unknown as FlowType;
+  } as FlowType;
 
   const mockFlow2: FlowType = {
     id: "flow-2",
@@ -50,7 +51,7 @@ describe("useFlowsManagerStore", () => {
     description: "Test Description 2",
     data: { nodes: [], edges: [] },
     is_component: false,
-  } as unknown as FlowType;
+  } as FlowType;
 
   const mockFlows = [mockFlow1, mockFlow2];
 
@@ -299,7 +300,7 @@ describe("useFlowsManagerStore", () => {
         resetFlow: mockResetFlow,
         setNodes: mockSetNodes,
         setEdges: mockSetEdges,
-      } as never);
+      });
     });
 
     it("should take snapshot of current state", () => {
@@ -332,12 +333,12 @@ describe("useFlowsManagerStore", () => {
 
       // Setup initial state
       mockFlowStore.getState.mockReturnValue({
-        nodes: [{ id: "node-1", data: {} }],
-        edges: [{ id: "edge-1" }],
+        nodes: [{ id: "node-2", data: {} }],
+        edges: [{ id: "edge-2" }],
         resetFlow: mockResetFlow,
         setNodes: mockSetNodes,
         setEdges: mockSetEdges,
-      } as never);
+      });
 
       act(() => {
         result.current.setCurrentFlow(mockFlow1);
@@ -346,19 +347,19 @@ describe("useFlowsManagerStore", () => {
 
       // Change the flow store state
       mockFlowStore.getState.mockReturnValue({
-        nodes: [{ id: "node-2", data: {} }],
-        edges: [{ id: "edge-2" }],
+        nodes: [{ id: "node-3", data: {} }],
+        edges: [{ id: "edge-3" }],
         resetFlow: mockResetFlow,
         setNodes: mockSetNodes,
         setEdges: mockSetEdges,
-      } as never);
+      });
 
       act(() => {
         result.current.undo();
       });
 
-      expect(mockSetNodes).toHaveBeenCalledWith([{ id: "node-1", data: {} }]);
-      expect(mockSetEdges).toHaveBeenCalledWith([{ id: "edge-1" }]);
+      expect(mockSetNodes).toHaveBeenCalledWith([{ id: "node-2", data: {} }]);
+      expect(mockSetEdges).toHaveBeenCalledWith([{ id: "edge-2" }]);
     });
 
     it("should handle redo operation", () => {
@@ -370,7 +371,7 @@ describe("useFlowsManagerStore", () => {
         resetFlow: mockResetFlow,
         setNodes: mockSetNodes,
         setEdges: mockSetEdges,
-      } as never);
+      });
 
       act(() => {
         result.current.setCurrentFlow(mockFlow1);

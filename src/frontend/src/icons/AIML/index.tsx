@@ -6,7 +6,5 @@ export const AIMLIcon = forwardRef<
   SVGSVGElement,
   React.PropsWithChildren<{ className?: string }>
 >((props, ref) => {
-  return (
-    <AIMLComponent ref={ref} {...props} className={props.className ?? ""} />
-  );
+  return <AIMLComponent ref={ref} {...props} />;
 });

@@ -6,8 +6,8 @@ from primeagent.api.v1.schemas import ResultDataResponse, VertexBuildResponse
 from primeagent.schema.schema import OutputValue
 from primeagent.serialization import serialize
 from primeagent.services.tracing.schema import Log
-from pydantic import BaseModel
 from wfx.schema.properties import Usage
+from pydantic import BaseModel
 
 # Use a smaller test size for hypothesis
 TEST_TEXT_LENGTH = 50

@@ -28,13 +28,13 @@ class TestLoadFromEnvVarsNoFallback:
         params = {"api_key": "MY_SECRET"}
         with (
             patch.dict(os.environ, {"MY_SECRET": "env-value"}),
-            patch("wfx.interface.initialize.loading.os.getenv") as mock_getenv,
+            patch("wfx.interface.initialize.loading.safe_getenv") as mock_getenv,
         ):
             result = load_from_env_vars(params, ["api_key"], context={"no_env_fallback": True})
         assert result["api_key"] is None
-        # Only the credential variable must never be looked up — logger internals may call getenv
+        # The credential variable must never be looked up when no_env_fallback=True.
         credential_lookups = [c for c in mock_getenv.call_args_list if c.args and c.args[0] == "MY_SECRET"]
-        assert not credential_lookups, f"os.getenv('MY_SECRET') must not be called, got: {credential_lookups}"
+        assert not credential_lookups, f"safe_getenv('MY_SECRET') must not be called, got: {credential_lookups}"
 
     def test_request_variables_win_even_with_flag_true(self):
         """request_variables always takes priority, even when no_env_fallback=True."""
@@ -57,3 +57,21 @@ class TestLoadFromEnvVarsNoFallback:
         with patch.dict(os.environ, {"MY_SECRET": "env-value"}):
             result = load_from_env_vars(params, ["api_key"], context=context)
         assert result["api_key"] == "override-value"
+
+    def test_protected_destination_ignores_request_variable(self):
+        params = {"bing_search_url": "BING_SEARCH_URL"}
+        context = {"request_variables": {"BING_SEARCH_URL": "https://attacker.example/search"}}
+        with patch.dict(os.environ, {"BING_SEARCH_URL": "https://api.bing.microsoft.com/v7.0/search"}):
+            result = load_from_env_vars(
+                params,
+                ["bing_search_url"],
+                context=context,
+                component_type="BingSearchAPIComponent",
+            )
+        assert result["bing_search_url"] == "https://api.bing.microsoft.com/v7.0/search"
+
+    def test_unprotected_field_keeps_request_variable_override(self):
+        params = {"query": "QUERY"}
+        context = {"request_variables": {"QUERY": "from caller"}, "no_env_fallback": True}
+        result = load_from_env_vars(params, ["query"], context=context, component_type="BingSearchAPIComponent")
+        assert result["query"] == "from caller"

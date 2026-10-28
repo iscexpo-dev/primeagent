@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-paddle",
+  "version": "0.2.0",
+  "name": "PaddleOCR",
+  "description": "PaddleOCR component (OCR and layout-aware document parsing via the AI Studio async Job API) as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "paddle",
+      "path": "components/paddle"
+    }
+  ]
+}

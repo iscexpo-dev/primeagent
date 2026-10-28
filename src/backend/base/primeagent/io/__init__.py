@@ -1,6 +1,7 @@
 from wfx.io import (
     BoolInput,
     CodeInput,
+    DataDisplayInput,
     DataFrameInput,
     DataInput,
     DefaultPromptField,
@@ -32,6 +33,7 @@ from wfx.template import Output
 __all__ = [
     "BoolInput",
     "CodeInput",
+    "DataDisplayInput",
     "DataFrameInput",
     "DataInput",
     "DefaultPromptField",

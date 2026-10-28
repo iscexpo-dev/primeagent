@@ -9,12 +9,16 @@
 FROM --platform=$BUILDPLATFORM node:lts-bookworm-slim AS builder-base
 COPY src/frontend /frontend
 
-RUN cd /frontend && npm install && npm run build
+# PUPPETEER_SKIP_DOWNLOAD: puppeteer (via accessibility-checker, test-only)
+# must not download Chrome here - the build env can't fetch it and the
+# production image never runs it.
+RUN cd /frontend && PUPPETEER_SKIP_DOWNLOAD=true npm install && npm run build
 
 ################################
 # RUNTIME
 ################################
-FROM nginxinc/nginx-unprivileged:stable-bookworm-perl AS runtime
+# The stale Bookworm tag lacks the OpenSSL fix for CVE-2025-15467.
+FROM nginxinc/nginx-unprivileged:1.30.5-trixie-perl@sha256:c32bd26579a8472923fda50b3aea9aab95eab45e797783d5f3b964f102859ebd AS runtime
 
 LABEL org.opencontainers.image.title=primeagent-frontend
 LABEL org.opencontainers.image.authors=['Primeagent']

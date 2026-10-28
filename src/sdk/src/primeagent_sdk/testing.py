@@ -130,8 +130,7 @@ def _env_file(request: pytest.FixtureRequest) -> str | None:
 
 
 _SKIP_MSG = (
-    "No Primeagent connection configured. Pass --primeagent-url <URL>"
-    " or --primeagent-env <NAME> to enable integration tests."
+    "No Primeagent connection configured. Pass --primeagent-url <URL> or --primeagent-env <NAME> to enable integration tests."
 )
 
 

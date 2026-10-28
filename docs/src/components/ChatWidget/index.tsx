@@ -15,21 +15,21 @@ const ChatScriptLoader = () => {
 };
 
 declare global {
-  namespace JSX {
-    interface IntrinsicElements {
-      "primeagent-chat": any;
+    namespace JSX {
+      interface IntrinsicElements {
+        "primeagent-chat": any;
+      }
     }
   }
-}
 
-export default function ChatWidget({ className }) {
-  return (
-    <div className={className}>
-      <ChatScriptLoader />
-      <primeagent-chat
-        host_url="http://localhost:7860"
-        flow_id="YOUR_FLOW_ID"
-      ></primeagent-chat>
-    </div>
-  );
-}
+  export default function ChatWidget({ className }) {
+    return (
+      <div className={className}>
+        <ChatScriptLoader />
+        <primeagent-chat
+          host_url="http://localhost:7860"
+          flow_id="YOUR_FLOW_ID"
+        ></primeagent-chat>
+      </div>
+    );
+  }

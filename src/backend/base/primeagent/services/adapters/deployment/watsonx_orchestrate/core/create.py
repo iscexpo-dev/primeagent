@@ -57,7 +57,6 @@ from primeagent.services.adapters.deployment.watsonx_orchestrate.utils import (
 )
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
     from wfx.services.adapters.deployment.payloads import DeploymentPayloadSchemas
     from wfx.services.adapters.deployment.schema import (
         BaseDeploymentData,
@@ -65,6 +64,7 @@ if TYPE_CHECKING:
         DeploymentCreate,
         IdLike,
     )
+    from sqlalchemy.ext.asyncio import AsyncSession
 
     from primeagent.services.adapters.deployment.watsonx_orchestrate.types import WxOClient
 
@@ -431,6 +431,8 @@ async def create_agent_deployment(
     """Create a provider agent deployment from a prebuilt payload."""
     try:
         return await asyncio.to_thread(clients.agent.create, payload)
+    except ValueError:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise_as_deployment_error(
             exc,

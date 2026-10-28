@@ -10,6 +10,7 @@ These guard the refactor that split ``Settings`` into per-group mixins:
 - yaml round-trip and the small utility helpers still work.
 """
 
+import builtins
 import tempfile
 from pathlib import Path
 
@@ -22,6 +23,34 @@ from wfx.services.settings.base import (
     load_settings_from_yaml,
     save_settings_to_yaml,
 )
+from wfx.services.settings.constants import AGENTIC_VARIABLES
+from wfx.services.settings.groups.runtime import RuntimeSettings
+from wfx.services.telemetry.constants import DEFAULT_SEGMENT_WRITE_KEY
+from pydantic import ValidationError
+
+
+def test_voice_mode_requires_openai_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Installing only the VAD library must not advertise unusable voice mode."""
+    real_import = builtins.__import__
+
+    def import_without_openai(name, *args, **kwargs):
+        """Return a stub for webrtcvad and raise ModuleNotFoundError for openai."""
+        if name == "webrtcvad":
+            return object()
+        if name == "openai" or name.startswith("openai."):
+            error_message = "No module named 'openai'"
+            raise ModuleNotFoundError(error_message, name="openai")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_openai)
+
+    assert Settings().voice_mode_available is False
+
+
+def test_segment_has_no_write_key_in_source_checkout() -> None:
+    assert DEFAULT_SEGMENT_WRITE_KEY == ""
+    assert Settings().segment_write_key == DEFAULT_SEGMENT_WRITE_KEY
+
 
 # Every field the composed Settings must expose: the original monolith fields
 # plus the settings added in 1.10.0 (folded into the mixins during the release
@@ -31,7 +60,10 @@ EXPECTED_FIELDS = {
     # PathSettings
     "config_dir",
     "knowledge_bases_dir",
+    "knowledge_base_auto_migrate",
+    "knowledge_base_storage_pool_size",
     # ServerSettings
+    "deployment_profile",
     "host",
     "port",
     "runtime_port",
@@ -81,25 +113,36 @@ EXPECTED_FIELDS = {
     "mcp_session_idle_timeout",
     "mcp_session_cleanup_interval",
     "mcp_server_enabled",
+    "mcp_sse_enabled",
     "mcp_server_enable_progress_notifications",
     "add_projects_to_mcp_servers",
+    "skip_mcp_auto_init",
     "mcp_composer_enabled",
     "mcp_composer_version",
+    "mcp_sdk_constraint",
+    "a2a_enabled",
+    "a2a_allow_private_webhooks",
     # TelemetrySettings
     "sentry_dsn",
     "sentry_traces_sample_rate",
     "sentry_profiles_sample_rate",
     "do_not_track",
-    "telemetry_base_url",
+    "segment_write_key",
+    "segment_api_url",
     "transactions_storage_enabled",
     "vertex_builds_storage_enabled",
+    "sync_result_storage_enabled",
     "deactivate_tracing",
     # ObservabilitySettings
     "prometheus_enabled",
     "prometheus_port",
+    "background_metrics_interval",
     "max_transactions_to_keep",
     "max_vertex_builds_to_keep",
     "max_vertex_builds_per_vertex",
+    "audit_enabled",
+    "audit_retention_days",
+    "audit_exclude_events",
     "max_flow_version_entries_per_flow",
     # SecuritySettings
     "cors_origins",
@@ -108,9 +151,14 @@ EXPECTED_FIELDS = {
     "cors_allow_headers",
     "ssrf_protection_enabled",
     "ssrf_allowed_hosts",
+    "connector_ssrf_validation_enabled",
+    "connector_ssrf_allow_loopback",
+    "provider_credential_allowed_hosts",
+    "kb_allowed_hosts",
     "disable_track_apikey_usage",
     "remove_api_keys",
     "allow_custom_components",
+    "tweaks_policy",
     # ComponentsSettings
     "components_path",
     "components_index_path",
@@ -130,15 +178,25 @@ EXPECTED_FIELDS = {
     "download_webhook_url",
     "like_webhook_url",
     # RuntimeSettings
+    "warm_registry_enabled",
+    "warm_registry_preload_limit",
+    "warm_registry_max_entries",
+    "warm_registry_max_flow_bytes",
+    "warm_registry_max_total_bytes",
     "dev",
+    "warm_reconcile_interval",
     "event_delivery",
     "worker_timeout",
+    "workflow_execution_timeout",
+    "model_provider_policy_refresh_interval_s",
     "public_flow_cleanup_interval",
     "public_flow_expiration",
     "webhook_polling_interval",
     "fs_flows_polling_interval",
     "health_check_max_retries",
     "max_file_size_upload",
+    "url_component_max_response_bytes",
+    "url_component_max_total_bytes",
     "celery_enabled",
     # VariablesSettings
     "variable_store",
@@ -147,20 +205,27 @@ EXPECTED_FIELDS = {
     "variables_to_get_from_environment",
     "agentic_experience",
     "developer_api_enabled",
-    # ---- Added in 1.10.0, folded into the mixins during the release back-merge ----
+    # ---- Added after the original Settings split and folded into the mixins ----
     # PathSettings
+    "kb_disk_reconcile_enabled",
     "kb_allowed_folder_roots",
+    "kb_folder_max_file_size_bytes",
+    "directory_component_allowed_roots",
     # McpSettings
     "mcp_tool_execution_timeout",
     "mcp_servers_locked",
     # ComponentsSettings
     "load_flows_overwrite_on_name_match",
+    "load_flows_preserve_variable_bindings",
     "enable_extension_reload",
     # SecuritySettings
     "rate_limit_enabled",
     "rate_limit_per_minute",
     "rate_limit_storage_uri",
     "rate_limit_trust_proxy",
+    "public_flow_rate_limit_per_minute",
+    "connection_metadata_rate_limit_per_minute",
+    "connection_write_rate_limit_per_minute",
     "custom_component_admin_only",
     "allow_components_paths_override",
     # RuntimeSettings
@@ -176,6 +241,8 @@ EXPECTED_FIELDS = {
     "redis_queue_polling_stale_threshold_s",
     "redis_queue_polling_watchdog_interval_s",
     "max_ingestion_timeout_secs",
+    "executor_kind",
+    "dangerously_allow_multi_worker_without_shared_queue",
     # UiSettings
     "embedded_mode",
     "hide_getting_started_progress",
@@ -195,9 +262,83 @@ EXPECTED_FIELDS = {
     "telemetry_writer_size_strategy",
     "telemetry_writer_batch_size_bytes",
     "telemetry_writer_max_queue_bytes",
+    # Background execution
+    "background_max_concurrency",
+    "background_job_timeout",
+    "background_input_deadline_s",
+    "background_lease_ttl_s",
+    "background_heartbeat_interval_s",
+    "background_watchdog_interval_s",
+    "background_retention_days",
+    "test_redis_url",
+    "data_subject_response_days",
+    "data_subject_auto_erase_on_expiry",
+    # Triggers (TRG-2)
+    "trigger_dispatcher_enabled",
+    "trigger_dispatcher_poll_interval_s",
+    "trigger_lease_ttl_s",
+    "trigger_max_events_per_poll",
+    "trigger_retry_backoff_base_s",
+    "trigger_retry_backoff_cap_s",
+    "trigger_replay_window_days",
+    "trigger_event_retention_days",
+    "trigger_purge_interval_s",
+    # Triggers (TRG-3): the listener process
+    "listeners_mode",
+    "listeners_health_host",
+    "listeners_health_port",
+    "listener_lease_ttl_s",
+    "listener_heartbeat_interval_s",
+    "listener_reconcile_interval_s",
+    "listener_poll_interval_s",
+    "listener_backoff_base_s",
+    "listener_backoff_cap_s",
+    "listener_failure_threshold",
+    # Triggers (TRG-4): provider push ingress and subscription renewal.
+    "trigger_ingress_enabled",
+    "trigger_ingress_max_body_bytes",
+    "trigger_ingress_rate_limit_per_minute",
+    "trigger_ingress_unknown_rate_limit_per_minute",
+    "trigger_ingress_signature_tolerance_s",
+    "trigger_ingress_slack_app_rate_limit_per_minute",
+    "trigger_ingress_slack_team_rate_limit_per_hour",
+    "trigger_slack_socket_max_connections",
+    "trigger_subscription_renew_fraction",
+    "trigger_subscription_renew_lead_cap_s",
+    "trigger_subscription_renew_interval_s",
+    "trigger_subscription_max_per_poll",
+    "trigger_subscription_retry_backoff_base_s",
+    "trigger_subscription_retry_backoff_cap_s",
+    "trigger_subscription_failure_threshold",
     # ---- Added in 1.10.1 ----
     # SecuritySettings
     "allow_public_custom_components",
+    "block_code_interpreter_components",
+    "restrict_local_file_access",
+    "database_tls_files_dir",
+    "mcp_server_docker_hardening",
+    "mcp_server_allowed_packages",
+    "mcp_server_interpreter_hardening",
+    "mcp_server_env_allowlist",
+    # ---- Added in 1.12.0 ----
+    # SecuritySettings: opt-in microVM sandbox backend (issue #12029)
+    "sandbox_backend",
+    "sandbox_timeout_seconds",
+    "sandbox_memory_mb",
+    "sandbox_allow_network",
+    "sandbox_allowed_domains",
+    "sandbox_allow_software_emulation",
+    # SecuritySettings: rebuild drifted built-ins with this server's code (issue #14455)
+    "substitute_outdated_component_code",
+    # VariablesSettings: operator-tunable Primeagent Assistant prompt length
+    "assistant_max_message_length",
+    # ---- Serving-plane end-user identity ----
+    # SecuritySettings
+    "serving_end_user_header",
+    "serving_trust_proxy_headers",
+    "serving_end_user_required",
+    "serving_trace_end_user",
+    "serving_internal_mcp_hosts",
 }
 
 
@@ -222,19 +363,43 @@ def test_critical_defaults_unchanged():
     assert settings.host == "localhost"
     assert settings.port == 7860
     assert settings.workers == 1
+    assert settings.knowledge_base_auto_migrate is True
     assert settings.cache_type == "async"
     assert settings.storage_type == "local"
     assert settings.event_delivery == "streaming"
+    assert settings.model_provider_policy_refresh_interval_s == 10.0
     assert settings.cors_origins == "*"
     assert settings.cors_allow_credentials is True
     assert settings.ssrf_protection_enabled is True
+    assert settings.connector_ssrf_validation_enabled is True
     assert settings.allow_custom_components is True
+    assert settings.block_code_interpreter_components is False
+    assert settings.substitute_outdated_component_code is True
+    assert settings.restrict_local_file_access is True
+    assert settings.database_tls_files_dir is None
+    assert settings.mcp_server_docker_hardening is False
+    assert settings.mcp_server_interpreter_hardening is False
+    assert settings.mcp_server_allowed_packages is None
     assert settings.mcp_server_enabled is True
     assert settings.mcp_composer_enabled is True
+    assert settings.mcp_sdk_constraint == "mcp~=1.28"
+    assert settings.load_flows_preserve_variable_bindings is True
     assert settings.do_not_track is False
+    assert settings.warm_registry_enabled is False
+    assert settings.warm_registry_preload_limit == 0
+    assert settings.warm_registry_max_entries == 128
+    assert settings.warm_registry_max_flow_bytes == 2_000_000
+    assert settings.warm_registry_max_total_bytes == 32_000_000
     assert settings.dev is False
-    assert settings.agentic_experience is False
+    assert settings.agentic_experience is True
     assert settings.developer_api_enabled is False
+    assert settings.dangerously_allow_multi_worker_without_shared_queue is False
+    assert settings.knowledge_base_storage_pool_size == 20
+
+
+def test_database_tls_files_dir_reads_operator_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PRIMEAGENT_DATABASE_TLS_FILES_DIR", str(tmp_path))
+    assert Settings(_env_file=None).database_tls_files_dir == tmp_path
 
 
 def test_dict_defaults_unchanged():
@@ -270,12 +435,54 @@ def test_multi_worker_forces_direct_event_delivery(monkeypatch):
     assert settings.event_delivery == "direct"
 
 
+@pytest.mark.parametrize(("retention", "replay"), [(1, 7), (6, 7), (30, 31)])
+def test_trigger_retention_cannot_shorten_the_replay_window(retention, replay):
+    with pytest.raises(ValidationError, match=r"trigger_event_retention_days.*trigger_replay_window_days"):
+        RuntimeSettings(trigger_event_retention_days=retention, trigger_replay_window_days=replay)
+
+
+@pytest.mark.parametrize(("retention", "replay"), [(1, 1), (7, 7), (30, 7)])
+def test_trigger_retention_may_equal_or_exceed_the_replay_window(retention, replay):
+    settings = RuntimeSettings(trigger_event_retention_days=retention, trigger_replay_window_days=replay)
+    assert (settings.trigger_event_retention_days, settings.trigger_replay_window_days) == (retention, replay)
+
+
+def test_trigger_retention_validates_environment_configuration(monkeypatch):
+    monkeypatch.setenv("PRIMEAGENT_TRIGGER_EVENT_RETENTION_DAYS", "1")
+    monkeypatch.setenv("PRIMEAGENT_TRIGGER_REPLAY_WINDOW_DAYS", "7")
+    with pytest.raises(ValidationError, match=r"trigger_event_retention_days.*trigger_replay_window_days"):
+        Settings()
+
+
+@pytest.mark.parametrize("field", ["trigger_event_retention_days", "trigger_replay_window_days"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_trigger_windows_must_remain_positive(field, value):
+    with pytest.raises(ValidationError, match="greater than 0"):
+        RuntimeSettings(**{field: value})
+
+
 def test_single_worker_keeps_explicit_event_delivery(monkeypatch):
     """Workers == 1 leaves an explicit event_delivery setting alone."""
     monkeypatch.setenv("PRIMEAGENT_WORKERS", "1")
     monkeypatch.setenv("PRIMEAGENT_EVENT_DELIVERY", "polling")
     settings = Settings()
     assert settings.event_delivery == "polling"
+
+
+def test_warm_registry_reads_environment(monkeypatch):
+    """The warm execution plane must be independently activatable through settings."""
+    monkeypatch.setenv("PRIMEAGENT_WARM_REGISTRY_ENABLED", "true")
+    monkeypatch.setenv("PRIMEAGENT_WARM_REGISTRY_PRELOAD_LIMIT", "5")
+    monkeypatch.setenv("PRIMEAGENT_WARM_REGISTRY_MAX_ENTRIES", "16")
+    monkeypatch.setenv("PRIMEAGENT_WARM_REGISTRY_MAX_FLOW_BYTES", "100000")
+    monkeypatch.setenv("PRIMEAGENT_WARM_REGISTRY_MAX_TOTAL_BYTES", "1000000")
+
+    settings = Settings()
+    assert settings.warm_registry_enabled is True
+    assert settings.warm_registry_preload_limit == 5
+    assert settings.warm_registry_max_entries == 16
+    assert settings.warm_registry_max_flow_bytes == 100_000
+    assert settings.warm_registry_max_total_bytes == 1_000_000
 
 
 def test_database_url_sees_config_dir(monkeypatch, tmp_path):
@@ -351,17 +558,34 @@ def test_yaml_round_trip():
         ("PRIMEAGENT_HOST", "0.0.0.0", "host", "0.0.0.0"),
         ("PRIMEAGENT_PORT", "8080", "port", 8080),
         ("PRIMEAGENT_WORKERS", "2", "workers", 2),
+        ("PRIMEAGENT_KNOWLEDGE_BASE_AUTO_MIGRATE", "false", "knowledge_base_auto_migrate", False),
         ("PRIMEAGENT_LOG_LEVEL", "info", "log_level", "info"),
         ("PRIMEAGENT_CACHE_TYPE", "memory", "cache_type", "memory"),
         ("PRIMEAGENT_STORAGE_TYPE", "s3", "storage_type", "s3"),
         ("PRIMEAGENT_PROMETHEUS_ENABLED", "true", "prometheus_enabled", True),
         ("PRIMEAGENT_PROMETHEUS_PORT", "9999", "prometheus_port", 9999),
         ("PRIMEAGENT_MCP_SERVER_ENABLED", "false", "mcp_server_enabled", False),
+        ("PRIMEAGENT_MCP_SSE_ENABLED", "false", "mcp_sse_enabled", False),
+        ("PRIMEAGENT_MCP_SDK_CONSTRAINT", "mcp~=1.30", "mcp_sdk_constraint", "mcp~=1.30"),
+        ("PRIMEAGENT_SKIP_MCP_AUTO_INIT", "true", "skip_mcp_auto_init", True),
         ("PRIMEAGENT_DO_NOT_TRACK", "true", "do_not_track", True),
+        ("PRIMEAGENT_SEGMENT_WRITE_KEY", "segment-test-key", "segment_write_key", "segment-test-key"),
         ("PRIMEAGENT_DEV", "true", "dev", True),
+        (
+            "PRIMEAGENT_MODEL_PROVIDER_POLICY_REFRESH_INTERVAL_S",
+            "7.5",
+            "model_provider_policy_refresh_interval_s",
+            7.5,
+        ),
         ("PRIMEAGENT_BACKEND_ONLY", "true", "backend_only", True),
         ("PRIMEAGENT_AUTO_SAVING", "false", "auto_saving", False),
         ("PRIMEAGENT_FALLBACK_TO_ENV_VAR", "false", "fallback_to_env_var", False),
+        (
+            "PRIMEAGENT_LOAD_FLOWS_PRESERVE_VARIABLE_BINDINGS",
+            "false",
+            "load_flows_preserve_variable_bindings",
+            False,
+        ),
         ("PRIMEAGENT_VARIABLE_STORE", "kubernetes", "variable_store", "kubernetes"),
     ],
 )
@@ -370,3 +594,85 @@ def test_env_var_round_trip(monkeypatch, env_var, env_value, field, expected):
     monkeypatch.setenv(env_var, env_value)
     settings = Settings()
     assert getattr(settings, field) == expected
+
+
+def test_agentic_experience_on_by_default(monkeypatch):
+    """The Assistant is Primeagent's entry-point experience and must work out of the box.
+
+    Regression: defaulting agentic_experience off left the frontend Assistant panel
+    mounted while every /agentic endpoint returned 404 unless the operator set
+    PRIMEAGENT_AGENTIC_EXPERIENCE=true. With the experience on, its variables are
+    mirrored from the environment so provider credentials resolve.
+    """
+    monkeypatch.delenv("PRIMEAGENT_AGENTIC_EXPERIENCE", raising=False)
+    settings = Settings()
+    assert settings.agentic_experience is True
+    for var in AGENTIC_VARIABLES:
+        assert var in settings.variables_to_get_from_environment
+
+
+@pytest.mark.parametrize("env_value", ["true", "1", "yes", "on"])
+def test_agentic_variables_included_when_experience_enabled(monkeypatch, env_value):
+    """All supported true values keep the feature and its environment mirror aligned."""
+    monkeypatch.setenv("PRIMEAGENT_AGENTIC_EXPERIENCE", env_value)
+    settings = Settings()
+    assert settings.agentic_experience is True
+    for var in AGENTIC_VARIABLES:
+        assert var in settings.variables_to_get_from_environment
+
+
+def test_agentic_variables_excluded_when_experience_disabled(monkeypatch):
+    """Opting out with PRIMEAGENT_AGENTIC_EXPERIENCE=false stops the env mirror.
+
+    The ASTRA_TOKEN credential is among the mirrored variables; a deployment that
+    disables the Assistant must not have it provisioned into the DB for endpoints
+    that stay 404.
+    """
+    monkeypatch.setenv("PRIMEAGENT_AGENTIC_EXPERIENCE", "false")
+    settings = Settings()
+    assert settings.agentic_experience is False
+    for var in AGENTIC_VARIABLES:
+        assert var not in settings.variables_to_get_from_environment
+
+
+def test_serving_end_user_defaults_are_feature_off():
+    """The serving-plane end-user identity feature is off by default (backwards compatible)."""
+    settings = Settings()
+    assert settings.serving_end_user_header is None
+    assert settings.serving_trust_proxy_headers is False
+    assert settings.serving_end_user_required is False
+
+
+def test_serving_end_user_env_vars_bind_to_fields(monkeypatch):
+    """The three operator-facing env vars must bind to their settings fields.
+
+    This guards the operator contract: a typo in a field name or the PRIMEAGENT_
+    prefix would silently disable the feature with no other test catching it.
+    """
+    monkeypatch.setenv("PRIMEAGENT_SERVING_END_USER_HEADER", "X-End-User-Id")
+    monkeypatch.setenv("PRIMEAGENT_SERVING_TRUST_PROXY_HEADERS", "true")
+    monkeypatch.setenv("PRIMEAGENT_SERVING_END_USER_REQUIRED", "true")
+    settings = Settings()
+    assert settings.serving_end_user_header == "X-End-User-Id"
+    assert settings.serving_trust_proxy_headers is True
+    assert settings.serving_end_user_required is True
+
+
+def test_background_metrics_interval_default(monkeypatch):
+    """A default collector tick is fifteen seconds."""
+    monkeypatch.delenv("PRIMEAGENT_BACKGROUND_METRICS_INTERVAL", raising=False)
+    assert Settings().background_metrics_interval == 15
+
+
+def test_background_metrics_interval_from_environment(monkeypatch):
+    """The documented environment variable controls the positive tick interval."""
+    monkeypatch.setenv("PRIMEAGENT_BACKGROUND_METRICS_INTERVAL", "27")
+    assert Settings().background_metrics_interval == 27
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_background_metrics_interval_rejects_nonpositive_environment(monkeypatch, value):
+    """Invalid intervals cannot turn the collector into a database busy loop."""
+    monkeypatch.setenv("PRIMEAGENT_BACKGROUND_METRICS_INTERVAL", value)
+    with pytest.raises(ValidationError, match="background_metrics_interval"):
+        Settings()

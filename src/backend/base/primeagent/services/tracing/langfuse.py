@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 from collections import OrderedDict
@@ -7,8 +8,8 @@ from functools import cache
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from typing_extensions import override
 from wfx.log.logger import logger
+from typing_extensions import override
 
 from primeagent.serialization.serialization import serialize
 from primeagent.services.tracing.base import BaseTracer
@@ -28,13 +29,66 @@ if TYPE_CHECKING:
 LANGFUSE_FEEDBACK_SCORE_NAME = "user-feedback"
 
 
+def _normalize_boundary_messages(value: Any) -> Any:
+    """Replace Primeagent messages with their text while preserving container shape."""
+    from wfx.schema.message import Message
+
+    if isinstance(value, Message):
+        return value.get_text()
+    if isinstance(value, dict):
+        return {key: _normalize_boundary_messages(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_normalize_boundary_messages(item) for item in value]
+    return value
+
+
+def _serialize_component_boundary(component_output: Any) -> Any:
+    """Collapse a sole component output and normalize Primeagent messages to text."""
+    value = (
+        next(iter(component_output.values()))
+        if isinstance(component_output, dict) and len(component_output) == 1
+        else component_output
+    )
+    return serialize(_normalize_boundary_messages(value))
+
+
+def _trace_boundary_value(
+    component_values: dict[str, Any],
+    boundary_traces: dict[str, str],
+    *,
+    fallback_component_values: dict[str, Any] | None = None,
+    prefer_fallback_trace_ids: set[str] | None = None,
+) -> tuple[bool, Any]:
+    """Return marked graph-boundary outputs in deterministic component-id order."""
+    values = []
+    prefer_fallback_trace_ids = prefer_fallback_trace_ids or set()
+    for trace_id, trace_name in sorted(boundary_traces.items()):
+        sources = (
+            (fallback_component_values, component_values)
+            if trace_id in prefer_fallback_trace_ids
+            else (component_values, fallback_component_values)
+        )
+        for source in sources:
+            if source is None or trace_name not in source:
+                continue
+            component_value = source[trace_name]
+            if isinstance(component_value, dict) and not component_value:
+                continue
+            values.append(_serialize_component_boundary(component_value))
+            break
+
+    if not values:
+        return False, None
+    return True, values[0] if len(boundary_traces) == 1 else values
+
+
 class _SharedClient:
     """Process-wide cached Langfuse client.
 
     The Langfuse SDK spawns background threads per client instantiation
     (task_manager, prompt_cache, OTel exporters) and never joins them, so
     creating one per flow run leaks threads under load.
-    See https://github.com/khulnasoft/primeagent/issues/9066.
+    See https://github.com/khulnasoft-bot/primeagent/issues/9066.
     """
 
     lock: threading.Lock = threading.Lock()
@@ -54,7 +108,7 @@ def _get_or_create_shared_client(config: dict) -> Langfuse:
     ``FastAPIInstrumentor`` in ``primeagent.main``) would emit every HTTP request
     as a span into Langfuse, polluting traces with unrelated routes like health
     checks and flow list calls. See
-    https://github.com/khulnasoft/primeagent/issues/13319.
+    https://github.com/khulnasoft-bot/primeagent/issues/13319.
     """
     from langfuse import Langfuse
     from opentelemetry.sdk.trace import TracerProvider
@@ -69,10 +123,19 @@ def _get_or_create_shared_client(config: dict) -> Langfuse:
 
 
 def _reset_shared_client_for_tests() -> None:
-    """Test-only hook: clear the cached client so each test gets a fresh mock."""
+    """Test-only hook: clear the cached client so each test gets a fresh mock.
+
+    Also clears the langfuse SDK's own process-global resource-manager registry
+    (keyed by public_key); without it a prior test's client leaks into the next —
+    e.g. a real-SDK test resolves to a stale manager with no in-memory exporter.
+    """
     with _SharedClient.lock:
         _SharedClient.client = None
         _SharedClient.key = None
+    with contextlib.suppress(Exception):
+        from langfuse._client.resource_manager import LangfuseResourceManager
+
+        LangfuseResourceManager._instances.clear()
 
 
 def normalize_langfuse_trace_id(trace_id: UUID | str | None) -> str | None:
@@ -208,7 +271,7 @@ def _root_run_reparenting_handler_cls(base_cls: type) -> type:
     ``trace_context``. With no active OpenTelemetry span in context, the generation
     starts a brand-new root trace, orphaned from the flow trace and therefore
     missing ``userId`` / ``sessionId`` and its token-usage metrics.
-    See https://github.com/khulnasoft/primeagent/issues/13429.
+    See https://github.com/khulnasoft-bot/primeagent/issues/13429.
 
     The fix
     -------
@@ -228,6 +291,23 @@ def _root_run_reparenting_handler_cls(base_cls: type) -> type:
         def __init__(self, *, otel_parent: Any = None, **kwargs: Any) -> None:
             super().__init__(**kwargs)
             self._otel_parent = otel_parent
+
+        def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+            """Return self instead of a copy.
+
+            The base CallbackHandler holds a LangfuseResourceManager whose
+            keyword-only ``__new__`` cannot be reconstructed during deepcopy
+            (raises ``__new__() missing required keyword arguments``), and
+            primeagent deep-copies flow state around the Agent build. The handler
+            keeps no per-invocation mutable state, so sharing it across
+            concurrent calls is safe. See issues #13965 / #13429 (same
+            workaround in flow_loader.py).
+            """
+            memo[id(self)] = self
+            return self
+
+        def __copy__(self) -> Any:
+            return self
 
         def _reparent(self, method_name: str, args: tuple, kwargs: dict, parent_run_id: UUID | None):
             bound = getattr(super(), method_name)
@@ -260,6 +340,8 @@ class LangFuseTracer(BaseTracer):
     """
 
     flow_id: str
+    flow_name: str
+    flow_display_name: str
     _trace_context: TraceContext
     langfuse_trace_id: str | None
 
@@ -277,16 +359,21 @@ class LangFuseTracer(BaseTracer):
         self.trace_name = trace_name
         self.trace_type = trace_type
         self.trace_id = trace_id
-        # ``user_id`` remains the authenticated Primeagent user and drives
-        # ``trace.userId`` unchanged from pre-#9505 behavior. ``tracing_user_id``
-        # is an optional caller-supplied label; when set, it is stamped into
-        # trace metadata as ``primeagent.tracing_user_id`` so consumers can still
-        # access the override without redefining ``trace.userId``.
+        # ``user_id`` stays the authenticated user (drives ``trace.userId``); ``tracing_user_id`` is
+        # stamped into metadata as ``primeagent.tracing_user_id`` instead of overriding it (#9505).
         self.user_id = user_id
         self.tracing_user_id = tracing_user_id
         self.session_id = session_id
-        self.flow_id = trace_name.split(" - ")[-1]
+        # ``trace_name`` arrives as ``f"{flow_name} - {flow_id}"`` (wfx graph/base.py). Split from the
+        # right so a display name that itself contains " - " survives intact.
+        self.flow_name, _, self.flow_id = trace_name.rpartition(" - ")
+        # The graph formats a missing flow name as the literal "None". Detect it like the LangWatch and
+        # Arize tracers do, but fall back to the flow id (not the project name) so the trace stays
+        # uniquely identifiable.
+        self.flow_display_name = self.flow_name if self.flow_name and self.flow_name != "None" else self.flow_id
         self.spans: dict[str, LangfuseSpan] = OrderedDict()
+        self._input_trace_names: dict[str, str] = {}
+        self._output_trace_names: dict[str, str] = {}
         self.langfuse_trace_id = None
 
         config = self._get_config()
@@ -309,7 +396,7 @@ class LangFuseTracer(BaseTracer):
         versions, importing langfuse raises ``pydantic.v1.errors.ConfigError``
         on Python 3.14, which the broad exception handler below previously
         swallowed at debug level. See
-        https://github.com/khulnasoft/primeagent/issues/13317.
+        https://github.com/khulnasoft-bot/primeagent/issues/13317.
         """
         try:
             from langfuse import Langfuse
@@ -332,9 +419,10 @@ class LangFuseTracer(BaseTracer):
             # parent_span_id is NotRequired but ty doesn't fully support this yet
             self._trace_context = TraceContext(trace_id=langfuse_trace_id)  # type: ignore[call-arg]
 
-            # Create root span for the flow - this also creates the trace implicitly
+            # Create root span for the flow - this also creates the trace implicitly. It is named
+            # after the flow so traces can be found by name in Langfuse; the id stays in metadata.
             self._root_span = self._client.start_span(
-                name=self.flow_id,
+                name=self.flow_display_name,
                 trace_context=self._trace_context,
                 metadata={"flow_id": self.flow_id, "project_name": self.project_name},
             )
@@ -344,14 +432,18 @@ class LangFuseTracer(BaseTracer):
             # provides an override via ``tracing_user_id``, stamp it under
             # ``primeagent.tracing_user_id`` so it is still recoverable from trace
             # metadata without changing the meaning of ``trace.userId``.
-            trace_kwargs: dict[str, Any] = {
-                "name": self.flow_id,
-                "user_id": self.user_id,
-                "session_id": self.session_id,
-            }
+            # ``flow_id`` is stamped on the trace up front so traces stay filterable
+            # by flow now that the trace name is the display name; ``end()`` later
+            # merges the graph metadata (which also carries it) on top.
+            trace_metadata: dict[str, Any] = {"flow_id": self.flow_id}
             if self.tracing_user_id and self.tracing_user_id != self.user_id:
-                trace_kwargs["metadata"] = {"primeagent.tracing_user_id": self.tracing_user_id}
-            self._root_span.update_trace(**trace_kwargs)
+                trace_metadata["primeagent.tracing_user_id"] = self.tracing_user_id
+            self._root_span.update_trace(
+                name=self.flow_display_name,
+                user_id=self.user_id,
+                session_id=self.session_id,
+                metadata=trace_metadata,
+            )
 
         except ImportError:
             logger.exception("Could not import langfuse. Please install it with `pip install langfuse`.")
@@ -384,6 +476,12 @@ class LangFuseTracer(BaseTracer):
         metadata_ |= metadata or {}
 
         name = trace_name.removesuffix(f" ({trace_id})")
+
+        if vertex is not None:
+            if vertex.is_input:
+                self._input_trace_names[trace_id] = trace_name
+            if vertex.is_output:
+                self._output_trace_names[trace_id] = trace_name
 
         # Create child span under the root span
         span = self._root_span.start_span(
@@ -428,10 +526,28 @@ class LangFuseTracer(BaseTracer):
         if not self._ready:
             return
 
-        # Serialize once and reuse to avoid duplicate work
+        # Keep the complete component aggregates on the root observation.
         inputs_ser = serialize(inputs)
         outputs_ser = serialize(outputs)
         metadata_ser = serialize(metadata) if metadata else None
+
+        # Input components emit the normalized external request as their output;
+        # output components emit the final graph result. If a custom graph has no
+        # boundary marker, retain the full aggregate rather than guessing from
+        # concurrent component completion order.
+        dual_role_trace_ids = self._input_trace_names.keys() & self._output_trace_names.keys()
+        input_found, trace_input = _trace_boundary_value(
+            outputs,
+            self._input_trace_names,
+            fallback_component_values=inputs,
+            prefer_fallback_trace_ids=dual_role_trace_ids,
+        )
+        if not input_found:
+            trace_input = inputs_ser
+
+        output_found, trace_output = _trace_boundary_value(outputs, self._output_trace_names)
+        if not output_found:
+            trace_output = outputs_ser
 
         # Update the root span with final input/output
         self._root_span.update(
@@ -442,8 +558,8 @@ class LangFuseTracer(BaseTracer):
 
         # Update trace-level data
         self._root_span.update_trace(
-            input=inputs_ser,
-            output=outputs_ser,
+            input={"input": trace_input},
+            output={"output": trace_output},
             metadata=metadata_ser,
         )
 
@@ -478,7 +594,7 @@ class LangFuseTracer(BaseTracer):
             # it on the chain path). ``otel_parent`` additionally re-parents *root*
             # LLM runs (a bare model with no wrapping chain), which the SDK would
             # otherwise emit as an orphan trace with no user/session and detached
-            # token usage. See https://github.com/khulnasoft/primeagent/issues/13429.
+            # token usage. See https://github.com/khulnasoft-bot/primeagent/issues/13429.
             otel_parent = _build_otel_parent_span(self._trace_context["trace_id"], parent_span.id)
             handler_cls = _root_run_reparenting_handler_cls(CallbackHandler)
             handler = handler_cls(trace_context=trace_ctx, otel_parent=otel_parent)

@@ -18,6 +18,7 @@ from wfx.services.adapters.deployment.exceptions import (
     DeploymentError,
     DeploymentNotConfiguredError,
     DeploymentNotFoundError,
+    DeploymentServiceError,
     DeploymentSupportError,
     InvalidContentError,
     InvalidDeploymentOperationError,
@@ -133,8 +134,8 @@ def _agent_matches_environment(agent: dict[str, Any], environment: str) -> bool:
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlalchemy.ext.asyncio import AsyncSession
     from wfx.services.settings.service import SettingsService
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class WatsonxOrchestrateDeploymentService(BaseDeploymentService):
@@ -264,14 +265,7 @@ class WatsonxOrchestrateDeploymentService(BaseDeploymentService):
                 deployment_spec=deployment_spec,
                 plan=provider_plan,
             )
-        except (
-            AuthenticationError,
-            ResourceConflictError,
-            InvalidContentError,
-            InvalidDeploymentOperationError,
-            InvalidDeploymentTypeError,
-            DeploymentSupportError,
-        ):
+        except DeploymentServiceError:
             raise
         except (ClientAPIException, HTTPException) as exc:
             raise_as_deployment_error(
@@ -279,6 +273,9 @@ class WatsonxOrchestrateDeploymentService(BaseDeploymentService):
                 error_prefix=ErrorPrefix.CREATE,
                 log_msg="Unexpected provider error during wxO deployment create",
             )
+        except ValueError as exc:
+            msg = f"{ErrorPrefix.CREATE.value} {exc}"
+            raise InvalidContentError(message=msg, cause=exc) from exc
         except Exception as exc:
             logger.exception("Unexpected error during wxO deployment creation")
             msg = f"{ErrorPrefix.CREATE.value} Please check server logs for details."

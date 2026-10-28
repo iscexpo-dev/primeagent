@@ -4,6 +4,9 @@ slug: /bundles-ollama
 ---
 
 import Icon from "@site/src/components/icon";
+import { GraduatedBundleInstall } from '@site/docs/_partial-bundle-graduated-install.mdx';
+
+<GraduatedBundleInstall packageName="ollama" />
 
 <Icon name="Blocks" aria-hidden="true" /> [**Bundles**](/components-bundle-components) contain custom components that support specific third-party integrations with Primeagent.
 
@@ -28,7 +31,11 @@ To use the **Ollama** component in a flow, connect Primeagent to your locally ru
 
     To refresh the server's list of models, click <Icon name="RefreshCw" aria-hidden="true"/> **Refresh**.
 
-4. Optional: To configure additional parameters, such as temperature or max tokens, click <Icon name="SlidersHorizontal" aria-hidden="true"/> **Controls** in the [component's header menu](/concepts-components#component-menus).
+    :::tip
+    Large models require significant system memory to run locally. If you see an error like `model requires more system memory than is available`, your machine does not have enough RAM to load the selected model. Try selecting a smaller model, or run Ollama on a machine with more available memory.
+    :::
+
+4. Optional: To configure additional parameters, such as temperature or max tokens, click the component to open the [component inspection panel](/concepts-components#component-menus).
 
 5. Connect the **Ollama** component to other components in the flow, depending on how you want to use the model.
 
@@ -55,12 +62,10 @@ To use this component in a flow, connect Primeagent to your locally running Olla
 
     To refresh the server's list of models, click <Icon name="RefreshCw" aria-hidden="true"/> **Refresh**.
 
-4. Optional: To configure additional parameters, such as temperature or max tokens, click <Icon name="SlidersHorizontal" aria-hidden="true"/> **Controls** in the [component's header menu](/concepts-components#component-menus).
+4. Optional: To configure additional parameters, such as temperature or max tokens, click the component to open the [component inspection panel](/concepts-components#component-menus).
 Available parameters depend on the selected model.
 
 5. Connect the **Ollama Embeddings** component to other components in the flow.
 For more information about using embedding model components in flows, see [Embedding model components](/components-embedding-models).
 
-    This example connects the **Ollama Embeddings** component to generate embeddings for text chunks extracted from a PDF file, and then stores the embeddings and chunks in a Chroma DB vector store.
-
-    ![Ollama Embeddings component in an embedding generation flow](/img/component-ollama-embeddings-chromadb.png)
+    This example connects the **Ollama Embeddings** component to generate embeddings for text chunks extracted from a PDF file, and then stores the embeddings and chunks in a vector store configured with the matching embedding dimensions.

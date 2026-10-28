@@ -12,8 +12,8 @@ import secrets
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-import pytest
 import wfx.custom.utils as wfx_utils
+import pytest
 from primeagent.agentic.services.user_components import register_user_component
 from primeagent.agentic.services.user_components_overlay import (
     load_registry_with_user_overlay,
@@ -432,6 +432,20 @@ class TestRegistryOverlay:
         assert "SumComponent" in registry
         # Broken file is simply skipped — no exception, no entry.
         assert "BrokenComponent" not in registry
+
+    def test_should_skip_unsafe_persisted_file_before_template_build(self, isolated_sandbox: Path) -> None:  # noqa: ARG002
+        """Code persisted by an older release is rescanned before introspection."""
+        from primeagent.agentic.services.user_components import _resolve_components_dir
+
+        components_dir = _resolve_components_dir(user_id="user-alice")
+        unsafe_code = "import os\nos.spawnv()\nclass UnsafeComponent:\n    pass\n"
+        (components_dir / "UnsafeComponent.py").write_text(unsafe_code, encoding="utf-8")
+
+        with patch.object(wfx_utils, "build_custom_component_template") as mock_build:
+            registry = load_registry_with_user_overlay(user_id="user-alice")
+
+        assert "UnsafeComponent" not in registry
+        mock_build.assert_not_called()
 
     def test_should_not_clobber_base_registry_with_user_name_collision(self, isolated_sandbox: Path) -> None:  # noqa: ARG002
         # If the user names their class identically to a base component,

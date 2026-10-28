@@ -1,0 +1,147 @@
+---
+title: Bundle list
+slug: /extensions-bundle-list
+---
+
+import PartialOptInBundles from '@site/docs/_partial-opt-in-bundles.mdx';
+
+This page lists every official Primeagent bundle and the pip **extension** package that ships it.
+Bundle names are stable identifiers used in saved flows (`ext:<bundle>:<Class>@official`).
+The pip install command is what you run when a bundle is missing from your environment.
+
+This list reflects the bundles included with Primeagent 1.13.0.
+Providers can graduate from `wfx-bundles` to a standalone `wfx-<provider>` package without changing the bundle name in your flows.
+
+## Additional bundles {#additional-bundles}
+
+<PartialOptInBundles />
+
+## Standalone packages included by default
+
+These providers ship as their own pip packages, each on its own release cadence.
+The default `uv pip install primeagent` includes the following curated standalone packages.
+
+| Bundle | Install command |
+| --- | --- |
+| [`amazon`](/bundles-amazon) (Amazon) | `uv pip install wfx-amazon` |
+| [`anthropic`](/bundles-anthropic) (Anthropic) | `uv pip install wfx-anthropic` |
+| [`azure`](/bundles-azure) (Azure) | `uv pip install wfx-azure` |
+| [`cohere`](/bundles-cohere) (Cohere) | `uv pip install wfx-cohere` |
+| [`datastax`](/bundles-datastax) (DataStax) | `uv pip install wfx-datastax` |
+| [`docling`](/bundles-docling) (Docling) | `uv pip install wfx-docling` |
+| [`google`](/bundles-google) (Google components) | `uv pip install wfx-google` |
+| [`ibm`](/bundles-ibm) (IBM) | `uv pip install wfx-ibm` |
+| [`microsoft`](../Components/bundles-microsoft.mdx) (Microsoft 365) | `uv pip install wfx-microsoft` |
+| [`ollama`](/bundles-ollama) (Ollama) | `uv pip install wfx-ollama` |
+| [`openai`](/bundles-openai) (OpenAI) | `uv pip install wfx-openai` |
+| [`openai-compatible`](/bundles-openai-compatible) (OpenAI Compatible) | `uv pip install wfx-openai-compatible` |
+| [`oracle`](/bundles-oracle) (Oracle) | `uv pip install wfx-oracle` |
+| [`slack`](../Components/bundles-slack.mdx) (Slack) | `uv pip install wfx-slack` |
+| [`toolguard`](/policies) (Policies) | `uv pip install wfx-toolguard` |
+| [`vllm`](/bundles-vllm) (vLLM) | `uv pip install wfx-vllm` |
+
+## Opt-in standalone packages
+
+These providers are available as standalone `wfx-*` packages, but they are **not** included in `uv pip install primeagent`.
+Install one package, or install all of them together with the non-PyTorch providers in `wfx-bundles` by using
+`uv pip install "primeagent[bundles]"`.
+
+| Bundle | Install command |
+| --- | --- |
+| [`arxiv`](/bundles-arxiv) (arXiv) | `uv pip install wfx-arxiv` |
+| [`confluent`](./bundles-confluent) (IBM Confluent) | `uv pip install wfx-confluent` |
+| [`duckduckgo`](/bundles-duckduckgo) (DuckDuckGo) | `uv pip install wfx-duckduckgo` |
+| [`empiriolabs`](/bundles-empiriolabs) (EmpirioLabs) | `uv pip install wfx-empiriolabs` |
+| [`exa`](/bundles-exa) (Exa) | `uv pip install wfx-exa` |
+| [`firecrawl`](/bundles-firecrawl) (Firecrawl) | `uv pip install wfx-firecrawl` |
+| [`nextplaid`](/bundles-nextplaid) (NextPlaid) | `uv pip install wfx-nextplaid` |
+| [`paddle`](/bundles-paddle) (Paddle) | `uv pip install wfx-paddle` |
+| [`serpingapi`](./bundles-serpingapi) (Serping API) | `uv pip install wfx-serpingapi` |
+| [`serply`](./bundles-serply) (Serply) | `uv pip install wfx-serply` |
+| [`valkey`](/bundles-valkey) (Valkey) | `uv pip install wfx-valkey` |
+
+## Providers in `wfx-bundles` {#wfx-bundles}
+
+These providers do not have their own `wfx-<provider>` package.
+
+To install one provider and its SDK, run `uv pip install "wfx-bundles[<bundle-name>]"`.
+To install every provider in `wfx-bundles`, run `uv pip install "wfx[bundles]"`.
+
+To install every provider, including providers that require PyTorch as a dependency, run `uv pip install "wfx-bundles[all]"`.
+
+| Bundle | Install command |
+| --- | --- |
+| `agentql` | `uv pip install "wfx-bundles[agentql]"` |
+| [`aiml`](/bundles-aiml) (AI/ML API) | `uv pip install "wfx-bundles[aiml]"` |
+| [`apify`](/bundles-apify) (Apify) | `uv pip install "wfx-bundles[apify]"` |
+| [`assemblyai`](/bundles-assemblyai) (AssemblyAI) | `uv pip install "wfx-bundles[assemblyai]"` |
+| [`baidu`](/bundles-baidu) (Baidu) | `uv pip install "wfx-bundles[baidu]"` |
+| [`bing`](/bundles-bing) (Bing) | `uv pip install "wfx-bundles[bing]"` |
+| [`cleanlab`](/bundles-cleanlab) (Cleanlab) | `uv pip install "wfx-bundles[cleanlab]"` |
+| [`clickhouse`](/bundles-clickhouse) (ClickHouse) | `uv pip install "wfx-bundles[clickhouse]"` |
+| [`cloudflare`](/bundles-cloudflare) (Cloudflare) | `uv pip install "wfx-bundles[cloudflare]"` |
+| [`codeagents`](/bundles-codeagents) (Code Agents) | `uv pip install "wfx-bundles[codeagents]"`, then [manually install OpenDsStar](/bundles-codeagents#prerequisites) |
+| [`cometapi`](/bundles-cometapi) (CometAPI) | `uv pip install "wfx-bundles[cometapi]"` |
+| [`composio`](/bundles-composio) (Composio) | `uv pip install "wfx-bundles[composio]"` |
+| `confluence` | `uv pip install "wfx-bundles[confluence]"` |
+| [`couchbase`](/bundles-couchbase) (Couchbase) | `uv pip install "wfx-bundles[couchbase]"` |
+| [`cuga`](/bundles-cuga) (CUGA) | `uv pip install "wfx-bundles[cuga]"` |
+| [`deepseek`](/bundles-deepseek) (DeepSeek) | `uv pip install "wfx-bundles[deepseek]"` |
+| [`elastic`](/bundles-elastic) (Elastic) | `uv pip install "wfx-bundles[elastic]"` |
+| [`faiss`](/bundles-faiss) (FAISS) | `uv pip install "wfx-bundles[faiss]"` |
+| [`figranium`](./bundles-figranium) (Figranium) | `uv pip install "wfx-bundles[figranium]"` |
+| `git` | `uv pip install "wfx-bundles[git]"` |
+| [`glean`](/bundles-glean) (Glean) | `uv pip install "wfx-bundles[glean]"` |
+| [`groq`](/bundles-groq) (Groq) | `uv pip install "wfx-bundles[groq]"` |
+| `homeassistant` | `uv pip install "wfx-bundles[homeassistant]"` |
+| [`huggingface`](/bundles-huggingface) (Hugging Face) | `uv pip install "wfx-bundles[huggingface]"` |
+| [`icosacomputing`](/bundles-icosacomputing) (Icosa Computing) | `uv pip install "wfx-bundles[icosacomputing]"` |
+| `jigsawstack` | `uv pip install "wfx-bundles[jigsawstack]"` |
+| `langwatch` | `uv pip install "wfx-bundles[langwatch]"` |
+| `litellm` | `uv pip install "wfx-bundles[litellm]"` |
+| [`lmstudio`](/bundles-lmstudio) (LM Studio) | `uv pip install "wfx-bundles[lmstudio]"` |
+| [`maritalk`](/bundles-maritalk) (MariTalk) | `uv pip install "wfx-bundles[maritalk]"` |
+| [`mem0`](/bundles-mem0) (Mem0) | `uv pip install "wfx-bundles[mem0]"` |
+| [`milvus`](/bundles-milvus) (Milvus) | `uv pip install "wfx-bundles[milvus]"` |
+| [`mistral`](/bundles-mistralai) (MistralAI) | `uv pip install "wfx-bundles[mistral]"` |
+| [`mongodb`](/bundles-mongodb) (MongoDB) | `uv pip install "wfx-bundles[mongodb]"` |
+| [`mrscraper`](./bundles-mrscraper) (MrScraper) | `uv pip install "wfx-bundles[mrscraper]"` |
+| `needle` | `uv pip install "wfx-bundles[needle]"` |
+| `notdiamond` | `uv pip install "wfx-bundles[notdiamond]"` |
+| [`notion`](/bundles-notion) (Notion) | `uv pip install "wfx-bundles[notion]"` |
+| [`novita`](/bundles-novita) (Novita) | `uv pip install "wfx-bundles[novita]"` |
+| [`nvidia`](/bundles-nvidia) (NVIDIA) | `uv pip install "wfx-bundles[nvidia]"` |
+| `olivya` | `uv pip install "wfx-bundles[olivya]"` |
+| [`openrouter`](/bundles-openrouter) (OpenRouter) | `uv pip install "wfx-bundles[openrouter]"` |
+| [`orcarouter`](./bundles-orcarouter) (OrcaRouter) | `uv pip install "wfx-bundles[orcarouter]"` |
+| [`perplexity`](/bundles-perplexity) (Perplexity) | `uv pip install "wfx-bundles[perplexity]"` |
+| [`pgvector`](/bundles-pgvector) (pgvector) | `uv pip install "wfx-bundles[pgvector]"` |
+| [`pinecone`](/bundles-pinecone) (Pinecone) | `uv pip install "wfx-bundles[pinecone]"` |
+| [`qdrant`](/bundles-qdrant) (Qdrant) | `uv pip install "wfx-bundles[qdrant]"` |
+| [`redis`](/bundles-redis) (Redis) | `uv pip install "wfx-bundles[redis]"` |
+| [`sambanova`](/bundles-sambanova) (SambaNova) | `uv pip install "wfx-bundles[sambanova]"` |
+| `scrapegraph` | `uv pip install "wfx-bundles[scrapegraph]"` |
+| [`searchapi`](/bundles-searchapi) (SearchApi) | `uv pip install "wfx-bundles[searchapi]"` |
+| `serpapi` | `uv pip install "wfx-bundles[serpapi]"` |
+| `spider` | `uv pip install "wfx-bundles[spider]"` |
+| [`supabase`](/bundles-supabase) (Supabase) | `uv pip install "wfx-bundles[supabase]"` |
+| `tavily` | `uv pip install "wfx-bundles[tavily]"` |
+| `twelvelabs` | `uv pip install "wfx-bundles[twelvelabs]"` |
+| `unstructured` | `uv pip install "wfx-bundles[unstructured]"` |
+| [`upstash`](/bundles-upstash) (Upstash) | `uv pip install "wfx-bundles[upstash]"` |
+| [`vectara`](/bundles-vectara) (Vectara) | `uv pip install "wfx-bundles[vectara]"` |
+| [`vertexai`](/bundles-vertexai) (Vertex AI) | `uv pip install "wfx-bundles[vertexai]"` |
+| `vlmrun` | `uv pip install "wfx-bundles[vlmrun]"` |
+| [`weaviate`](/bundles-weaviate) (Weaviate) | `uv pip install "wfx-bundles[weaviate]"` |
+| [`wikipedia`](/bundles-wikipedia) (Wikipedia) | `uv pip install "wfx-bundles[wikipedia]"` |
+| `wolframalpha` | `uv pip install "wfx-bundles[wolframalpha]"` |
+| [`xai`](/bundles-xai) (xAI) | `uv pip install "wfx-bundles[xai]"` |
+| `yahoosearch` | `uv pip install "wfx-bundles[yahoosearch]"` |
+| `youtube` | `uv pip install "wfx-bundles[youtube]"` |
+| `zep` | `uv pip install "wfx-bundles[zep]"` |
+
+## See also
+
+- [Extensions overview](./extensions-overview)
+- [Install WFX](./wfx-install)
+- [About bundles](/components-bundle-components)

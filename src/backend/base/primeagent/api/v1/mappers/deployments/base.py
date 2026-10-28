@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel
 from wfx.log.logger import logger
 from wfx.services.adapters.deployment.payloads import DeploymentPayloadFields
 from wfx.services.adapters.deployment.schema import (
@@ -64,6 +63,7 @@ from wfx.services.adapters.payload import (
     AdapterPayloadValidationError,
     PayloadSlot,
 )
+from pydantic import BaseModel
 
 from primeagent.api.v1.schemas.deployments import (
     DeploymentConfigListResponse,
@@ -244,7 +244,7 @@ class BaseDeploymentMapper:
         flow_name = getattr(flow_row, "name", None) or ""
         if not flow_name:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"Cannot build deployment artifact: the parent flow for version "
                     f"'{flow_version.id}' has been deleted or has no name."
@@ -259,7 +259,7 @@ class BaseDeploymentMapper:
             )
         except ValidationError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"Flow version '{flow_version.id}' cannot be used as a deployment "
                     f"artifact: {exc.errors()[0]['msg']}"
@@ -974,13 +974,13 @@ class BaseDeploymentMapper:
             parsed = slot.parse(raw)
         except AdapterPayloadMissingError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Missing provider_data for {provider_label}.",
             ) from exc
         except AdapterPayloadValidationError as exc:
             detail = exc.format_first_error()
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid provider_data for {provider_label}: {detail}",
             ) from exc
         if outer_payload is None:
@@ -989,7 +989,7 @@ class BaseDeploymentMapper:
             self.validate_with_outer_request(parsed, outer_payload)
         except OuterRequestValidationError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid provider_data for {provider_label}: {exc.detail}",
             ) from exc
         except OuterRequestValidationNotConfiguredError as exc:

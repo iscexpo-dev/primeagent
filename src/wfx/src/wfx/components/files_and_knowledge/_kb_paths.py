@@ -1,8 +1,10 @@
-"""Shared helpers for Knowledge Base / Memory Base components.
+"""Shared KB root-path helper for Knowledge Base / Memory Base components.
 
-Centralizes the KB root path lookup and embedding-metadata loading that
-``ingestion.py``, ``retrieval.py`` and ``memory_retrieval.py`` would otherwise
-duplicate.
+Only the root-directory lookup lives here now. The on-disk
+``embedding_metadata.json`` sidecar this module used to read is gone: the
+``knowledge_base`` row is the sole authority for a KB's embedding config,
+backend routing, and stats, so components resolve all of that from the database
+and touch the filesystem only when the resolved backend is local Chroma.
 
 Astra cloud guard: the user-facing Knowledge Base ingestion and retrieval
 components are blocked in Astra cloud deployments via
@@ -18,9 +20,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cryptography.fernet import InvalidToken
-from primeagent.services.auth.utils import decrypt_api_key
-
 from wfx.log.logger import logger
 from wfx.services.deps import get_settings_service
 
@@ -28,7 +27,12 @@ _KNOWLEDGE_BASES_ROOT_PATH: Path | None = None
 
 
 def get_knowledge_bases_root_path() -> Path:
-    """Lazily resolve the configured KB root directory."""
+    """Lazily resolve the configured KB root directory.
+
+    Only reached for local-Chroma knowledge bases — every other backend stores
+    off-box and never asks for a path. Deployments that serve only remote vector
+    stores therefore never hit the ``knowledge_bases_dir`` requirement.
+    """
     global _KNOWLEDGE_BASES_ROOT_PATH  # noqa: PLW0603
     if _KNOWLEDGE_BASES_ROOT_PATH is None:
         settings = get_settings_service().settings
@@ -46,30 +50,44 @@ def reset_knowledge_bases_root_path_cache() -> None:
     _KNOWLEDGE_BASES_ROOT_PATH = None
 
 
-def load_kb_metadata(kb_path: Path, *, log_label: str) -> dict[str, Any]:
-    """Load ``embedding_metadata.json`` from a KB directory.
+class KBKeyDecryptError(Exception):
+    """The stored embedding API key could not be decrypted.
 
-    Returns ``{}`` on missing file / invalid JSON. ``log_label`` is used in log
-    messages instead of the on-disk path so usernames (sometimes emails) are
-    not leaked into log streams.
+    Kept for backward compatibility only. Saved flows embed a frozen copy of the
+    component code they were built with, and 1.11.x Knowledge components import
+    this name at module scope — removing it made those flows unopenable with
+    ``ImportError: Cannot import name 'KBKeyDecryptError'``. Current
+    code resolves embedding config from the ``knowledge_base`` row instead.
     """
-    metadata: dict[str, Any] = {}
+
+
+def load_kb_metadata(
+    kb_path: Path,
+    *,
+    log_label: str,
+    require_api_key: bool = False,  # noqa: ARG001
+) -> dict[str, Any]:
+    """Load the legacy ``embedding_metadata.json`` sidecar from a KB directory.
+
+    Kept for backward compatibility with the frozen 1.11.x component code saved
+    inside existing flows. The sidecar is no longer written, so this
+    returns ``{}`` for any KB created by a current version; the
+    ``knowledge_base`` row is the sole authority now.
+    """
     metadata_file = kb_path / "embedding_metadata.json"
     if not metadata_file.exists():
         logger.warning("Embedding metadata file not found for %s", log_label)
-        return metadata
+        return {}
 
     try:
         with metadata_file.open("r", encoding="utf-8") as f:
             metadata = json.load(f)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, OSError):
         logger.error("Error decoding embedding metadata JSON for %s", log_label)
         return {}
 
+    if not isinstance(metadata, dict):
+        return {}
     if metadata.get("api_key"):
-        try:
-            metadata["api_key"] = decrypt_api_key(metadata["api_key"], get_settings_service())
-        except (InvalidToken, TypeError, ValueError) as e:
-            logger.error("Could not decrypt API key for %s. Provide it manually. Error: %s", log_label, e)
-            metadata["api_key"] = None
+        metadata["api_key"] = None
     return metadata

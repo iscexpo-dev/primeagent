@@ -7,16 +7,23 @@ from uuid import UUID, uuid4
 import numpy as np
 import pandas as pd
 from fastapi.encoders import jsonable_encoder
+from wfx.schema.legacy_render import render_v1_content_blocks
 from pydantic import ConfigDict, field_serializer, field_validator
 from sqlalchemy import Index, Text, text
 from sqlmodel import JSON, Column, Field, SQLModel
 
-from primeagent.schema.content_block import ContentBlock
+from primeagent.schema.content_block import ContentType
 from primeagent.schema.properties import Properties
 from primeagent.schema.validators import TF_WITH_TZ_AND_MICROSECONDS, str_to_timestamp, str_to_timestamp_validator
 
 if TYPE_CHECKING:
     from primeagent.schema.message import Message
+
+# Columns a caller may order messages by. A tenant-supplied order_by is passed to
+# getattr(MessageTable, order_by); validating against this allowlist prevents an arbitrary
+# attribute name from raising a 500 error-oracle (or reaching a non-column attribute). Shared by
+# the monitor endpoints and the primeagent.memory query helper so they validate identically.
+ALLOWED_MESSAGE_ORDER_FIELDS = frozenset({"timestamp", "sender", "sender_name", "session_id", "text"})
 
 
 class MessageBase(SQLModel):
@@ -34,7 +41,7 @@ class MessageBase(SQLModel):
 
     properties: Properties = Field(default_factory=Properties)
     category: str = Field(default="message")
-    content_blocks: list[ContentBlock] = Field(default_factory=list)
+    content_blocks: list[ContentType] = Field(default_factory=list)
     session_metadata: dict | None = Field(default=None)
 
     @field_serializer("timestamp")
@@ -63,8 +70,21 @@ class MessageBase(SQLModel):
         return value
 
     @classmethod
-    def from_message(cls, message: "Message", flow_id: str | UUID | None = None, run_id: str | UUID | None = None):
-        if message.text is None or not message.sender or not message.sender_name:
+    def from_message(
+        cls,
+        message: "Message",
+        flow_id: str | UUID | None = None,
+        run_id: str | UUID | None = None,
+        user_id: str | UUID | None = None,
+    ):
+        # ``message.text`` is now a computed_field over content_blocks. The
+        # "content present" signal is: ``data["text"]`` explicitly set
+        # (covers ``text=""`` from ChatInput), a pending text stream
+        # (iterator), or any ``content_blocks`` entries (covers tool-call /
+        # media-only agent messages whose ``content_blocks`` carry the
+        # whole payload).
+        no_content = message.data.get("text") is None and message.text_stream is None and not message.content_blocks
+        if no_content or not message.sender or not message.sender_name:
             msg = "The message does not have the required fields (text, sender, sender_name)."
             raise ValueError(msg)
 
@@ -98,7 +118,7 @@ class MessageBase(SQLModel):
                 parsed = datetime.fromisoformat(message.timestamp)
                 timestamp = parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
         else:
-            timestamp = message.timestamp
+            timestamp = str_to_timestamp(message.timestamp)
 
         if not flow_id and message.flow_id:
             flow_id = message.flow_id
@@ -132,6 +152,13 @@ class MessageBase(SQLModel):
                 msg = f"Run ID {run_id} is not a valid UUID"
                 raise ValueError(msg) from exc
 
+        if isinstance(user_id, str):
+            try:
+                user_id = UUID(user_id)
+            except ValueError as exc:
+                msg = f"User ID {user_id} is not a valid UUID"
+                raise ValueError(msg) from exc
+
         return cls(
             sender=message.sender,
             sender_name=message.sender_name,
@@ -142,6 +169,7 @@ class MessageBase(SQLModel):
             timestamp=timestamp,
             flow_id=flow_id,
             run_id=run_id,
+            user_id=user_id,
             properties=properties,
             category=message.category,
             content_blocks=content_blocks,
@@ -154,6 +182,17 @@ class MessageTable(MessageBase, table=True):  # type: ignore[call-arg]
 
     __tablename__ = "message"
     __table_args__ = (
+        # Every history read filters by flow_id (the monitor endpoints) or by
+        # session_id (chat memory) and orders by timestamp. Without these the
+        # whole message table is scanned and sorted on each read, which is what
+        # made a flow with a long history stall the API. ``id`` trails the sort
+        # key because it is the paging tie-breaker; leaving it out makes the
+        # planner sort the matched rows instead of walking the index in order.
+        Index("ix_message_flow_id_timestamp_id", "flow_id", "timestamp", "id"),
+        Index("ix_message_session_id_timestamp_id", "session_id", "timestamp", "id"),
+        # Session lists group a flow's messages by session_id and take MAX(timestamp);
+        # with all three columns in the index that is an index-only scan.
+        Index("ix_message_flow_id_session_id_timestamp", "flow_id", "session_id", "timestamp"),
         Index(
             "ix_message_session_metadata_tenant",
             text("(session_metadata->>'tenant_id')"),
@@ -169,6 +208,10 @@ class MessageTable(MessageBase, table=True):  # type: ignore[call-arg]
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     flow_id: UUID | None = Field(default=None)
     run_id: UUID | None = Field(default=None, index=True)
+    # Owner of the message (the user that executed the flow). Scopes chat-history retrieval so a
+    # reused session_id cannot disclose another user's messages on the authenticated run path.
+    # Nullable for legacy rows / contexts with no owner concept.
+    user_id: UUID | None = Field(default=None, index=True)
     is_output: bool = Field(default=False)
 
     files: list[str] = Field(sa_column=Column(JSON))
@@ -177,7 +220,7 @@ class MessageTable(MessageBase, table=True):  # type: ignore[call-arg]
         sa_column=Column(JSON),
     )
     category: str = Field(sa_column=Column(Text))
-    content_blocks: list[dict | ContentBlock] = Field(  # type: ignore[assignment]
+    content_blocks: list[dict | ContentType] = Field(  # type: ignore[assignment]
         default_factory=list,
         sa_column=Column(JSON),
     )
@@ -192,6 +235,15 @@ class MessageTable(MessageBase, table=True):  # type: ignore[call-arg]
     @field_validator("flow_id", mode="before")
     @classmethod
     def validate_flow_id(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, str):
+            return UUID(value)
+        return value
+
+    @field_validator("user_id", mode="before")
+    @classmethod
+    def validate_user_id(cls, value):
         if value is None:
             return value
         if isinstance(value, str):
@@ -280,10 +332,38 @@ class MessageRead(MessageBase):
     flow_id: UUID | None = None
     session_metadata: dict | None = None
     run_id: UUID | None = None
+    # v1 read shape: hold content_blocks as legacy dicts and render the
+    # release-1.11.0 shape, so editing/reading a stored message (new-shape rows
+    # or pre-1.11.0 untagged rows) keeps the v1 wire shape and never trips the
+    # new union validator (the union_tag_not_found 500 on PUT /messages/{id}).
+    content_blocks: list[dict] = Field(default_factory=list)  # type: ignore[assignment]
+
+    @field_validator("content_blocks", mode="before")
+    @classmethod
+    def render_legacy_content_blocks(cls, value):
+        return render_v1_content_blocks(value) or []
+
+
+def _coerce_content_block_dicts(value):
+    """Normalize content_blocks items to plain dicts (request-parse path).
+
+    Accepts legacy/new dicts and ContentType model instances without forcing
+    them through the new discriminated union, and stores them as-sent (no v1
+    legacy projection: these are input models, not the v1 response).
+    """
+    if isinstance(value, list):
+        return [block.model_dump() if hasattr(block, "model_dump") else block for block in value]
+    return value
 
 
 class MessageCreate(MessageBase):
     session_metadata: dict | None = None
+    content_blocks: list[dict] = Field(default_factory=list)  # type: ignore[assignment]
+
+    @field_validator("content_blocks", mode="before")
+    @classmethod
+    def coerce_content_blocks(cls, value):
+        return _coerce_content_block_dicts(value) or []
 
 
 class MessageUpdate(SQLModel):
@@ -298,4 +378,9 @@ class MessageUpdate(SQLModel):
     properties: Properties | None = None
     session_metadata: dict | None = None
     category: str | None = None
-    content_blocks: list[ContentBlock] | None = None
+    content_blocks: list[dict] | None = None
+
+    @field_validator("content_blocks", mode="before")
+    @classmethod
+    def coerce_content_blocks(cls, value):
+        return _coerce_content_block_dicts(value)

@@ -11,16 +11,17 @@ This test suite covers all aspects of the logger module including:
 
 import builtins
 import contextlib
+import importlib
 import json
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 import structlog
-from loguru import logger as loguru_logger
 from wfx.log.logger import (
     LOG_LEVEL_MAP,
     VALID_LOG_LEVELS,
@@ -32,7 +33,76 @@ from wfx.log.logger import (
     log_buffer,
     setup_gunicorn_logger,
     setup_uvicorn_logger,
+    structlog_routes_to_stdlib,
 )
+from loguru import logger as loguru_logger
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE.sub("", text)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_process_logging_state():
+    """Restore every process-global logging object this module mutates.
+
+    The tests here call ``configure()`` dozens of times and edit
+    ``logging.root.handlers`` directly, which rewires *process-wide* state:
+    the structlog config, stdlib root handlers (InterceptHandler /
+    RotatingFileHandler pointed at since-deleted temp dirs), named-logger
+    levels (via PRIMEAGENT_LOG_LEVELS), and the ``wfx.log.logger`` module
+    globals. Under xdist that poisoned state leaks into whatever test the
+    worker picks up next -- observed on the release-1.11.3 CI run, where the
+    worker that had just finished this module hung indefinitely inside the
+    next test needing the full-app ``client`` fixture
+    (test_login.py::test_session_endpoint_rejects_expired_external_token),
+    freezing the whole Group 5 job to the 50-min step wall on py3.13. This
+    fixture snapshots the pre-module state and puts it back at module exit.
+    """
+    # ``import wfx.log.logger as ...`` would bind the *logger object* that
+    # ``wfx.log``'s ``__init__`` re-exports under the same name, not the module.
+    _wfx_log = importlib.import_module("wfx.log.logger")
+
+    orig_structlog_config = dict(structlog.get_config())
+    orig_root_handlers = logging.root.handlers[:]
+    orig_root_level = logging.root.level
+    orig_file_handler = _wfx_log._file_handler
+    orig_logger_levels = {
+        name: lg.level for name, lg in logging.Logger.manager.loggerDict.items() if isinstance(lg, logging.Logger)
+    }
+
+    yield
+
+    # structlog: reinstall the exact pre-module config (processor chain,
+    # wrapper_class -- which also carries configure()'s change fingerprint).
+    structlog.configure(**orig_structlog_config)
+
+    # stdlib root: drop handlers the module added (closing file handlers so
+    # they stop pointing into deleted temp dirs), then restore the original
+    # handler list and level. If the module's configure() calls replaced the
+    # wfx-managed file handler, the original one was already closed by
+    # setup_log_file(), so it must not be reinstalled.
+    current_file_handler = _wfx_log._file_handler
+    for handler in logging.root.handlers[:]:
+        if handler not in orig_root_handlers:
+            logging.root.removeHandler(handler)
+            if isinstance(handler, logging.handlers.RotatingFileHandler):
+                with contextlib.suppress(OSError, ValueError):
+                    handler.close()
+    restored_handlers = orig_root_handlers
+    if current_file_handler is not orig_file_handler:
+        restored_handlers = [h for h in orig_root_handlers if h is not orig_file_handler]
+        _wfx_log._file_handler = None
+    logging.root.handlers[:] = restored_handlers
+    logging.root.setLevel(orig_root_level)
+
+    # Named loggers whose levels configure() changed via PRIMEAGENT_LOG_LEVELS.
+    for name, level in orig_logger_levels.items():
+        lg = logging.Logger.manager.loggerDict.get(name)
+        if isinstance(lg, logging.Logger) and lg.level != level:
+            lg.setLevel(level)
 
 
 class TestConfigure:
@@ -419,6 +489,116 @@ class TestInterceptHandler:
         self.mock_logger.info.assert_called_once_with("Message with string and 42")
 
 
+class TestInterceptHandlerReentrancy:
+    """Regression cover for the LE-2454 / #14776 logging cycle.
+
+    When structlog is backed by the stdlib factory, the structlog call inside
+    ``emit`` resolves to the same stdlib logger the handler is attached to, so the
+    record comes straight back in -- carrying the previous lap's rendered payload.
+    ``emit`` drops a record that arrives while the thread is already inside it.
+    """
+
+    # A regression here recurses until memory runs out. Cap the laps so the test
+    # fails an assert in milliseconds instead of taking CI down with it.
+    LAP_CAP = 10
+
+    def _record(self, message="boom"):
+        return logging.LogRecord(
+            name="gunicorn.error",
+            level=logging.ERROR,
+            pathname="test.py",
+            lineno=1,
+            msg=message,
+            args=(),
+            exc_info=None,
+        )
+
+    def test_reentrant_record_is_dropped(self):
+        """The record that re-enters emit() is dropped rather than forwarded again."""
+        handler = InterceptHandler()
+        forwarded = []
+
+        class CyclingLogger:
+            """Stands in for the stdlib-backed structlog logger that feeds emit()."""
+
+            def error(inner_self, message, **_kwargs):  # noqa: N805
+                forwarded.append(message)
+                if len(forwarded) > TestInterceptHandlerReentrancy.LAP_CAP:
+                    msg = "emit() cycled past the lap cap -- the re-entrancy guard is gone"
+                    raise AssertionError(msg)
+                # Exactly what the stdlib logger does in file mode: hand the
+                # rendered payload straight back to the handler that emitted it.
+                handler.emit(self._record(f"rendered({message})"))
+
+        with patch("structlog.get_logger", return_value=CyclingLogger()):
+            handler.emit(self._record())
+
+        assert forwarded == ["boom"]
+
+    def test_guard_is_released_after_a_successful_emit(self):
+        """A completed emit must not leave the thread's logging wedged shut."""
+        handler = InterceptHandler()
+        mock_logger = Mock()
+
+        with patch("structlog.get_logger", return_value=mock_logger):
+            handler.emit(self._record("first"))
+            handler.emit(self._record("second"))
+
+        assert [call.args[0] for call in mock_logger.error.call_args_list] == ["first", "second"]
+
+    def test_guard_is_released_after_handle_error(self):
+        """One malformed record must not silence every record after it."""
+        handler = InterceptHandler()
+        mock_logger = Mock()
+
+        with (
+            patch("structlog.get_logger", side_effect=RuntimeError("broken")),
+            patch.object(handler, "handleError") as mock_handle_error,
+        ):
+            handler.emit(self._record("explodes"))
+        assert mock_handle_error.called
+
+        with patch("structlog.get_logger", return_value=mock_logger):
+            handler.emit(self._record("still works"))
+        mock_logger.error.assert_called_once_with("still works")
+
+
+class TestStructlogRoutesToStdlib:
+    """``structlog_routes_to_stdlib()`` is what callers check before intercepting."""
+
+    def test_false_without_a_log_file(self):
+        """Stdout mode renders directly, so an intercept terminates safely."""
+        configure(log_level="ERROR")
+
+        assert structlog_routes_to_stdlib() is False
+
+    def test_true_with_a_log_file(self, tmp_path):
+        """File mode routes structlog back through stdlib -- intercepting would cycle."""
+        configure(log_level="ERROR", log_file=tmp_path / "primeagent.log")
+
+        assert structlog_routes_to_stdlib() is True
+
+
+class TestRootInterceptAcrossModes:
+    """The root intercept must not survive the switch into log-file mode.
+
+    ``--log-file`` carries no ``envvar``, so a JSON-mode process can install the
+    root intercept at import time (``json_mode and not log_file``) and only learn
+    about the log file on the next ``configure()``. Left in place, that handler is
+    the root-logger form of the LE-2454 cycle.
+    """
+
+    def test_root_intercept_is_dropped_when_a_log_file_arrives(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PRIMEAGENT_LOG_ENV", "container")
+
+        configure(log_level="ERROR", log_env="container")
+        assert any(isinstance(h, InterceptHandler) for h in logging.root.handlers)
+
+        configure(log_level="ERROR", log_env="container", log_file=tmp_path / "primeagent.log")
+
+        assert not any(isinstance(h, InterceptHandler) for h in logging.root.handlers)
+
+
 class TestSetupFunctions:
     """Test suite for setup_uvicorn_logger() and setup_gunicorn_logger()."""
 
@@ -692,12 +872,14 @@ class TestProductionObservability:
         assert rec["internal_key"] == "***"
         assert rec["safe"] == "ok"
 
-    def test_traceback_locals_disabled_by_default(self, capsys):
+    def test_traceback_locals_disabled_by_default(self, capsys, monkeypatch):
+        monkeypatch.delenv("PRIMEAGENT_LOG_TRACE_LOCALS", raising=False)
         configure(log_env="container", log_level="DEBUG", cache=False)
         log = structlog.get_logger("locals.test")
-        secret_var = "sk-do-not-leak"  # pragma: allowlist secret # noqa: F841, S105
 
         def emit():
+            # Must live in a traced frame, or the assertion below passes with locals on.
+            secret_var = "sk-do-not-leak"  # pragma: allowlist secret # noqa: F841, S105
             try:
                 msg = "boom"
                 raise RuntimeError(msg)
@@ -730,6 +912,48 @@ class TestProductionObservability:
         rendered = json.dumps(records[-1])
         assert "marker-locals-on" in rendered
 
+    def test_console_traceback_locals_disabled_by_default(self, capsys, monkeypatch):
+        # The pretty console renderer is the default for `primeagent run`. structlog's rich
+        # formatter shows frame locals unless told otherwise, which printed settings env
+        # values (e.g. a database URL with its password) when startup validation failed.
+        monkeypatch.delenv("PRIMEAGENT_LOG_TRACE_LOCALS", raising=False)
+        monkeypatch.setenv("PRIMEAGENT_PRETTY_LOGS", "true")
+        configure(log_env="", log_level="DEBUG", cache=False)
+        log = structlog.get_logger("locals.console")
+
+        def emit():
+            # Built at runtime: rich also prints the source lines around the raise, so a
+            # literal here would show up even with locals off.
+            secret_var = "-".join(["sk", "do", "not", "leak"])  # noqa: F841, FLY002
+            try:
+                msg = "boom"
+                raise RuntimeError(msg)
+            except RuntimeError:
+                log.exception("trace")
+
+        emit()
+        out = _strip_ansi(capsys.readouterr().out)
+        assert "RuntimeError: boom" in out
+        assert "sk-do-not-leak" not in out  # pragma: allowlist secret
+
+    def test_console_traceback_locals_enabled_via_opt_in(self, capsys, monkeypatch):
+        monkeypatch.setenv("PRIMEAGENT_LOG_TRACE_LOCALS", "true")
+        monkeypatch.setenv("PRIMEAGENT_PRETTY_LOGS", "true")
+        configure(log_env="", log_level="DEBUG", cache=False)
+        log = structlog.get_logger("locals.console.optin")
+
+        def emit():
+            # Built at runtime so only the locals panel, not the source excerpt, can render it.
+            traceable_marker = "-".join(["marker", "locals", "on"])  # noqa: F841, FLY002
+            try:
+                msg = "boom"
+                raise RuntimeError(msg)
+            except RuntimeError:
+                log.exception("trace")
+
+        emit()
+        assert "marker-locals-on" in _strip_ansi(capsys.readouterr().out)
+
     def test_intercept_handler_is_idempotent(self):
         # Two configure() calls must leave exactly one InterceptHandler
         # attached, with the second call's level winning. A regression here
@@ -743,6 +967,8 @@ class TestProductionObservability:
     def test_intercept_handler_not_installed_in_pretty_mode(self, monkeypatch):
         # Pretty/console mode must NOT route stdlib through structlog,
         # otherwise dev terminals get duplicated lines.
+        configure(log_env="container", log_level="DEBUG", cache=False)
+        assert any(isinstance(h, InterceptHandler) for h in logging.root.handlers)
         monkeypatch.setenv("PRIMEAGENT_PRETTY_LOGS", "true")
         configure(log_env="", log_level="DEBUG", cache=False)
         handlers = [h for h in logging.root.handlers if isinstance(h, InterceptHandler)]
@@ -1746,6 +1972,21 @@ class TestConfigureEarlyReturnFingerprint:
         configure(log_level="INFO", log_env="container", cache=False)
         second = structlog.get_config()["processors"]
         assert first is second, "identical configure() rebuilt the pipeline; early-return regressed"
+
+    def test_pretty_toggle_changes_renderer_and_stdlib_routing(self, monkeypatch):
+        """Changing the environment toggle must reconfigure otherwise identical calls."""
+        monkeypatch.setenv("PRIMEAGENT_PRETTY_LOGS", "false")
+        configure(log_level="INFO", log_env="", cache=False)
+        first = structlog.get_config()["processors"]
+        assert any(isinstance(h, InterceptHandler) for h in logging.root.handlers)
+
+        monkeypatch.setenv("PRIMEAGENT_PRETTY_LOGS", "true")
+        configure(log_level="INFO", log_env="", cache=False)
+        second = structlog.get_config()["processors"]
+
+        assert first is not second
+        assert isinstance(second[-1], structlog.dev.ConsoleRenderer)
+        assert not any(isinstance(h, InterceptHandler) for h in logging.root.handlers)
 
     def test_same_level_new_output_file_takes_effect(self):
         """Same level, new output_file must reconfigure (the wfx.run.base path).

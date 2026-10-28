@@ -12,10 +12,13 @@ from primeagent.agentic.services.flow_preparation import (
     WFX_COMPONENTS_PATH_SENTINEL,
     available_model_providers,
     inject_assistant_fs_root,
-    inject_model_into_flow,
     inject_wfx_components_path,
+    inject_model_into_flow,
     load_and_prepare_flow,
 )
+from primeagent.agentic.services.flow_types import FLOWS_BASE_PATH, PRIMEAGENT_ASSISTANT_FLOW
+from wfx.custom.eval import eval_custom_component_code
+from wfx.services.deps import get_settings_service
 
 import wfx
 
@@ -476,6 +479,36 @@ class TestInjectWfxComponentsPath:
         expected = str(Path(wfx.__file__).parent / "components")
         assert rewritten == expected
 
+    def test_shipped_assistant_directory_node_loads_components_from_any_working_dir(self, tmp_path, monkeypatch):
+        """The shipped flow's Directory node must load when the process does not run from the repo.
+
+        Primeagent Desktop runs from its data dir, where the rewritten absolute path lies outside
+        the working root the Directory component trusts by default. Local file access stays
+        restricted, as it is by default.
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(get_settings_service().settings, "directory_component_allowed_roots", [])
+        monkeypatch.setattr(get_settings_service().settings, "restrict_local_file_access", True)
+
+        prepared = json.loads(load_and_prepare_flow(FLOWS_BASE_PATH / PRIMEAGENT_ASSISTANT_FLOW, None, None, None))
+        directory_nodes = [node for node in prepared["data"]["nodes"] if node["data"].get("type") == "Directory"]
+        assert directory_nodes
+        for node in directory_nodes:
+            template = node["data"]["node"]["template"]
+            component = eval_custom_component_code(template["code"]["value"])()
+            component.set_attributes(
+                {
+                    "path": template["path"]["value"],
+                    "types": template["types"]["value"],
+                    "depth": template["depth"]["value"],
+                    "recursive": template["recursive"]["value"],
+                    "use_multithreading": False,
+                    "silent_errors": False,
+                }
+            )
+
+            assert component.load_directory()
+
 
 def _make_filesystem_flow(root_path_value: str) -> dict:
     """Build a minimal flow with a single FileSystemTool node at the given root_path."""
@@ -597,3 +630,136 @@ class TestInjectAssistantFsRoot:
         # sub_path under the user's namespace.
         unchanged = result["data"]["nodes"][0]["data"]["node"]["template"]["root_path"]["value"]
         assert unchanged == "/explicit/path"
+
+
+class TestInjectHistoryLimitIntoFlow:
+    """The /history N command overrides the Agent's memory window (n_messages)."""
+
+    @staticmethod
+    def _flow_with_agent(n_messages_value=20):
+        return {
+            "data": {
+                "nodes": [
+                    {"data": {"type": "ChatInput", "node": {"template": {}}}},
+                    {
+                        "data": {
+                            "type": "Agent",
+                            "node": {"template": {"n_messages": {"value": n_messages_value}}},
+                        }
+                    },
+                ]
+            }
+        }
+
+    def test_should_set_n_messages_on_agent_nodes(self):
+        from primeagent.agentic.services.flow_preparation import inject_history_limit_into_flow
+
+        flow = self._flow_with_agent(20)
+        out = inject_history_limit_into_flow(flow, 5)
+        agent = out["data"]["nodes"][1]["data"]["node"]["template"]
+        assert agent["n_messages"]["value"] == 5
+
+    def test_should_leave_non_agent_nodes_untouched(self):
+        from primeagent.agentic.services.flow_preparation import inject_history_limit_into_flow
+
+        flow = self._flow_with_agent(20)
+        out = inject_history_limit_into_flow(flow, 5)
+        chat_input = out["data"]["nodes"][0]["data"]["node"]["template"]
+        assert "n_messages" not in chat_input
+
+    def test_should_be_noop_for_none_or_negative_limit(self):
+        from primeagent.agentic.services.flow_preparation import inject_history_limit_into_flow
+
+        flow = self._flow_with_agent(20)
+
+        def _n_messages(f):
+            return f["data"]["nodes"][1]["data"]["node"]["template"]["n_messages"]["value"]
+
+        assert _n_messages(inject_history_limit_into_flow(flow, None)) == 20
+        assert _n_messages(inject_history_limit_into_flow(flow, -1)) == 20
+
+    def test_should_skip_agent_without_n_messages_field(self):
+        from primeagent.agentic.services.flow_preparation import inject_history_limit_into_flow
+
+        flow = {"data": {"nodes": [{"data": {"type": "Agent", "node": {"template": {}}}}]}}
+        # must not raise
+        inject_history_limit_into_flow(flow, 5)
+
+
+class TestInjectIterationsIntoFlow:
+    """The /iterations N command overrides the assistant Agent's step budget (max_iterations)."""
+
+    @staticmethod
+    def _flow_with_agent(max_iterations_value=30):
+        return {
+            "data": {
+                "nodes": [
+                    {"data": {"type": "ChatInput", "node": {"template": {}}}},
+                    {
+                        "data": {
+                            "type": "Agent",
+                            "node": {"template": {"max_iterations": {"value": max_iterations_value}}},
+                        }
+                    },
+                ]
+            }
+        }
+
+    def test_should_set_max_iterations_on_agent_nodes(self):
+        from primeagent.agentic.services.flow_preparation import inject_iterations_into_flow
+
+        flow = self._flow_with_agent(30)
+        out = inject_iterations_into_flow(flow, 60)
+        agent = out["data"]["nodes"][1]["data"]["node"]["template"]
+        assert agent["max_iterations"]["value"] == 60
+
+    def test_should_leave_non_agent_nodes_untouched(self):
+        from primeagent.agentic.services.flow_preparation import inject_iterations_into_flow
+
+        flow = self._flow_with_agent(30)
+        out = inject_iterations_into_flow(flow, 60)
+        chat_input = out["data"]["nodes"][0]["data"]["node"]["template"]
+        assert "max_iterations" not in chat_input
+
+    def test_should_be_noop_for_none_limit(self):
+        from primeagent.agentic.services.flow_preparation import inject_iterations_into_flow
+
+        flow = self._flow_with_agent(30)
+        assert (
+            inject_iterations_into_flow(flow, None)["data"]["nodes"][1]["data"]["node"]["template"]["max_iterations"][
+                "value"
+            ]
+            == 30
+        )
+
+    def test_should_clamp_to_minimum_of_one(self):
+        from primeagent.agentic.services.flow_preparation import inject_iterations_into_flow
+
+        flow = self._flow_with_agent(30)
+        out = inject_iterations_into_flow(flow, 0)
+        assert out["data"]["nodes"][1]["data"]["node"]["template"]["max_iterations"]["value"] == 1
+
+    def test_should_clamp_to_max(self):
+        from primeagent.agentic.services.flow_preparation import MAX_ASSISTANT_ITERATIONS, inject_iterations_into_flow
+
+        flow = self._flow_with_agent(30)
+        out = inject_iterations_into_flow(flow, MAX_ASSISTANT_ITERATIONS + 50)
+        assert (
+            out["data"]["nodes"][1]["data"]["node"]["template"]["max_iterations"]["value"] == MAX_ASSISTANT_ITERATIONS
+        )
+
+    def test_should_skip_agent_without_max_iterations_field(self):
+        from primeagent.agentic.services.flow_preparation import inject_iterations_into_flow
+
+        flow = {"data": {"nodes": [{"data": {"type": "Agent", "node": {"template": {}}}}]}}
+        # must not raise
+        inject_iterations_into_flow(flow, 60)
+
+    def test_load_and_prepare_reads_iterations_from_provider_vars(self):
+        from primeagent.agentic.services.flow_preparation import inject_iterations_into_flow, load_and_prepare_flow
+
+        # Sanity: the ITERATIONS_LIMIT provider var drives inject_iterations_into_flow.
+        flow = self._flow_with_agent(30)
+        out = inject_iterations_into_flow(flow, 45)
+        assert out["data"]["nodes"][1]["data"]["node"]["template"]["max_iterations"]["value"] == 45
+        assert callable(load_and_prepare_flow)

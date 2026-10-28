@@ -1,4 +1,4 @@
-"""Regression tests for https://github.com/khulnasoft/primeagent/pull/12908.
+"""Regression tests for https://github.com/khulnasoft-bot/primeagent/pull/12908.
 
 Original repro: a CREDENTIAL-typed global variable routed into a non-password
 input field (e.g. TextInputComponent.input_value, a MultilineInput) leaked the
@@ -22,13 +22,13 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import SecretStr, ValidationError
 from wfx.components.input_output import TextInputComponent
 from wfx.custom import Component
-from wfx.inputs.inputs import SecretStrInput
+from wfx.inputs.inputs import IntInput, SecretStrInput, StrInput
 from wfx.interface.initialize.loading import update_params_with_load_from_db_fields
 from wfx.io import Output
 from wfx.schema.message import Message
+from pydantic import SecretStr, ValidationError
 
 # Sentinel used as a stand-in for a "real" CREDENTIAL global variable's value.
 # Tests assert this string never appears in error messages, attributes, or
@@ -104,7 +104,8 @@ async def test_credential_variable_does_not_leak_into_text_input_output():
 
 
 @pytest.mark.asyncio
-async def test_credential_variable_in_password_field_preserves_runtime_string_contract():
+@pytest.mark.parametrize("explicit_repr", [False, True])
+async def test_credential_variable_in_password_field_preserves_runtime_string_contract(explicit_repr):
     """A CREDENTIAL variable in a password field remains usable as a string.
 
     A CREDENTIAL global variable routed into a password (SecretStrInput) field
@@ -122,6 +123,8 @@ async def test_credential_variable_in_password_field_preserves_runtime_string_co
         def build_output(self) -> Message:
             self.log(self.api_key)
             self.status = self.api_key
+            if explicit_repr:
+                self.repr_value = self.api_key
             return Message(text=self.api_key)
 
     component = _PasswordFieldComponent(_user_id=str(uuid.uuid4()))
@@ -148,7 +151,57 @@ async def test_credential_variable_in_password_field_preserves_runtime_string_co
     assert _LEAKY_SECRET not in artifacts["output"]["repr"]
     assert component._output_logs["output"][0].message == "**********"
     assert component.status == "**********"
-    assert component.repr_value == "**********"
+    assert component.repr_value == ("**********" if explicit_repr else "")
+
+
+@pytest.mark.asyncio
+async def test_secret_inputs_are_redacted_at_tracing_boundary_by_field_metadata():
+    """Secret input metadata, not field-name guesses, controls trace redaction."""
+
+    class _TraceSecretsComponent(Component):
+        display_name = "TraceSecretsTest"
+        name = "TraceSecretsTest"
+        inputs = [
+            SecretStrInput(name="aws_secret_access_key", display_name="AWS Secret Access Key"),
+            SecretStrInput(name="access_token", display_name="Access Token"),
+            IntInput(name="token_budget", display_name="Token Budget"),
+            StrInput(name="region", display_name="Region"),
+        ]
+        outputs = [Output(display_name="Output", name="output", method="build_output")]
+
+        def build_output(self) -> str:
+            return self.region
+
+    # This test exercises trace redaction, not provider credential discovery.
+    # Keep construction from starting the synchronous provider-variable bridge
+    # while pytest's event loop is already running.
+    with patch("wfx.base.models.unified_models.get_all_variables_for_provider", return_value={}):
+        component = _TraceSecretsComponent(_user_id=str(uuid.uuid4()))
+        component.set_attributes(
+            {
+                "aws_secret_access_key": "aws-secret-sentinel",  # pragma: allowlist secret
+                "access_token": "token-secret-sentinel",  # pragma: allowlist secret
+                "token_budget": 4096,
+                "region": "us-west-2",
+            }
+        )
+
+    tracing_service = MagicMock()
+    trace_context = MagicMock()
+    trace_context.__aenter__ = AsyncMock(return_value=tracing_service)
+    trace_context.__aexit__ = AsyncMock(return_value=None)
+    tracing_service.trace_component.return_value = trace_context
+    component._tracing_service = tracing_service
+
+    await component._build_with_tracing()
+
+    traced_inputs = tracing_service.trace_component.call_args.args[2]
+    assert traced_inputs == {
+        "aws_secret_access_key": "**********",
+        "access_token": "**********",
+        "token_budget": 4096,
+        "region": "us-west-2",
+    }
 
 
 @pytest.mark.asyncio

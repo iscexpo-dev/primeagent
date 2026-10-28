@@ -367,7 +367,10 @@ class MyComponent(CustomComponent):
                 mock_extract.return_value = Mock()
                 with patch("wfx.custom.validate.compile_class_code") as mock_compile:
                     mock_compile.return_value = compile("pass", "<string>", "exec")
-                    with patch("wfx.custom.validate.build_class_constructor") as mock_build:
+                    with (
+                        patch("wfx.custom.validate.build_class_constructor") as mock_build,
+                        patch("wfx.custom.validate.register_compiled_class_method_returns"),
+                    ):
                         mock_build.return_value = lambda: None
                         create_class(code, "MyComponent")
 

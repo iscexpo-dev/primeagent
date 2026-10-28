@@ -17,9 +17,9 @@ from primeagent.services.auth.utils import get_password_hash
 from primeagent.services.database.models.api_key.model import ApiKey
 from primeagent.services.database.models.flow.model import Flow, FlowCreate
 from primeagent.services.database.models.user.model import User, UserRead
+from wfx.services.deps import session_scope
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
-from wfx.services.deps import session_scope
 
 from tests.conftest import _delete_transactions_and_vertex_builds
 
@@ -180,6 +180,8 @@ async def files_client_fixture(
             db_path = Path(db_dir) / "test.db"
             monkeypatch.setenv("PRIMEAGENT_DATABASE_URL", f"sqlite:///{db_path}")
             monkeypatch.setenv("PRIMEAGENT_AUTO_LOGIN", "false")
+            monkeypatch.setenv("PRIMEAGENT_SUPERUSER", "primeagent")
+            monkeypatch.setenv("PRIMEAGENT_SUPERUSER_PASSWORD", "test-superuser-password")
             from wfx.services.manager import get_service_manager
 
             get_service_manager().factories.clear()
@@ -842,6 +844,12 @@ async def test_download_image_for_browser(files_client, files_created_api_key, f
 
     # Verify content type is image
     assert "image" in response.headers.get("content-type", ""), "Response should be an image"
+
+    # Security: a tenant-uploaded SVG/HTML must not be able to execute inline in the app origin.
+    # nosniff blocks MIME sniffing and attachment forces a download on direct navigation; neither
+    # affects <img>/blob embedding (the download still succeeded above).
+    assert response.headers.get("x-content-type-options") == "nosniff"
+    assert response.headers.get("content-disposition") == "attachment"
 
 
 async def test_download_image_returns_correct_content_type(files_client, files_created_api_key, files_flow):

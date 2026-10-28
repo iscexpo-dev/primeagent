@@ -6,6 +6,7 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from functools import lru_cache, partial
 from typing import Any
@@ -17,24 +18,34 @@ import sqlalchemy
 import websockets
 from cryptography.fernet import InvalidToken
 from elevenlabs import ElevenLabs
-from fastapi import APIRouter, BackgroundTasks
-from openai import OpenAI
-from sqlalchemy import select
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from wfx.log import logger
+from wfx.observability import execution_protocol
+from wfx.schema.schema import InputValueRequest
+from wfx.services.deps import session_scope_readonly
+from wfx.services.model_provider_policy import (
+    ModelProviderPolicyError,
+    ModelProviderPolicyPurpose,
+    aresolve_model_provider_policy,
+)
+from wfx.utils.secrets import secret_value_to_str
+from sqlmodel import select
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
-from wfx.log import logger
-from wfx.schema.schema import InputValueRequest
-from wfx.utils.secrets import secret_value_to_str
 
-from primeagent.api.utils import CurrentActiveUser, DbSession
+from primeagent.api.utils import CurrentActiveUser, DbSession, release_db_transaction
 from primeagent.api.v1.chat import build_flow_and_stream
+from primeagent.api.v1.flows_helpers import _read_flow
 from primeagent.memory import aadd_messagetables
 from primeagent.schema.properties import Properties
 from primeagent.services.auth.utils import get_current_user_for_websocket
-from primeagent.services.database.models.flow.model import Flow
+from primeagent.services.authorization import FlowAction, VoiceAction, ensure_flow_permission, ensure_voice_permission
+from primeagent.services.authorization.fetch import deny_to_404
+from primeagent.services.database.models.flow.model import AccessTypeEnum, Flow
 from primeagent.services.database.models.message.model import MessageTable
 from primeagent.services.database.models.user.model import User
-from primeagent.services.deps import get_variable_service, session_scope
+from primeagent.services.deps import get_variable_service
+from primeagent.services.model_provider_policy_scope import scoped_model_provider_policy_for_flow
 from primeagent.utils.voice_utils import BYTES_PER_24K_FRAME, VAD_SAMPLE_RATE_16K, resample_24k_to_16k
 
 router = APIRouter(prefix="/voice", tags=["Voice"], include_in_schema=False)
@@ -103,6 +114,24 @@ async def authenticate_and_get_openai_key(session: DbSession, user: User, websoc
             }
         )
         return None, None
+
+    try:
+        provider_policy = await aresolve_model_provider_policy(
+            user_id=user.id,
+            providers=["OpenAI"],
+            purpose=ModelProviderPolicyPurpose.USE,
+        )
+        provider_policy.require("OpenAI")
+    except ModelProviderPolicyError as exc:
+        await websocket.send_json(
+            {
+                "type": "error",
+                "code": exc.code,
+                "message": str(exc),
+            }
+        )
+        return None, None
+
     variable_service = get_variable_service()
     try:
         openai_key_value = await variable_service.get_variable(
@@ -182,6 +211,12 @@ def get_voice_config(session_id: str, user_id: UUID | None = None) -> VoiceConfi
 
 class TTSConfig:
     def __init__(self, session_id: str, openai_key: str):
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            msg = "Voice mode requires the OpenAI SDK. Install it with `pip install 'primeagent-base[audio]'`."
+            raise ImportError(msg) from exc
+
         self.session_id = session_id
         self.use_elevenlabs = False
         self.elevenlabs_voice = "JBFqnCBsd6RMkjVDRZzb"
@@ -403,12 +438,15 @@ async def handle_function_call(
         input_request = InputValueRequest(
             input_value=args.get("input"), components=[], type="chat", session=conversation_id
         )
-        response = await build_flow_and_stream(
-            flow_id=UUID(flow_id),
-            inputs=input_request,
-            background_tasks=background_tasks,
-            current_user=current_user,
-        )
+        # Bound around the call, not the drain: the build task is created inside and copies the
+        # context then, so the drain below runs outside the scope without losing the label.
+        with execution_protocol("voice"):
+            response = await build_flow_and_stream(
+                flow_id=UUID(flow_id),
+                inputs=input_request,
+                background_tasks=background_tasks,
+                current_user=current_user,
+            )
         result = ""
         async for line in response.body_iterator:
             if not line:
@@ -496,18 +534,34 @@ message_tasks: dict[str, asyncio.Task] = {}
 last_sender_by_session: defaultdict[str, str | None] = defaultdict(lambda: None)
 
 
-async def get_flow_desc_from_db(flow_id: str) -> Flow:
-    async with session_scope() as session:
-        stmt = select(Flow).where(Flow.id == UUID(flow_id))
-        result = await session.exec(stmt)
-        flow = result.scalar_one_or_none()
-        if not flow:
-            msg = f"Flow with id {flow_id} not found"
-            raise ValueError(msg)
-        return flow.description
+async def _get_authorized_voice_flow(flow_id: str, current_user: CurrentActiveUser, session: DbSession) -> Flow:
+    """Load a voice flow with the same share-aware execute policy as standard builds."""
+    flow_uuid = UUID(flow_id)
+    flow = await _read_flow(session, flow_uuid, current_user.id)
+    if flow is None:
+        public_stmt = select(Flow).where(
+            Flow.id == flow_uuid,
+            Flow.access_type == AccessTypeEnum.PUBLIC,
+        )
+        flow = (await session.exec(public_stmt)).first()
+    if flow is None:
+        raise HTTPException(status_code=404, detail="Flow not found")
+
+    try:
+        await ensure_flow_permission(
+            current_user,
+            FlowAction.EXECUTE,
+            flow_id=flow_uuid,
+            flow_user_id=flow.user_id,
+            workspace_id=flow.workspace_id,
+            folder_id=flow.folder_id,
+        )
+    except HTTPException as exc:
+        raise deny_to_404(exc, detail="Flow not found") from exc
+    return flow
 
 
-async def get_or_create_elevenlabs_client(user_id=None, session=None):
+async def get_or_create_elevenlabs_client(user_id=None):
     """Build an ElevenLabs client scoped to the requesting user.
 
     Security: this previously delegated to a process-global singleton
@@ -519,16 +573,19 @@ async def get_or_create_elevenlabs_client(user_id=None, session=None):
     Build a fresh client from the requesting user's own key on each call and never
     cache it on a class/module global.
     """
-    if not (user_id and session):
+    if not user_id:
         return None
     variable_service = get_variable_service()
     try:
-        api_key = await variable_service.get_variable(
-            user_id=user_id,
-            name="ELEVENLABS_API_KEY",
-            field="elevenlabs_api_key",
-            session=session,
-        )
+        # A websocket's session lives for the whole audio stream. Close this
+        # credential read's transaction before starting provider work.
+        async with session_scope_readonly() as session:
+            api_key = await variable_service.get_variable(
+                user_id=user_id,
+                name="ELEVENLABS_API_KEY",
+                field="elevenlabs_api_key",
+                session=session,
+            )
         api_key = secret_value_to_str(api_key)
     except (InvalidToken, ValueError) as e:
         await logger.aerror(f"Error with ElevenLabs API key: {e}")
@@ -730,20 +787,17 @@ async def flow_as_tool_websocket(
     session_id: str,
 ):
     """WebSocket endpoint registering the flow as a tool for real-time interaction."""
+    provider_policy_scope = ExitStack()
+    vad_task: asyncio.Task | None = None
     try:
         await client_websocket.accept()
 
         log_event = create_event_logger()
 
-        vad_task: asyncio.Task | None = None
         current_user: User = await get_current_user_for_websocket(client_websocket, session)
-        current_user, openai_key = await authenticate_and_get_openai_key(session, current_user, client_websocket)
-        if current_user is None or openai_key is None:
-            return
-        # Resolve voice config only after authentication, scoped to this user.
-        voice_config = get_voice_config(session_id, current_user.id)
         try:
-            flow_description = await get_flow_desc_from_db(flow_id)
+            flow = await _get_authorized_voice_flow(flow_id, current_user, session)
+            flow_description = flow.description
             flow_tool = {
                 "name": "execute_flow",
                 "type": "function",
@@ -759,6 +813,24 @@ async def flow_as_tool_websocket(
             await client_websocket.send_json(err_msg)
             await logger.aerror(f"Failed to load flow: {e}")
             return
+
+        provider_policy_scope.enter_context(
+            scoped_model_provider_policy_for_flow(
+                flow,
+                user_id=current_user.id,
+                is_superuser=bool(getattr(current_user, "is_superuser", False)),
+            )
+        )
+        current_user, openai_key = await authenticate_and_get_openai_key(session, current_user, client_websocket)
+        if current_user is None or openai_key is None:
+            return
+        # Release authentication reads before the long-lived audio stream.
+        # Later credential reads manage their own short session scopes.
+        await release_db_transaction(session)
+
+        # Resolve voice config only after authentication and flow authorization,
+        # scoped to this user.
+        voice_config = get_voice_config(session_id, current_user.id)
 
         url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview"
         headers = {
@@ -878,7 +950,7 @@ async def flow_as_tool_websocket(
                 then run the ElevenLabs TTS call (which expects a sync generator) in a separate thread.
                 """
                 try:
-                    elevenlabs_client = await get_or_create_elevenlabs_client(current_user.id, session)
+                    elevenlabs_client = await get_or_create_elevenlabs_client(current_user.id)
                     if elevenlabs_client is None:
                         return
 
@@ -1128,6 +1200,7 @@ async def flow_as_tool_websocket(
         await logger.aerror(f"Unexpected error: {e}")
         await logger.aerror(traceback.format_exc())
     finally:
+        provider_policy_scope.close()
         # Make sure to clean up the task
         if vad_task and not vad_task.done():
             vad_task.cancel()
@@ -1159,6 +1232,7 @@ async def flow_tts_websocket(
     session_id: str,
 ):
     """WebSocket endpoint for direct flow text-to-speech interaction."""
+    provider_policy_scope = ExitStack()
     try:
         await client_websocket.accept()
 
@@ -1208,9 +1282,27 @@ async def flow_tts_websocket(
             await openai_ws.close()
 
         current_user: User = await get_current_user_for_websocket(client_websocket, session)
-        current_user, openai_key = await authenticate_and_get_openai_key(session, current_user, client_send)
+        try:
+            flow = await _get_authorized_voice_flow(flow_id, current_user, session)
+        except Exception as e:  # noqa: BLE001
+            err_msg = {"error": f"Failed to load flow: {e!s}"}
+            await client_websocket.send_json(err_msg)
+            await logger.aerror(f"Failed to load flow: {e}")
+            return
+
+        provider_policy_scope.enter_context(
+            scoped_model_provider_policy_for_flow(
+                flow,
+                user_id=current_user.id,
+                is_superuser=bool(getattr(current_user, "is_superuser", False)),
+            )
+        )
+        current_user, openai_key = await authenticate_and_get_openai_key(session, current_user, client_websocket)
         if current_user is None or openai_key is None:
             return
+        # Release authentication reads before the long-lived audio stream.
+        # Later credential reads manage their own short session scopes.
+        await release_db_transaction(session)
         url = "wss://api.openai.com/v1/realtime?intent=transcription"
         headers = {
             "Authorization": f"Bearer {openai_key}",
@@ -1263,12 +1355,13 @@ async def flow_tts_websocket(
                                 input_request = InputValueRequest(
                                     input_value=transcript, components=[], type="chat", session=session_id
                                 )
-                                response = await build_flow_and_stream(
-                                    flow_id=UUID(flow_id),
-                                    inputs=input_request,
-                                    background_tasks=background_tasks,
-                                    current_user=current_user,
-                                )
+                                with execution_protocol("voice"):
+                                    response = await build_flow_and_stream(
+                                        flow_id=UUID(flow_id),
+                                        inputs=input_request,
+                                        background_tasks=background_tasks,
+                                        current_user=current_user,
+                                    )
                                 result = ""
                                 async for line in response.body_iterator:
                                     if not line:
@@ -1288,9 +1381,7 @@ async def flow_tts_websocket(
                                             result = text
                                 if result != "":
                                     if tts_config.use_elevenlabs:
-                                        elevenlabs_client = await get_or_create_elevenlabs_client(
-                                            current_user.id, session
-                                        )
+                                        elevenlabs_client = await get_or_create_elevenlabs_client(current_user.id)
                                         if elevenlabs_client is None:
                                             return
                                         audio_stream = elevenlabs_client.generate(
@@ -1336,6 +1427,8 @@ async def flow_tts_websocket(
     except Exception as e:  # noqa: BLE001
         await logger.aerror(f"Unexpected error: {e}")
         await logger.aerror(traceback.format_exc())
+    finally:
+        provider_policy_scope.close()
 
 
 def extract_transcript(json_data):
@@ -1358,8 +1451,14 @@ async def get_elevenlabs_voice_ids(
 ):
     """Get available voice IDs from ElevenLabs API."""
     try:
+        await ensure_voice_permission(
+            current_user,
+            VoiceAction.READ,
+            voice_user_id=current_user.id,
+        )
         # Get or create the ElevenLabs client
-        elevenlabs_client = await get_or_create_elevenlabs_client(current_user.id, session)
+        await release_db_transaction(session)
+        elevenlabs_client = await get_or_create_elevenlabs_client(current_user.id)
         if elevenlabs_client is None:
             return {"error": "ElevenLabs API key not found or invalid"}
 
