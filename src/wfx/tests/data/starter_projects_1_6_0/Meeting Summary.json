@@ -468,7 +468,7 @@
             "lf_version": "1.1.5",
             "metadata": {
               "code_hash": "3bf0b511e227",
-              "module": "prime.khulnasoft.components.prompts.prompt.PromptComponent"
+              "module": "primeagent.components.prompts.prompt.PromptComponent"
             },
             "minimized": false,
             "name": "",
@@ -1279,7 +1279,7 @@
             "lf_version": "1.1.5",
             "metadata": {
               "code_hash": "3bf0b511e227",
-              "module": "prime.khulnasoft.components.prompts.prompt.PromptComponent"
+              "module": "primeagent.components.prompts.prompt.PromptComponent"
             },
             "minimized": false,
             "name": "",

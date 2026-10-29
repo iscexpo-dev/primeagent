@@ -27,7 +27,7 @@ primeagent (curated distribution) ──depends on──▶ primeagent-base
   `primeagent` import package.) If WFX code needs a service, define an interface
   inside `wfx` and inject the implementation from the application. Existing
   upward imports are known violations; do not add more.
-- **`primeagent-base` MAY import `wfx`.** It MUST NOT import vendor-specific component modules from `prime.khulnasoft.components.<vendor>`.
+- **`primeagent-base` MAY import `wfx`.** It MUST NOT import vendor-specific component modules from `primeagent.components.<vendor>`.
 - **Standalone `wfx-*` extensions MAY import the public WFX bundle API.** They
   MUST NOT import application services from `primeagent-base`.
 - **`primeagent` is dependency metadata, not another application layer.** It adds
@@ -59,7 +59,7 @@ Walk top-down. Stop at the first match.
 
 - **Bad:** `from primeagent.services.deps import session_scope` inside `src/wfx/...`.
   **Good:** Define `wfx.interfaces.SessionProvider`, accept it as a constructor arg; `primeagent` wires the concrete `session_scope` at startup.
-- **Bad:** `from prime.khulnasoft.components.openai import ...` inside `primeagent-base` core (`api/`, `services/`, `graph/`).
+- **Bad:** `from primeagent.components.openai import ...` inside `primeagent-base` core (`api/`, `services/`, `graph/`).
   **Good:** Components are loaded dynamically via the component registry; core code references `Component` only.
 - **Bad:** A new `MyHelperService` that's just functions.
   **Good:** Utility functions go in `primeagent/helpers/` or `wfx/utils/`. A service inherits from `services/base.Service` and is registered via `services/factory.py`.

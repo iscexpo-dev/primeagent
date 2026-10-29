@@ -622,7 +622,7 @@ class LMStudioModelComponent(LCModelComponent):
 
         # Call the function
         build_component_metadata(
-            mock_frontend, test_component, "prime.khulnasoft.components.lmstudio", "LMStudioModelComponent"
+            mock_frontend, test_component, "primeagent.components.lmstudio", "LMStudioModelComponent"
         )
 
         # Verify metadata was added

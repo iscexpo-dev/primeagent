@@ -1058,7 +1058,7 @@
                 ],
                 "total_dependencies": 4
               },
-              "module": "prime.khulnasoft.components.datastax.astradb.AstraDBVectorStoreComponent"
+              "module": "primeagent.components.datastax.astradb.AstraDBVectorStoreComponent"
             },
             "minimized": false,
             "output_types": [],

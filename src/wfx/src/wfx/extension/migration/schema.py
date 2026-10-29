@@ -5,7 +5,7 @@ flows to the post-Phase-A namespaced ID ``ext:<bundle>:<Class>@<slot>``.  Three
 legacy reference shapes are mapped:
 
     1. ``import_path`` -- the dotted path components used to live at, e.g.
-       ``prime.khulnasoft.components.openai.OpenAIEmbeddings``.  Always added when a
+       ``primeagent.components.openai.OpenAIEmbeddings``.  Always added when a
        bundle is extracted.
     2. ``legacy_slot`` -- the pre-Phase-A namespaced shape, e.g.
        ``ext:openai:OpenAIEmbeddings@official-pre-a``.  Always added when the
@@ -118,7 +118,7 @@ class MigrationEntry(BaseModel):
         default=None,
         description=(
             "Dotted Python import path the component lived at, e.g. "
-            "'prime.khulnasoft.components.openai.OpenAIEmbeddings'."
+            "'primeagent.components.openai.OpenAIEmbeddings'."
         ),
     )
     legacy_slot: StrictStr | None = Field(

@@ -503,7 +503,7 @@ async def _load_components_dynamically(
     try:
         import wfx.components as components_pkg
     except ImportError as e:
-        await logger.aerror(f"Failed to import prime.khulnasoft.components package: {e}", exc_info=True)
+        await logger.aerror(f"Failed to import primeagent.components package: {e}", exc_info=True)
         return modules_dict
 
     # Skip compatibility-only packages that should stay importable but should not

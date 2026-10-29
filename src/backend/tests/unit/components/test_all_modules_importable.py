@@ -165,10 +165,10 @@ class TestAllModulesImportable:
         """Test that traditional import patterns still work."""
         # Test some key imports that should always work
         traditional_imports = [
-            ("prime.khulnasoft.components.data", "APIRequestComponent"),
-            ("prime.khulnasoft.components.models_and_agents", "AgentComponent"),
-            ("prime.khulnasoft.components.models_and_agents", "LanguageModelComponent"),
-            ("prime.khulnasoft.components.helpers", "CalculatorComponent"),
+            ("primeagent.components.data", "APIRequestComponent"),
+            ("primeagent.components.models_and_agents", "AgentComponent"),
+            ("primeagent.components.models_and_agents", "LanguageModelComponent"),
+            ("primeagent.components.helpers", "CalculatorComponent"),
         ]
 
         failed_imports = []

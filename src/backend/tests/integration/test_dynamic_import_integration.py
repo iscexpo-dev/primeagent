@@ -10,8 +10,8 @@ import threading
 import time
 
 import pytest
-from prime.khulnasoft.components.data import APIRequestComponent
-from prime.khulnasoft.components.models_and_agents import AgentComponent, LanguageModelComponent
+from primeagent.components.data import APIRequestComponent
+from primeagent.components.models_and_agents import AgentComponent, LanguageModelComponent
 
 
 class TestDynamicImportIntegration:
@@ -30,8 +30,8 @@ class TestDynamicImportIntegration:
         assert hasattr(models_module, "LanguageModelComponent")
 
     def test_existing_import_patterns_work(self):
-        import prime.khulnasoft.components.data as data_comp
-        import prime.khulnasoft.components.helpers as helpers_comp
+        import primeagent.components.data as data_comp
+        import primeagent.components.helpers as helpers_comp
 
         assert APIRequestComponent is not None
         assert AgentComponent is not None
@@ -40,7 +40,7 @@ class TestDynamicImportIntegration:
         assert helpers_comp.CalculatorComponent is not None
 
     def test_component_instantiation_works(self):
-        from prime.khulnasoft.components.helpers import CalculatorComponent
+        from primeagent.components.helpers import CalculatorComponent
 
         assert CalculatorComponent is not None
         assert callable(CalculatorComponent)
@@ -66,12 +66,12 @@ class TestDynamicImportIntegration:
                 assert hasattr(input_field, "display_name"), f"Input {input_field} missing 'display_name' attribute"
 
     def test_multiple_import_styles_same_result(self):
-        from prime.khulnasoft.components.data import APIRequestComponent as DirectImport
+        from primeagent.components.data import APIRequestComponent as DirectImport
         from primeagent import components
 
         dynamic_import = components.data.APIRequestComponent
 
-        import prime.khulnasoft.components.data as data_module
+        import primeagent.components.data as data_module
 
         module_import = data_module.APIRequestComponent
 
@@ -81,9 +81,9 @@ class TestDynamicImportIntegration:
 
     def test_startup_performance_improvement(self):
         modules_to_clean = [
-            "prime.khulnasoft.components.processing",
-            "prime.khulnasoft.components.tools",
-            "prime.khulnasoft.components.langchain_utilities",
+            "primeagent.components.processing",
+            "primeagent.components.tools",
+            "primeagent.components.langchain_utilities",
         ]
 
         for module_name in modules_to_clean:
@@ -91,7 +91,7 @@ class TestDynamicImportIntegration:
                 del sys.modules[module_name]
 
         start_time = time.time()
-        from prime.khulnasoft.components import processing
+        from primeagent.components import processing
 
         import_time = time.time() - start_time
 
@@ -105,7 +105,7 @@ class TestDynamicImportIntegration:
         assert access_time < 2.0
 
     def test_memory_usage_efficiency(self):
-        from prime.khulnasoft.components import processing
+        from primeagent.components import processing
 
         initial_component_count = len([k for k in processing.__dict__ if k.endswith("Component")])
 
@@ -131,7 +131,7 @@ class TestDynamicImportIntegration:
             _ = components.data.NonExistentComponent
 
     def test_ide_autocomplete_support(self):
-        import prime.khulnasoft.components.data as data_components
+        import primeagent.components.data as data_components
         from primeagent import components
 
         main_dir = dir(components)
@@ -143,7 +143,7 @@ class TestDynamicImportIntegration:
         assert "APIRequestComponent" in data_dir
 
     def test_concurrent_access(self):
-        from prime.khulnasoft.components import helpers
+        from primeagent.components import helpers
 
         results = []
         errors = []
@@ -172,7 +172,7 @@ class TestDynamicImportIntegration:
             assert result is first_result
 
     def test_circular_import_prevention(self):
-        from prime.khulnasoft.components import data
+        from primeagent.components import data
         from primeagent import components
 
         component1 = components.data.APIRequestComponent
@@ -182,7 +182,7 @@ class TestDynamicImportIntegration:
         assert component1 is component2 is component3
 
     def test_large_scale_component_access(self):
-        from prime.khulnasoft.components import data
+        from primeagent.components import data
 
         component_names = [
             "APIRequestComponent",
@@ -203,14 +203,14 @@ class TestDynamicImportIntegration:
         assert "data" in APIRequestComponent.__module__
 
     def test_backwards_compatibility_comprehensive(self):
-        from prime.khulnasoft.components.data import APIRequestComponent as DirectAPIRequest
+        from primeagent.components.data import APIRequestComponent as DirectAPIRequest
 
         assert AgentComponent is not None
         assert DirectAPIRequest is not None
 
-        import prime.khulnasoft.components as comp
-        import prime.khulnasoft.components.data as data_mod
-        import prime.khulnasoft.components.helpers as helpers_mod
+        import primeagent.components as comp
+        import primeagent.components.data as data_mod
+        import primeagent.components.helpers as helpers_mod
 
         nested_component = comp.data.APIRequestComponent
         direct_component = data_mod.APIRequestComponent

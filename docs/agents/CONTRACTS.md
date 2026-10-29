@@ -45,7 +45,7 @@ These all look like cleanup. They are user-visible regressions.
 - **Reordering `outputs = [a, b]` to `[b, a]`**: old flows with the default selection now route from the wrong output.
 - **Tightening `Output(types=["Message", "Data"])` → `["Message"]`**: edges that resolved as `Data` go invalid on load.
 - **Changing a `default="gpt-4o-mini"` to `default="gpt-5"`**: silently re-bills users.
-- **Moving `primeagent/components/foo/bar.py` → `primeagent/components/foo2/bar.py`**: custom components stored in user DBs that `from prime.khulnasoft.components.foo.bar import ...` fail on next load. `file_names_mapping` test passes because it only validates listed historical versions, not user code.
+- **Moving `primeagent/components/foo/bar.py` → `primeagent/components/foo2/bar.py`**: custom components stored in user DBs that `from primeagent.components.foo.bar import ...` fail on next load. `file_names_mapping` test passes because it only validates listed historical versions, not user code.
 - **Dropping `tool_mode=True` from a vector store's `as_dataframe`**: every Agent that called it as a tool now sees the tool disappear.
 - **Adding a required field to `Message`**: every queued message in a running deployment fails to deserialize on next read.
 - **Renaming a starter project file**: deep links from docs and tutorials 404.

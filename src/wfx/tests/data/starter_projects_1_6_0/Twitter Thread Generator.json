@@ -1431,7 +1431,7 @@
             "legacy": false,
             "metadata": {
               "code_hash": "3bf0b511e227",
-              "module": "prime.khulnasoft.components.prompts.prompt.PromptComponent"
+              "module": "primeagent.components.prompts.prompt.PromptComponent"
             },
             "minimized": false,
             "output_types": [],

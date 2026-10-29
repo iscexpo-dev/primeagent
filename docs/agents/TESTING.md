@@ -45,7 +45,7 @@ Every subclass provides three fixtures:
 
 ```python
 from tests.base import ComponentTestBaseWithClient, VersionComponentMapping, DID_NOT_EXIST
-from prime.khulnasoft.components.my_namespace import MyComponent
+from primeagent.components.my_namespace import MyComponent
 
 class TestMyComponent(ComponentTestBaseWithClient):
     @pytest.fixture
