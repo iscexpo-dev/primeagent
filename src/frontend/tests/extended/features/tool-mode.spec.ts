@@ -5,7 +5,9 @@ import { openBlankFlow } from "../../utils/flow/open-blank-flow";
 
 test(
   "User should be able to use components as tool",
-  { tag: ["@release", "@components"] },
+  {
+    tag: ["@release", "@components"],
+  },
   async ({ page }) => {
     await openBlankFlow(page);
     await page.waitForSelector('[data-testid="disclosure-data sources"]', {

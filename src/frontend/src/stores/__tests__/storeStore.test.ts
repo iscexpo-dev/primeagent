@@ -1,5 +1,4 @@
 import { act, renderHook } from "@testing-library/react";
-import { checkHasApiKey, checkHasStore } from "../../controllers/API";
 import { useStoreStore } from "../storeStore";
 
 // Mock the feature flag
@@ -8,14 +7,14 @@ jest.mock("@/customization/feature-flags", () => ({
 }));
 
 // Mock the API controllers - simplified without complex async operations
+const mockCheckHasStore = jest.fn();
+const mockCheckHasApiKey = jest.fn();
+
 jest.mock("../../controllers/API", () => ({
   __esModule: true,
-  checkHasStore: jest.fn(),
-  checkHasApiKey: jest.fn(),
+  checkHasStore: mockCheckHasStore,
+  checkHasApiKey: mockCheckHasApiKey,
 }));
-
-const mockCheckHasStore = checkHasStore as jest.Mock;
-const mockCheckHasApiKey = checkHasApiKey as jest.Mock;
 
 describe("useStoreStore", () => {
   beforeEach(() => {

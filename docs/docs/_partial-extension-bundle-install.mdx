@@ -1,0 +1,50 @@
+`uv pip install primeagent` installs a curated provider set.
+Other providers are opt-in.
+For more information, see [Additional bundles](/extensions-bundle-list#additional-bundles).
+
+`uv pip install wfx` installs the core WFX executor _only_, with no provider bundles included.
+
+If your flows use bundle components, install the required packages in the same virtual environment.
+
+Some components require an additional [torch opt-in installation](./components-bundle-components#torch-opt-in).
+
+Providers in `wfx-bundles` are extras of that metapackage, such as additional model providers and vector stores.
+
+Standalone packages are providers with their own `wfx-<provider>` package and release cadence, such as OpenAI, Anthropic, and Exa.
+
+To install one provider from `wfx-bundles`:
+
+```bash
+uv pip install "wfx-bundles[<bundle-name>]"
+```
+
+To install every provider in `wfx-bundles`:
+
+```bash
+uv pip install "wfx[bundles]"
+```
+
+`wfx[bundles]` is equivalent to `wfx` plus `wfx-bundles[all]`.
+It does **not** install standalone packages such as `wfx-openai`.
+
+To install a standalone provider package:
+
+```bash
+uv pip install wfx-<provider>
+```
+
+For example:
+
+```bash
+uv pip install wfx-openai
+```
+
+For the complete bundle-to-package mapping, see the [Bundle list](./extensions-bundle-list).
+
+Bundle discovery happens at startup. Restart Primeagent or your WFX server after installing.
+
+To see the extensions that are currently loaded, run:
+
+```bash
+wfx extension list
+```

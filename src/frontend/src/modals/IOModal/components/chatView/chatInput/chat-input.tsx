@@ -155,7 +155,7 @@ export default function ChatInput({
             handleButtonClick={handleButtonClick}
             setShowAudioInput={setShowAudioInput}
             currentFlowId={currentFlowId}
-            playgroundPage={!!playgroundPage}
+            playgroundPage={playgroundPage}
           />
         </motion.div>
       )}

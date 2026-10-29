@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-openai",
+  "version": "0.2.0",
+  "name": "OpenAI",
+  "description": "OpenAI component(s) as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "openai",
+      "path": "components/openai"
+    }
+  ]
+}

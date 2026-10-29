@@ -48,7 +48,9 @@ async function navigateToDeploymentsPage(page: Page) {
 
 test(
   "Test button opens modal with chat interface",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await setupBaseRoutes(page);
     await navigateToDeploymentsPage(page);
@@ -62,7 +64,9 @@ test(
 
 test(
   "Send message calls POST run with correct body",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     let capturedRequestBody: Record<string, unknown> | null = null;
     let runCallCount = 0;
@@ -113,7 +117,9 @@ test(
 
 test(
   "Response appears in chat after polling completes",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     let runCallCount = 0;
 
@@ -160,7 +166,9 @@ test(
 
 test(
   "Input is disabled during polling and re-enabled after response",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     let runCallCount = 0;
 
@@ -213,7 +221,9 @@ test(
 
 test(
   "Multi-turn: second message includes thread_id from first response",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     let runCallCount = 0;
     const capturedBodies: Array<Record<string, unknown>> = [];
@@ -286,7 +296,9 @@ test(
 
 test(
   "Close and reopen modal resets chat history",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     let runCallCount = 0;
 

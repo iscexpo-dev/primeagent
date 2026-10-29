@@ -1,18 +1,19 @@
 from wfx.base.models.model import LCModelComponent
 from wfx.base.models.unified_models import (
+    get_language_model_options,
     get_llm,
     handle_model_input_update,
 )
 from wfx.base.models.watsonx_constants import IBM_WATSONX_URLS
+from wfx.components.models_and_agents.model_selection import apply_model_overrides
 from wfx.field_typing.constants import LanguageModel
 from wfx.field_typing.range_spec import RangeSpec
 from wfx.inputs.inputs import BoolInput, DropdownInput, StrInput
 from wfx.io import IntInput, MessageInput, ModelInput, MultilineInput, SecretStrInput, SliderInput
 
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-
 
 class LanguageModelComponent(LCModelComponent):
+    model_provider_policy_mode = "delegate"
     display_name = "Language Model"
     description = "Runs a language model given a specified provider."
     documentation: str = "https://docs.prime.khulnasoft.com/components-models"
@@ -26,6 +27,25 @@ class LanguageModelComponent(LCModelComponent):
             info="Select your model provider",
             real_time_refresh=True,
             required=True,
+        ),
+        StrInput(
+            name="model_name",
+            display_name="Model Name Override",
+            info=(
+                "Optional model name to use instead of the selected model. "
+                "Can be set from a global variable for runtime model selection."
+            ),
+            advanced=True,
+            load_from_db=False,
+        ),
+        StrInput(
+            name="provider",
+            display_name="Provider Override",
+            info=(
+                "Optional provider to use with Model Name Override. Leave blank to use the selected model's provider."
+            ),
+            advanced=True,
+            load_from_db=False,
         ),
         SecretStrInput(
             name="api_key",
@@ -56,8 +76,7 @@ class LanguageModelComponent(LCModelComponent):
         StrInput(
             name="ollama_base_url",
             display_name="Ollama API URL",
-            info=f"Endpoint of the Ollama API (Ollama only). Defaults to {DEFAULT_OLLAMA_URL}",
-            value=DEFAULT_OLLAMA_URL,
+            info="Endpoint of the Ollama API (Ollama only)",
             show=False,
             real_time_refresh=True,
         ),
@@ -90,15 +109,22 @@ class LanguageModelComponent(LCModelComponent):
         IntInput(
             name="max_tokens",
             display_name="Max Tokens",
-            info="Maximum number of tokens to generate. Field name varies by provider.",
+            info="Maximum number of tokens to generate. Set to 0 for no explicit limit. Field name varies by provider.",
             advanced=True,
-            range_spec=RangeSpec(min=1, max=128000, step=1, step_type="int"),
+            range_spec=RangeSpec(min=0, max=128000, step=1, step_type="int"),
         ),
     ]
 
     def build_model(self) -> LanguageModel:
+        model = apply_model_overrides(
+            self.model,
+            model_name=getattr(self, "model_name", None),
+            provider=getattr(self, "provider", None),
+            user_id=self.user_id,
+            get_options=get_language_model_options,
+        )
         return get_llm(
-            model=self.model,
+            model=model,
             user_id=self.user_id,
             api_key=self.api_key,
             temperature=self.temperature,

@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
+from secrets import token_urlsafe
 from typing import TYPE_CHECKING
 
 from sqlalchemy import delete
 from sqlalchemy import exc as sqlalchemy_exc
 from sqlmodel import col, select
 from wfx.log.logger import logger
-from wfx.services.settings.constants import DEFAULT_SUPERUSER, DEFAULT_SUPERUSER_PASSWORD
+from wfx.services.settings.constants import (
+    DEFAULT_SUPERUSER,
+    LEGACY_DEFAULT_SUPERUSER_PASSWORD,
+)
 from wfx.services.settings.feature_flags import FEATURE_FLAGS
 
 from primeagent.services.cache.base import ExternalAsyncBaseCacheService
@@ -37,15 +42,77 @@ class SetupSuperuserResult(str, Enum):
     SUPERUSER_UNCHANGED = "superuser_unchanged"
 
 
-async def get_or_create_super_user(session: AsyncSession, username, password, is_default):
+def _secret_value(secret) -> str:
+    if not secret:
+        return ""
+    if hasattr(secret, "get_secret_value"):
+        return secret.get_secret_value()
+    return str(secret)
+
+
+def get_auto_login_superuser_password(auth_settings) -> str:
+    configured_password = _secret_value(auth_settings.SUPERUSER_PASSWORD)
+    legacy_password = LEGACY_DEFAULT_SUPERUSER_PASSWORD.get_secret_value()
+    if configured_password and configured_password != legacy_password:
+        return configured_password
+    return token_urlsafe(32)
+
+
+async def _get_superuser_by_username(session: AsyncSession, username: str):
     from primeagent.services.database.models.user.model import User
 
-    stmt = select(User).where(User.username == username)
+    stmt = select(User).where(
+        User.username == username,
+        User.is_superuser == True,  # noqa: E712
+    )
     result = await session.exec(stmt)
-    user = result.first()
+    return result.first()
+
+
+async def _rotate_legacy_default_superuser_password(session: AsyncSession, user, replacement_password: str) -> bool:
+    legacy_password = LEGACY_DEFAULT_SUPERUSER_PASSWORD.get_secret_value()
+    if not legacy_password or not user.password:
+        return False
+
+    auth = get_auth_service()
+    if not auth.verify_password(legacy_password, user.password):
+        return False
+
+    user.password = auth.get_password_hash(replacement_password)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    await logger.awarning("Rotated legacy default superuser password.")
+    return True
+
+
+async def get_or_create_super_user(
+    session: AsyncSession,
+    username,
+    password,
+    is_default,
+    *,
+    rotate_legacy_default_password: bool = False,
+):
+    from primeagent.services.database.models.user.crud import get_user_by_username_case_insensitive
+
+    # Case-insensitive so a configured "Admin" resolves to an existing "admin"
+    # (and the checks below) instead of a create that the unique index rejects.
+    user = await get_user_by_username_case_insensitive(session, username)
 
     auth = get_auth_service()
     if user and user.is_superuser:
+        if rotate_legacy_default_password:
+            await _rotate_legacy_default_superuser_password(session, user, password)
+        if not is_default and not auth.verify_password(password, user.password):
+            await logger.awarning(
+                "PRIMEAGENT_SUPERUSER_PASSWORD was not applied because the configured superuser "
+                "already exists with a different password. The existing password was preserved. "
+                "To recover access after upgrading, see "
+                "https://github.com/khulnasoft-bot/primeagent/blob/release-1.13.0/"
+                "docs/docs/Develop/api-keys-and-authentication.mdx"
+                "#recover-access-after-upgrading-recover-access-after-upgrading"
+            )
         return None  # Superuser already exists
 
     if user and is_default:
@@ -89,8 +156,14 @@ async def setup_superuser(settings_service: SettingsService, session: AsyncSessi
 
         from filelock import FileLock
 
-        username = DEFAULT_SUPERUSER
-        password = DEFAULT_SUPERUSER_PASSWORD.get_secret_value()
+        username = settings_service.auth_settings.SUPERUSER or DEFAULT_SUPERUSER
+        configured_password = _secret_value(settings_service.auth_settings.SUPERUSER_PASSWORD)
+        if configured_password == LEGACY_DEFAULT_SUPERUSER_PASSWORD.get_secret_value():
+            await logger.awarning(
+                "Ignoring legacy default PRIMEAGENT_SUPERUSER_PASSWORD in AUTO_LOGIN mode; "
+                "generated a random bootstrap password instead."
+            )
+        password = get_auto_login_superuser_password(settings_service.auth_settings)
 
         # Use file lock similar to starter projects
         lock_file = Path(gettempdir()) / "primeagent_auto_login_superuser.lock"
@@ -99,7 +172,13 @@ async def setup_superuser(settings_service: SettingsService, session: AsyncSessi
         try:
             with lock:
                 # Create user and initialize all related resources
-                super_user = await get_or_create_super_user(session, username, password, is_default=True)
+                super_user = await get_or_create_super_user(
+                    session,
+                    username,
+                    password,
+                    is_default=True,
+                    rotate_legacy_default_password=True,
+                )
                 if super_user:  # Only initialize if user was created
                     from primeagent.initial_setup.setup import get_or_create_default_folder
                     from primeagent.services.deps import get_variable_service
@@ -116,6 +195,11 @@ async def setup_superuser(settings_service: SettingsService, session: AsyncSessi
                     _ = await get_or_create_default_folder(session, super_user.id)
                     await logger.adebug("Auto-login superuser initialized successfully")
                     return SetupSuperuserResult.AUTO_LOGIN_INITIALIZED
+                existing_superuser = await _get_superuser_by_username(session, username)
+                if existing_superuser is None:
+                    msg = "AUTO_LOGIN is enabled but the configured bootstrap user is not a superuser."
+                    await logger.aerror(msg)
+                    raise RuntimeError(msg)
                 return SetupSuperuserResult.AUTO_LOGIN_ALREADY_SATISFIED
         except TimeoutError as exc:
             # Another worker may be handling it - but a stale/abandoned lock or dead holder
@@ -125,13 +209,7 @@ async def setup_superuser(settings_service: SettingsService, session: AsyncSessi
                 "(another worker may hold it, or the lock file may be stale). "
                 "Verifying whether the default superuser exists.",
             )
-            from primeagent.services.database.models.user.model import User
-
-            stmt = select(User).where(
-                User.username == username,
-                User.is_superuser == True,  # noqa: E712
-            )
-            exists = (await session.exec(stmt)).first() is not None
+            exists = (await _get_superuser_by_username(session, username)) is not None
             if not exists:
                 msg = (
                     "AUTO_LOGIN is enabled but the default superuser was not initialized: "
@@ -141,26 +219,41 @@ async def setup_superuser(settings_service: SettingsService, session: AsyncSessi
                 await logger.aerror(msg)
                 raise RuntimeError(msg) from exc
             return SetupSuperuserResult.AUTO_LOGIN_LOCK_TIMEOUT_SUPERUSER_PRESENT
+        finally:
+            settings_service.auth_settings.reset_credentials()
     # Remove the default superuser if it exists
     await teardown_superuser(settings_service, session)
-    # If AUTO_LOGIN is disabled, attempt to use configured credentials
-    # or fall back to default credentials if none are provided.
+    # If AUTO_LOGIN is disabled, require configured credentials.
     username = settings_service.auth_settings.SUPERUSER or DEFAULT_SUPERUSER
-    password = (settings_service.auth_settings.SUPERUSER_PASSWORD or DEFAULT_SUPERUSER_PASSWORD).get_secret_value()
+    password = _secret_value(settings_service.auth_settings.SUPERUSER_PASSWORD)
 
     await logger.adebug(f"Setup superuser: username={username}, has_password={bool(password)}")
 
     if not username or not password:
-        msg = "Username and password must be set"
+        msg = (
+            "Username and password must be set. "
+            "Set PRIMEAGENT_SUPERUSER_PASSWORD before starting Primeagent. "
+            "If you are upgrading an existing auto-login installation, "
+            "see https://docs.prime.khulnasoft.com/next/api-keys-and-authentication#upgrade-from-auto-login"
+        )
         await logger.aerror(f"Missing credentials: username={username}, password={'set' if password else 'not set'}")
         raise ValueError(msg)
 
-    is_default = (username == DEFAULT_SUPERUSER) and (password == DEFAULT_SUPERUSER_PASSWORD.get_secret_value())
+    if password == LEGACY_DEFAULT_SUPERUSER_PASSWORD.get_secret_value():
+        msg = "PRIMEAGENT_SUPERUSER_PASSWORD cannot use the legacy default password"
+        await logger.aerror(msg)
+        raise ValueError(msg)
+
+    is_default = (username == DEFAULT_SUPERUSER) and (password == LEGACY_DEFAULT_SUPERUSER_PASSWORD.get_secret_value())
 
     try:
         await logger.adebug(f"Creating/getting superuser: username={username}, is_default={is_default}")
         user = await get_or_create_super_user(
-            session=session, username=username, password=password, is_default=is_default
+            session=session,
+            username=username,
+            password=password,
+            is_default=is_default,
+            rotate_legacy_default_password=True,
         )
         if user is not None:
             await logger.adebug("Superuser created successfully.")
@@ -321,30 +414,99 @@ async def migrate_orphaned_mcp_servers_config(
         return True
 
 
-async def teardown_superuser(settings_service: SettingsService, session: AsyncSession) -> None:
-    """Remove the default superuser when AUTO_LOGIN is disabled and it was never used to sign in.
+async def _first_table_owned_by(session: AsyncSession, user_id) -> str | None:
+    """The first table holding a row for this user, across every table that references ``user.id``.
 
-    If the default account has ``last_login_at`` set, it is kept. Deletion can still fail with
-    an integrity error when the user owns rows (e.g. flows) without ORM cascade — callers see
-    ``RuntimeError`` so startup or shutdown does not silently ignore the problem.
+    Runs at every startup and shutdown, so it stops at the first hit instead of counting.
     """
-    if not settings_service.auth_settings.AUTO_LOGIN:
-        await logger.adebug("AUTO_LOGIN is set to False. Removing default superuser if unused.")
-        try:
-            username = DEFAULT_SUPERUSER
-            from primeagent.services.database.models.user.model import User
+    from sqlmodel import SQLModel
 
-            stmt = select(User).where(User.username == username)
-            result = await session.exec(stmt)
-            user = result.first()
+    import primeagent.services.database.models  # noqa: F401 - importing registers every table on the metadata
 
-            if user and user.is_superuser is True and not user.last_login_at:
-                await session.delete(user)
-                await logger.adebug("Default superuser removed successfully.")
-        except Exception as exc:
-            await logger.aexception("Could not remove default superuser.")
-            msg = "Could not remove default superuser."
-            raise RuntimeError(msg) from exc
+    for table in SQLModel.metadata.sorted_tables:
+        for foreign_key in table.foreign_keys:
+            if foreign_key.column.table.name != "user" or foreign_key.column.name != "id":
+                continue
+            hit = (
+                await session.exec(select(1).select_from(table).where(foreign_key.parent == user_id).limit(1))
+            ).first()
+            if hit is not None:
+                return table.name
+    return None
+
+
+async def teardown_superuser(settings_service: SettingsService, session: AsyncSession) -> None:
+    """Retire the default superuser when AUTO_LOGIN is disabled and it was never used to sign in.
+
+    The account is what AUTO_LOGIN leaves behind, and with AUTO_LOGIN off it must not stay
+    usable. Its data is another matter: an instance used only through the API, or adopted
+    into a new deployment, can hold all of its work under this account, and deleting the
+    row cascades to every flow and project it owns. So:
+
+    - it owns nothing: delete it, as before;
+    - the configured superuser is this same account: claim it. Set the configured password,
+      reactivate it, and clear ``retired_at``;
+    - otherwise: retire it once. Deactivate it and record ``retired_at``. Anyone could act as
+      this account while AUTO_LOGIN was on, and its API keys and tokens check ``is_active``,
+      not the password, so deactivating is what stops them. A password that is still empty
+      or the legacy default is also replaced with a random one, since reactivating the account
+      would otherwise bring it back usable by anyone who knows the default.
+
+    A retired account is left alone on later restarts, so an admin who reactivates it or sets
+    its password with ``PATCH /api/v1/users/<id>`` is not undone. An account that has signed in
+    (``last_login_at`` set) is left alone.
+    """
+    if settings_service.auth_settings.AUTO_LOGIN:
+        return
+    try:
+        from primeagent.services.database.models.user.model import User
+
+        user = (await session.exec(select(User).where(User.username == DEFAULT_SUPERUSER))).first()
+        if not user or user.is_superuser is not True or user.last_login_at:
+            return
+        claimed = settings_service.auth_settings.SUPERUSER == DEFAULT_SUPERUSER
+        if user.retired_at and not claimed:
+            return
+
+        owned = await _first_table_owned_by(session, user.id)
+        if owned is None:
+            await session.delete(user)
+            await logger.adebug("Default superuser removed successfully.")
+            return
+
+        auth = get_auth_service()
+        if claimed:
+            # The operator asked for this account. A random password here would lock out the
+            # only superuser. The password is scrubbed from settings after startup, so at
+            # shutdown there is nothing to set and the account is left as startup made it.
+            password = _secret_value(settings_service.auth_settings.SUPERUSER_PASSWORD)
+            if password and password != LEGACY_DEFAULT_SUPERUSER_PASSWORD.get_secret_value():
+                user.password = auth.get_password_hash(password)
+                user.is_active = True
+                user.retired_at = None
+                session.add(user)
+                await logger.awarning(
+                    f"Kept the default superuser '{DEFAULT_SUPERUSER}', which owns rows in '{owned}', "
+                    "and set its password to the configured PRIMEAGENT_SUPERUSER_PASSWORD."
+                )
+            return
+
+        defaults = ("", LEGACY_DEFAULT_SUPERUSER_PASSWORD.get_secret_value())
+        if not user.password or any(auth.verify_password(default, user.password) for default in defaults):
+            user.password = auth.get_password_hash(token_urlsafe(32))
+        user.is_active = False
+        user.retired_at = datetime.now(timezone.utc)
+        session.add(user)
+        await logger.awarning(
+            f"AUTO_LOGIN is off, so the default superuser '{DEFAULT_SUPERUSER}' was deactivated: its "
+            f"password, API keys and tokens no longer work. It owns rows in '{owned}', so it was kept "
+            "rather than deleted. Another superuser can reactivate it and set a password with "
+            f"PATCH /api/v1/users/{user.id}."
+        )
+    except Exception as exc:
+        await logger.aexception("Could not retire default superuser.")
+        msg = "Could not retire default superuser."
+        raise RuntimeError(msg) from exc
 
 
 async def teardown_services() -> None:
@@ -487,7 +649,11 @@ def register_all_service_factories() -> None:
     from wfx.services.schema import ServiceType
 
     service_manager = get_service_manager()
+    from wfx.services.executor import factory as executor_factory
+    from wfx.services.integration_policy.service import IntegrationPolicyService
     from wfx.services.mcp_composer import factory as mcp_composer_factory
+    from wfx.services.model_provider_policy.service import ModelProviderPolicyService
+    from wfx.services.policy_bundle.service import PolicyBundleService
     from wfx.services.settings import factory as settings_factory
 
     from primeagent.services.auth import factory as auth_factory
@@ -495,7 +661,12 @@ def register_all_service_factories() -> None:
     from primeagent.services.authorization import factory as authorization_factory
     from primeagent.services.authorization.service import PrimeagentAuthorizationService
     from primeagent.services.cache import factory as cache_factory
+    from primeagent.services.catalog_policy import factory as catalog_policy_factory
+    from primeagent.services.catalog_policy.service import PrimeagentCatalogPolicyService
     from primeagent.services.chat import factory as chat_factory
+    from primeagent.services.checkpoint import factory as checkpoint_factory
+    from primeagent.services.connection import factory as connection_factory
+    from primeagent.services.connection.service import DatabaseConnectionResolverService
     from primeagent.services.database import factory as database_factory
     from primeagent.services.job_queue import factory as job_queue_factory
     from primeagent.services.session import factory as session_factory
@@ -523,10 +694,20 @@ def register_all_service_factories() -> None:
     service_manager.register_factory(transaction_factory.TransactionServiceFactory())
     service_manager.register_factory(telemetry_writer_factory.TelemetryWriterServiceFactory())
     service_manager.register_factory(state_factory.StateServiceFactory())
+    service_manager.register_factory(checkpoint_factory.CheckpointServiceFactory())
     service_manager.register_factory(job_queue_factory.JobQueueServiceFactory())
     service_manager.register_factory(task_factory.TaskServiceFactory())
     service_manager.register_factory(store_factory.StoreServiceFactory())
     service_manager.register_factory(shared_component_cache_factory.SharedComponentCacheServiceFactory())
+    # Standalone WFX keeps its environment resolver. Full Primeagent resolves
+    # handles from encrypted connection rows unless a host plugin overrides
+    # this service through wfx.toml.
+    service_manager.register_service_class(
+        ServiceType.CONNECTION_RESOLVER_SERVICE,
+        DatabaseConnectionResolverService,
+        override=True,
+    )
+    service_manager.register_factory(connection_factory.ConnectionResolverServiceFactory())
     # Override WFX's no-op auth service with Primeagent's full JWT implementation
     service_manager.register_service_class(ServiceType.AUTH_SERVICE, AuthService, override=True)
     service_manager.register_factory(auth_factory.AuthServiceFactory())
@@ -541,7 +722,31 @@ def register_all_service_factories() -> None:
         ServiceType.AUTHORIZATION_SERVICE, PrimeagentAuthorizationService, override=True
     )
     service_manager.register_factory(authorization_factory.AuthorizationServiceFactory())
+    service_manager.register_service_class(
+        ServiceType.POLICY_BUNDLE_SERVICE,
+        PolicyBundleService,
+        override=True,
+    )
+    service_manager.register_service_class(
+        ServiceType.CATALOG_POLICY_SERVICE,
+        PrimeagentCatalogPolicyService,
+        override=True,
+    )
+    service_manager.register_factory(catalog_policy_factory.CatalogPolicyServiceFactory())
+    service_manager.register_service_class(
+        ServiceType.MODEL_PROVIDER_POLICY_SERVICE,
+        ModelProviderPolicyService,
+        override=True,
+    )
+    # Integration governance shares the bundle coordinator with the provider and
+    # catalog services, so one published revision decides all three.
+    service_manager.register_service_class(
+        ServiceType.INTEGRATION_POLICY_SERVICE,
+        IntegrationPolicyService,
+        override=True,
+    )
     service_manager.register_factory(mcp_composer_factory.MCPComposerServiceFactory())
+    service_manager.register_factory(executor_factory.ExecutorServiceFactory())
     service_manager.set_factory_registered()
 
 
@@ -581,7 +786,20 @@ def register_builtin_deployment_mappers() -> None:
         logger.info("Skipping Watsonx Orchestrate deployment mapper registration: %s", exc)
 
 
-async def initialize_services(*, fix_migration: bool = False) -> None:
+async def hydrate_catalog_policy() -> None:
+    """Hydrate durable catalog policy without making startup fail closed."""
+    from primeagent.services.deps import get_catalog_policy_service
+
+    try:
+        await get_catalog_policy_service().hydrate()
+    except Exception as exc:  # noqa: BLE001
+        # Catalog policy is explicitly fail-open. Keep the immutable empty
+        # snapshot when durable policy cannot be hydrated, but make the
+        # governance outage visible to operators.
+        await logger.awarning("Catalog policy hydration failed; continuing with allow-all policy: %s", exc)
+
+
+async def initialize_services(*, fix_migration: bool = False, skip_superuser_setup: bool = False) -> None:
     """Initialize all the services needed."""
     from primeagent.helpers.windows_postgres_helper import configure_windows_postgres_event_loop
 
@@ -598,19 +816,48 @@ async def initialize_services(*, fix_migration: bool = False) -> None:
         msg = "Cache service failed to connect to external database"
         raise ConnectionError(msg)
 
+    # Fail fast if the Redis-backed job queue is selected but Redis is unreachable.
+    # Otherwise Primeagent boots "fine" and emits confusing connection errors only
+    # when a flow is executed. Only probes when the redis backend is selected, so
+    # the default asyncio backend is unaffected.
+    if get_settings_service().settings.job_queue_type == "redis":
+        from primeagent.services.job_queue.factory import JobQueueServiceFactory
+        from primeagent.services.job_queue.service import RedisJobQueueService
+
+        queue_service = get_service(ServiceType.JOB_QUEUE_SERVICE, default=JobQueueServiceFactory())
+        if isinstance(queue_service, RedisJobQueueService) and not (await queue_service.is_connected()):
+            msg = (
+                f"Job queue backend 'redis' is selected (PRIMEAGENT_JOB_QUEUE_TYPE=redis) but Redis is "
+                f"not reachable at {queue_service.connection_target}. Start Redis, fix the "
+                "PRIMEAGENT_REDIS_QUEUE_* settings, or set PRIMEAGENT_JOB_QUEUE_TYPE=asyncio."
+            )
+            raise ConnectionError(msg)
+
     # Setup the superuser
     await initialize_database(fix_migration=fix_migration)
+    from primeagent.services.policy_bundle import hydrate_policy_bundle
+
+    async with session_scope() as session:
+        await hydrate_policy_bundle(session)
+    # Preserve the pre-bundle plugin lifecycle for catalog implementations
+    # that load their own source in hydrate(). Bundle-aware services treat
+    # this as an idempotent read of the already published revision.
+    await hydrate_catalog_policy()
     db_service = get_db_service()
     await db_service.initialize_alembic_log_file()
-    async with session_scope() as session:
-        settings_service = get_service(ServiceType.SETTINGS_SERVICE)
-        await setup_superuser(settings_service, session)
-    try:
-        await get_db_service().assign_orphaned_flows_to_superuser()
-    except sqlalchemy_exc.IntegrityError as exc:
-        await logger.awarning(f"Error assigning orphaned flows to the superuser: {exc!s}")
+    settings_service = get_service(ServiceType.SETTINGS_SERVICE)
+    if not skip_superuser_setup:
+        async with session_scope() as session:
+            await setup_superuser(settings_service, session)
+        try:
+            await get_db_service().assign_orphaned_flows_to_superuser()
+        except sqlalchemy_exc.IntegrityError as exc:
+            await logger.awarning(f"Error assigning orphaned flows to the superuser: {exc!s}")
 
     async with session_scope() as session:
         await clean_transactions(settings_service, session)
         await clean_vertex_builds(settings_service, session)
         await clean_authz_audit_log(settings_service, session)
+        from primeagent.services.audit.retention import clean_audit_events
+
+        await clean_audit_events(settings_service, session)

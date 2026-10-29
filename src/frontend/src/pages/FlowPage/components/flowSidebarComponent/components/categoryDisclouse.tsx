@@ -98,8 +98,8 @@ export const CategoryDisclosure = memo(function CategoryDisclosure({
     [item.name, showActions],
   );
   return (
-    <Disclosure open={isOpen} onOpenChange={handleOpenChange}>
-      <SidebarMenuItem>
+    <SidebarMenuItem>
+      <Disclosure open={isOpen} onOpenChange={handleOpenChange}>
         <DisclosureTrigger className="group/collapsible">
           <SidebarMenuButton asChild>
             <div
@@ -141,14 +141,15 @@ export const CategoryDisclosure = memo(function CategoryDisclosure({
         <DisclosureContent>
           <SidebarItemsList
             item={item}
+            bundleDisplayName={extensionId ? item.display_name : ""}
             dataFilter={dataFilter}
             nodeColors={nodeColors}
             onDragStart={onDragStart}
             sensitiveSort={sensitiveSort}
           />
         </DisclosureContent>
-      </SidebarMenuItem>
-    </Disclosure>
+      </Disclosure>
+    </SidebarMenuItem>
   );
 });
 

@@ -1,0 +1,59 @@
+[project]
+name = "wfx-openai"
+version = "0.2.0"
+description = "OpenAI component(s) as a standalone Primeagent Extension Bundle."
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+license = { text = "MIT" }
+authors = [
+    { name = "Primeagent", email = "contact@prime.khulnasoft.com" },
+]
+keywords = ["primeagent", "wfx", "extension", "bundle", "openai"]
+
+# Runtime deps: wfx (the BUNDLE_API surface) plus any third-party imports
+# the bundle's components rely on.  REVIEW THIS LIST -- the script ports
+# only ``wfx``; add any other deps the moved component(s) import.
+# wfx is floored at the current major.minor line and capped below the next
+# wfx major (e.g. "wfx>=1.11.0,<2.0.0"); the floor is read from
+# src/wfx/pyproject.toml at port time and re-synced on ``make patch`` via
+# scripts/ci/sync_bundle_wfx_pin.py.  Fine-grained BUNDLE_API compatibility
+# is enforced via extension.json's wfx.compat list against BUNDLE_API_VERSION.
+dependencies = [
+    "wfx>=1.13.0.dev0,<2.0.0",
+    "langchain-openai>=1.1.6",
+    "openai>=1.68.2,<3.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/khulnasoft-bot/primeagent"
+Documentation = "https://docs.prime.khulnasoft.com/extensions"
+Repository = "https://github.com/khulnasoft-bot/primeagent"
+
+# Manifest-shipping distributions are discovered via the
+# ``primeagent.extensions`` entry-point.  Editable installs whose
+# ``dist.files`` only surfaces dist-info entries fall back to this
+# entry-point to find the manifest.
+[project.entry-points."primeagent.extensions"]
+wfx-openai = "wfx_openai"
+
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# extension.json + components live inside the wfx_openai package so
+# ``importlib.metadata.files(dist)`` finds them and the loader resolves
+# bundles[].path relative to the manifest's directory.
+packages = ["src/wfx_openai"]
+include = [
+    "src/wfx_openai/extension.json",
+    "src/wfx_openai/components/**/*.py",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/wfx_openai",
+    "extension.json",
+    "README.md",
+    "pyproject.toml",
+]

@@ -117,7 +117,8 @@ class MigrationEntry(BaseModel):
     import_path: StrictStr | None = Field(
         default=None,
         description=(
-            "Dotted Python import path the component lived at, e.g. 'primeagent.components.openai.OpenAIEmbeddings'."
+            "Dotted Python import path the component lived at, e.g. "
+            "'primeagent.components.openai.OpenAIEmbeddings'."
         ),
     )
     legacy_slot: StrictStr | None = Field(
@@ -330,8 +331,8 @@ class MigrationTable(BaseModel):
     def _validate_schema_version(cls, value: int) -> int:
         if value != MIGRATION_SCHEMA_VERSION:
             msg = (
-                f"Unsupported migration table schema_version {value};"
-                f" this Primeagent expects {MIGRATION_SCHEMA_VERSION}."
+                f"Unsupported migration table schema_version {value}; this Primeagent expects "
+                f"{MIGRATION_SCHEMA_VERSION}."
             )
             raise ValueError(msg)
         return value

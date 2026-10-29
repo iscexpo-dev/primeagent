@@ -8,6 +8,7 @@ from wfx.base.models.unified_models import get_language_model_options, get_llm, 
 from wfx.base.models.watsonx_constants import IBM_WATSONX_URLS
 from wfx.inputs.inputs import DropdownInput, HandleInput, MessageTextInput, ModelInput
 from wfx.io import Output, SecretStrInput, StrInput
+from wfx.utils.ssrf_protection import validate_connector_database_url_for_ssrf
 
 
 class SQLAgentComponent(LCAgentComponent):
@@ -85,6 +86,8 @@ class SQLAgentComponent(LCAgentComponent):
 
     def build_agent(self) -> AgentExecutor:
         llm = self._get_llm()
+        # Security: block SSRF to internal databases and local-file dialects (tenant-controlled URI).
+        validate_connector_database_url_for_ssrf(self.database_uri)
         db = SQLDatabase.from_uri(self.database_uri)
         toolkit = SQLDatabaseToolkit(db=db, llm=llm)
         agent_args = self.get_agent_kwargs()

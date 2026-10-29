@@ -1,24 +1,18 @@
 import asyncio
-import contextlib
-import gc
 import json
 import shutil
 import time
 import uuid
+from contextlib import aclosing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import chromadb
-import chromadb.errors
 import pandas as pd
-from chromadb.api.shared_system_client import SharedSystemClient
-from chromadb.config import Settings
-from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from wfx.base.data.utils import extract_text_from_bytes
-from wfx.base.knowledge_bases.backends import BackendType, create_backend
+from wfx.base.knowledge_bases.backends import BackendType, is_local_backend, is_local_chroma
 from wfx.base.knowledge_bases.backends.base import (
     METADATA_KEY_CHUNK_INDEX,
     METADATA_KEY_FILE_NAME,
@@ -28,6 +22,7 @@ from wfx.base.knowledge_bases.backends.base import (
     METADATA_KEY_SOURCE_METADATA,
     METADATA_KEY_SOURCE_TYPE,
     METADATA_KEY_TOTAL_CHUNKS,
+    BackendConfigurationError,
     BaseVectorStoreBackend,
 )
 from wfx.base.knowledge_bases.ingestion_sources import (
@@ -37,7 +32,6 @@ from wfx.base.knowledge_bases.ingestion_sources import (
     KBIngestionSource,
 )
 from wfx.base.knowledge_bases.ingestion_sources.base import IngestionItemStatus, IngestionRunStatus
-from wfx.base.vectorstores.chroma_security import chroma_langchain_collection_kwargs
 from wfx.components.models_and_agents.embedding_model import EmbeddingModelComponent
 from wfx.log import logger
 
@@ -46,6 +40,7 @@ from primeagent.services.database.models.jobs.model import JobStatus
 from primeagent.services.database.models.knowledge_base.model import KnowledgeBaseStatus
 from primeagent.services.deps import get_settings_service
 from primeagent.services.jobs.service import JobService
+from primeagent.services.knowledge_base_storage.runtime import StorageUnavailableError
 from primeagent.utils.kb_constants import (
     DELETE_BACKOFF_SECONDS,
     EXPONENTIAL_BACKOFF_MULTIPLIER,
@@ -71,6 +66,12 @@ class IngestionCancelledError(Exception):
     """Custom error for when an ingestion job is cancelled."""
 
 
+# Split points tried after a user-supplied separator (the splitter's own
+# defaults). Without them, text between two separators that is longer than
+# ``chunk_size`` has nowhere else to split and is stored as one oversized chunk.
+_FALLBACK_CHUNK_SEPARATORS: tuple[str, ...] = ("\n\n", "\n", " ", "")
+
+
 def chunk_text_for_ingestion(
     text: str,
     *,
@@ -81,13 +82,14 @@ def chunk_text_for_ingestion(
     r"""Split text into chunks using ``RecursiveCharacterTextSplitter``.
 
     Single source of truth for chunking config used by every ingestion path —
-    KB file ingestion and Memory Base raw / preprocessed message ingestion.
-    Centralizing this keeps chunk-size / overlap behavior identical so a
-    chunk that fits in one path won't suddenly overflow in another.
+    KB file ingestion, the ``/preview-chunks`` endpoint, and Memory Base raw /
+    preprocessed message ingestion. Centralizing this keeps chunk-size /
+    overlap behavior identical so the preview shows exactly what is stored.
 
-    ``separator``: when provided, escaped newlines (``"\\n"``) are unescaped
-    and the value is passed as a single-element ``separators`` list, matching
-    the behavior of ``KBIngestionHelper.perform_ingestion``.
+    ``separator``: when provided, escaped newlines / tabs (``"\\n"`` /
+    ``"\\t"``) are unescaped and the value becomes the *preferred* split
+    point, followed by ``_FALLBACK_CHUNK_SEPARATORS`` so no chunk exceeds
+    ``chunk_size``. When empty, the splitter's defaults are used.
 
     Returns ``[]`` for empty / whitespace-only input.
     """
@@ -95,9 +97,251 @@ def chunk_text_for_ingestion(
         return []
     splitter_kwargs: dict = {"chunk_size": chunk_size, "chunk_overlap": chunk_overlap}
     if separator:
-        splitter_kwargs["separators"] = [separator.replace("\\n", "\n")]
+        unescaped = separator.replace("\\n", "\n").replace("\\t", "\t")
+        splitter_kwargs["separators"] = [unescaped, *_FALLBACK_CHUNK_SEPARATORS]
     splitter = RecursiveCharacterTextSplitter(**splitter_kwargs)
     return splitter.split_text(text)
+
+
+def status_before_ingestion(kb_record) -> tuple[KnowledgeBaseStatus, str | None]:
+    """Return the status a cancelled ingestion restores on its KB row.
+
+    Cancelling rolls the run's chunks back, so the KB is again what it was
+    before the run started. Only an earlier failure is worth keeping; ready,
+    the in-flight states, and "empty" (a ready KB with no chunks) all restore
+    to READY.
+    """
+    if kb_record is not None and kb_record.status == KnowledgeBaseStatus.FAILED.value:
+        return KnowledgeBaseStatus.FAILED, kb_record.failure_reason
+    return KnowledgeBaseStatus.READY, None
+
+
+def _coerce_backend_config_value(value: Any) -> dict[str, Any]:
+    """Normalize a stored ``backend_config`` into a plain dict."""
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def validate_kb_name(kb_name: str) -> None:
+    """Reject a KB name that could escape the per-user KB namespace.
+
+    Must run before persistence for **every** backend. Remote backends
+    (OpenSearch / Chroma Cloud / Mongo / Astra / Postgres) resolve no local
+    path, so the containment guard in :func:`resolve_local_store_path` never
+    runs for them — without this a crafted name such as
+    ``../victim_user/evil_kb`` would be accepted and persisted verbatim. That
+    both collides with another user's KB namespace and, once such a row is
+    reconciled onto local Chroma, escapes the KB root on disk.
+
+    Path separators and parent-directory segments have no legitimate place in a
+    KB name (spaces are the only structural character the create path allows,
+    and it maps them to underscores before this runs), so rejecting them is a
+    backend-independent guard rather than a filesystem one.
+    """
+    if not kb_name:
+        msg = "KB name is empty"
+        raise ValueError(msg)
+    if "\x00" in kb_name:
+        msg = "KB name contains a null byte"
+        raise ValueError(msg)
+    if "/" in kb_name or "\\" in kb_name:
+        msg = "KB name contains a path separator"
+        raise ValueError(msg)
+    # With separators already rejected the name is a single path segment, so the
+    # only remaining traversal form is the segment being a bare '.' or '..'.
+    if kb_name in {".", ".."}:
+        msg = "KB name is a directory-traversal segment"
+        raise ValueError(msg)
+
+
+def validate_kb_path(kb_root: Path, kb_path: Path) -> None:
+    """Assert that ``kb_path`` is contained within ``kb_root`` (path traversal guard).
+
+    Prevents crafted usernames or KB names with '..' segments from escaping the KB
+    root directory. Follows the same pattern as ``services/storage/local.py:save_file``.
+
+    Defined here rather than in ``memory_base.kb_path_helpers`` (which re-exports it
+    for its long-standing importers) because that module already depends on this one;
+    hosting the guard in the lower-level module keeps the import graph acyclic.
+    """
+    kb_root_resolved = kb_root.resolve()
+    kb_path_resolved = kb_path.resolve()
+    if not kb_path_resolved.is_relative_to(kb_root_resolved):
+        msg = "KB path escapes root directory"
+        raise ValueError(msg)
+
+
+def local_chroma_rejection_reason(
+    backend_type: str | None,
+    backend_config: dict[str, Any] | None,
+    *,
+    resource: str = "knowledge base",
+) -> str | None:
+    """Explain why a host-local backend is unavailable in production.
+
+    Local backends write vectors to the serving box's own filesystem: they do not
+    survive a replica restart, cannot be shared between replicas, and scale with
+    the machine rather than the cluster. The production profile therefore refuses
+    them and expects a shared remote backend instead. The historical function
+    name remains for existing callers during the storage transition.
+
+    This create-time check is the only enforcement needed. Prod boot already
+    requires a reachable shared vector backend (``preflight.probe_vector_backend``
+    is a *required* check that aborts startup), so ``resolve_default_kb_backend()``
+    never falls back to a host-local store there — local Chroma can only arrive as an explicit client
+    selection.
+
+    Returns the message rather than raising so HTTP routes and service-layer
+    callers can wrap it in their own error type without duplicating the rule.
+    """
+    if not is_local_backend(backend_type, backend_config):
+        return None
+    if get_settings_service().settings.deployment_profile != "prod":
+        return None
+    label = "SQLite" if backend_type == BackendType.SQLITE else "Chroma"
+    return (
+        f"Local {label} is not available in the production deployment profile, so this {resource} "
+        "cannot be created with it. Choose a shared vector store (pgVector or OpenSearch), "
+        "or run with PRIMEAGENT_DEPLOYMENT_PROFILE=dev for local-only storage."
+    )
+
+
+def resolve_local_store_path(
+    kb_name: str,
+    kb_username: str,
+    *,
+    backend_type: str | None,
+    backend_config: dict[str, Any] | None,
+    create: bool = False,
+) -> Path | None:
+    """Return the on-disk directory for a KB, or ``None`` when it needs no disk.
+
+    The single place KB code turns a ``(backend_type, backend_config)`` pair into
+    a filesystem location, so "does this KB touch disk?" has exactly one answer.
+
+    Returns ``None`` for every non-local-Chroma backend **without reading
+    settings or touching the filesystem** — notably without calling
+    ``KBStorageHelper.get_root_path()``, which raises when ``knowledge_bases_dir``
+    is unset. That is what lets a deployment with no local storage at all serve
+    remote-backed KBs.
+
+    For local Chroma it resolves ``<root>/<username>/<kb_name>``, containment-checks
+    it against the root, and creates it when ``create=True``.
+
+    Deliberately does **not** raise when the directory is absent. Existence is a
+    property of the ``knowledge_base`` row, not of the filesystem: Chroma creates
+    its directory lazily on first write, so a KB that has been created but never
+    ingested into legitimately has no directory yet.
+    """
+    if not is_local_chroma(backend_type, backend_config):
+        return None
+
+    kb_root = KBStorageHelper.get_root_path()
+    kb_user_path = (kb_root / kb_username).resolve()
+    kb_path = (kb_user_path / kb_name).resolve()
+    # The username roots the path, so check it against the real root first: a
+    # username containing ".." would otherwise escape before the kb_name check.
+    validate_kb_path(kb_root, kb_user_path)
+    validate_kb_path(kb_user_path, kb_path)
+
+    if create:
+        kb_path.mkdir(parents=True, exist_ok=True)
+    return kb_path
+
+
+async def resolve_backend_selection(
+    *,
+    user_id: uuid.UUID,
+    kb_name: str,
+) -> tuple[str, dict[str, Any]]:
+    """Resolve ``(backend_type, backend_config)`` for a KB from its ``knowledge_base`` row.
+
+    The row is the sole authority. When there is no row this raises rather than
+    assuming local storage: guessing would write a remote-backed KB into a local
+    Chroma directory while queries followed the real config to the configured
+    cluster and returned nothing, with no error anywhere.
+
+    Reads no filesystem, so it behaves identically on a replica whose local disk
+    never held the KB directory. KB directories written by a Primeagent version that
+    predates the row are adopted by ``primeagent reconcile-kb-from-disk``, not by an
+    implicit fallback here.
+
+    Shared by Knowledge Bases and Memory Bases so the two cannot drift apart.
+    """
+    from primeagent.api.utils import knowledge_base_service
+
+    record = await knowledge_base_service.get_by_user_and_name(user_id, kb_name)
+    if record is not None:
+        return (
+            record.backend_type or BackendType.CHROMA.value,
+            _coerce_backend_config_value(record.backend_config),
+        )
+
+    msg = (
+        f"Cannot determine the vector-store backend for '{kb_name}': it has no knowledge_base record. "
+        "Refusing to fall back to local storage, which would write to a different store than queries "
+        "read from. If this knowledge base predates the database-backed metadata, adopt it with "
+        "'primeagent reconcile-kb-from-disk'."
+    )
+    raise ValueError(msg)
+
+
+async def backend_for_name(
+    user_id: uuid.UUID, kb_name: str, *, expected_record=None, **kwargs
+) -> BaseVectorStoreBackend:
+    """Open an existing KB through its authoritative, guarded storage record."""
+    from primeagent.api.utils import knowledge_base_service
+    from primeagent.services.knowledge_base_storage.runtime import backend_for_record
+
+    record = (
+        expected_record
+        if expected_record is not None
+        else await knowledge_base_service.get_by_user_and_name(user_id, kb_name)
+    )
+    if record is None:
+        msg = f"Knowledge base '{kb_name}' has no storage record."
+        raise ValueError(msg)
+    if record.user_id != user_id or record.name != kb_name:
+        msg = "Knowledge base storage identity does not match the ingestion snapshot."
+        raise StorageUnavailableError(msg)
+    return await backend_for_record(record, **kwargs)
+
+
+# Last-resort embedding when the row records none. Matches the historical
+# fallback in ``resolve_embedding`` so behavior is unchanged for callers that
+# relied on it.
+_DEFAULT_EMBEDDING_PROVIDER = "OpenAI"
+_DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+
+
+async def resolve_embedding_selection(
+    *,
+    user_id: uuid.UUID,
+    kb_name: str,
+) -> tuple[str, str]:
+    """Resolve ``(embedding_provider, embedding_model)`` for a KB from its ``knowledge_base`` row.
+
+    Counterpart to :func:`resolve_backend_selection`: the row's ``model_selection``
+    is authoritative and a hardcoded default is the only fallback. Unlike the
+    backend, a missing embedding selection is recoverable — the default is a real,
+    working model — so this returns rather than raising.
+
+    Reads no filesystem, so a Knowledge Base or Memory Base resolves identically on
+    any replica.
+
+    Shared by Knowledge Bases and Memory Bases so the two cannot drift apart.
+    """
+    from primeagent.api.utils import knowledge_base_service
+    from primeagent.api.utils.knowledge_base_service import get_embedding_model, get_embedding_provider
+
+    record = await knowledge_base_service.get_by_user_and_name(user_id, kb_name)
+    if record is not None:
+        model = get_embedding_model(record.model_selection)
+        if model:
+            return get_embedding_provider(record.model_selection), model
+
+    return _DEFAULT_EMBEDDING_PROVIDER, _DEFAULT_EMBEDDING_MODEL
 
 
 class KBStorageHelper:
@@ -133,84 +377,23 @@ class KBStorageHelper:
         return total_size
 
     @staticmethod
-    def get_fresh_chroma_client(kb_path: Path) -> chromadb.PersistentClient:
-        """Get a fresh Chroma client with a unique session ID to avoid 'readonly' errors."""
-        path_key = str(kb_path)
-        try:
-            if path_key in SharedSystemClient._identifier_to_system:  # noqa: SLF001
-                del SharedSystemClient._identifier_to_system[path_key]  # noqa: SLF001
-        except KeyError as e:
-            logger.debug(f"Failed to clear existing Chroma registry entry for {path_key}: {e}")
-
-        return chromadb.PersistentClient(
-            path=path_key,
-            settings=Settings(
-                is_persistent=True,
-                persist_directory=path_key,
-                chroma_otel_service_name=str(uuid.uuid4()),
-            ),
-        )
-
-    @staticmethod
-    def release_chroma_resources(kb_path: Path) -> None:
-        """Release ChromaDB resources by clearing the registry entry and forcing GC."""
-        path_key = str(kb_path)
-        try:
-            if path_key in SharedSystemClient._identifier_to_system:  # noqa: SLF001
-                del SharedSystemClient._identifier_to_system[path_key]  # noqa: SLF001
-        except KeyError:
-            pass
-        gc.collect()
-
-    @staticmethod
     def delete_storage(kb_path: Path, kb_name: str) -> bool:
-        """Teardown ChromaDB connections and delete KB directory with retry logic.
+        """Remove a retired name-addressed directory after writers have drained.
 
-        Handles ChromaDB SQLite file locks that can prevent deletion, particularly
-        on Windows where mandatory file locks block deletion of open files.
-        Uses retry with exponential backoff and a sentinel-file fallback when
-        physical removal is impossible.
+        This helper is only for legacy cleanup. Live SQLite generations use the
+        storage runtime's fenced tombstone protocol. Never truncate a database
+        or remove WAL/SHM files to force deletion of a locked store.
 
-        The sentinel-file fallback (``.kb_deleted``) is preferred over the
-        previous rename-based fallback because Windows can refuse to rename a
-        directory whose contents are still locked open, in which case the
-        directory remained at its original name and the disk-scan listing
-        path re-discovered it as a valid KB.  Writing a marker file inside
-        the dir works in cases where rename does not, and the listing layer
-        treats it identically to a missing dir.
-
-        Returns:
-            True if the KB is no longer visible to listing code (either
-            because the dir was removed, or because a sentinel was written
-            after a failed rmtree).  False only when both physical removal
-            and the sentinel write fail.
+        A failed directory removal writes a legacy deletion sentinel so disk
+        reconciliation cannot resurrect it. False means both actions failed.
         """
         if not kb_path.exists():
             return True
-
-        # Teardown ChromaDB collection to release handles
-        try:
-            has_data = any((kb_path / m).exists() for m in ["chroma", "chroma.sqlite3", "index"])
-            if has_data:
-                client = KBStorageHelper.get_fresh_chroma_client(kb_path)
-                chroma = Chroma(client=client, collection_name=kb_name, **chroma_langchain_collection_kwargs())
-                with contextlib.suppress(Exception):
-                    chroma.delete_collection()
-                chroma = None
-                client = None
-        except (OSError, ValueError, TypeError, chromadb.errors.ChromaError) as e:
-            logger.debug("Collection teardown failed for %s: %s", kb_path.name, e)
-
-        gc.collect()
 
         for attempt in range(MAX_DELETE_RETRIES):
             try:
                 if attempt > 0:
                     time.sleep(DELETE_BACKOFF_SECONDS * (2**attempt))
-
-                _remove_sqlite_lock_files(kb_path)
-                _truncate_sqlite_files(kb_path)
-                gc.collect()
 
                 shutil.rmtree(kb_path, ignore_errors=False)
 
@@ -275,288 +458,34 @@ class KBStorageHelper:
             logger.debug("Could not clear %s sentinel under %s: %s", KB_DELETED_SENTINEL, kb_path, e)
 
 
-def _remove_sqlite_lock_files(kb_path: Path) -> None:
-    """Remove SQLite auxiliary files (WAL, SHM, journal) that hold locks."""
-    for pattern in ["*.sqlite3-wal", "*.sqlite3-shm", "*.sqlite3-journal"]:
-        for lock_file in kb_path.glob(pattern):
-            try:
-                lock_file.unlink()
-            except OSError as e:
-                logger.debug("Could not remove lock file %s: %s", lock_file.name, e)
-
-
-def _truncate_sqlite_files(kb_path: Path) -> None:
-    """Truncate SQLite database files to release locks."""
-    for sqlite_file in kb_path.glob("*.sqlite3"):
-        try:
-            with sqlite_file.open("r+b") as f:
-                f.truncate(0)
-        except OSError as e:
-            logger.debug("Could not truncate %s: %s", sqlite_file.name, e)
-
-
 class KBAnalysisHelper:
     """Helper class for Knowledge Base metadata, metrics, and configuration detection."""
 
     @staticmethod
-    def get_metadata(kb_path: Path, *, fast: bool = False) -> dict:
-        """Extract metadata from a knowledge base directory."""
-        metadata_file = kb_path / "embedding_metadata.json"
-        defaults = {
-            "chunks": 0,
-            "words": 0,
-            "characters": 0,
-            "avg_chunk_size": 0.0,
-            "embedding_provider": "Unknown",
-            "embedding_model": "Unknown",
-            "id": str(uuid.uuid4()),
-            "size": 0,
-            "source_types": [],
-            "chunk_size": None,
-            "chunk_overlap": None,
-            "separator": None,
-            "backend_type": BackendType.CHROMA.value,
-            "backend_config": {},
-        }
-
-        metadata = {}
-        if metadata_file.exists():
-            try:
-                metadata = json.loads(metadata_file.read_text())
-            except (OSError, json.JSONDecodeError):
-                logger.warning(f"Failed to parse metadata file for {kb_path.name}, resetting to defaults.")
-
-        missing_keys = not all(k in metadata for k in defaults)
-        has_unknowns = metadata.get("embedding_provider") == "Unknown" or metadata.get("embedding_model") == "Unknown"
-        # Detect stale zero-chunk metadata: the file claims 0 chunks but
-        # Chroma data exists on disk, meaning data was ingested without updating
-        # the metrics (e.g. via the KnowledgeIngestionComponent before the fix).
-        has_chroma_data = any((kb_path / m).exists() for m in ["chroma", "chroma.sqlite3", "index"])
-        stale_chunks = metadata.get("chunks", 0) == 0 and has_chroma_data
-        directory_size: int | None = None
-
-        if fast and not missing_keys and not stale_chunks:
-            return metadata
-
-        backfill_needed = not metadata_file.exists() or missing_keys or (not fast and has_unknowns)
-
-        if backfill_needed:
-            for key, default_val in defaults.items():
-                if key not in metadata or (key == "id" and not metadata[key]):
-                    metadata[key] = default_val
-            if not isinstance(metadata.get("backend_config"), dict):
-                metadata["backend_config"] = {}
-
-            try:
-                if directory_size is None:
-                    directory_size = KBStorageHelper.get_directory_size(kb_path)
-                metadata["size"] = directory_size
-                if metadata.get("embedding_provider") == "Unknown":
-                    metadata["embedding_provider"] = KBAnalysisHelper._detect_embedding_provider(kb_path)
-                if metadata.get("embedding_model") == "Unknown":
-                    metadata["embedding_model"] = KBAnalysisHelper._detect_embedding_model(kb_path)
-
-                metadata_file.write_text(json.dumps(metadata, indent=2))
-            except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
-                logger.debug(f"Metadata backfill failed for {kb_path}: {e}")
-
-        # Recount metrics from Chroma if metadata claims 0 chunks but data exists
-        if stale_chunks:
-            try:
-                KBAnalysisHelper.update_text_metrics(kb_path, metadata)
-                if directory_size is None:
-                    directory_size = KBStorageHelper.get_directory_size(kb_path)
-                metadata["size"] = directory_size
-                metadata_file.write_text(json.dumps(metadata, indent=2))
-            except (OSError, ValueError, TypeError, json.JSONDecodeError, chromadb.errors.ChromaError) as e:
-                logger.debug(f"Stale metrics recount failed for {kb_path}: {e}")
-
-        return metadata
-
-    @staticmethod
     async def update_text_metrics_via_backend(metadata: dict, backend) -> None:
-        """Backend-agnostic metrics refresh.
+        """Refresh metrics from one complete guarded iteration.
 
-        Drives ``chunks`` / ``words`` / ``characters`` / ``avg_chunk_size``
-        from the backend's ``count`` + ``iter_documents`` abstraction so
-        every vector-store target (Chroma / Mongo / Astra / Postgres) is
-        covered. Silently tolerates iterator failures — metrics are
-        cosmetic, and raising here would wrongly fail an ingestion whose
-        writes already succeeded.
+        Failures propagate before changing the caller's cached metadata so a
+        partial read never reports a healthy empty or truncated knowledge base.
         """
-        try:
-            total_chunks = await backend.count()
-        except Exception as exc:  # noqa: BLE001 — backend-level issues are best-effort
-            logger.debug(f"Backend count() failed during metrics refresh: {exc}")
-            total_chunks = 0
-        metadata["chunks"] = total_chunks
-
-        if total_chunks <= 0:
-            return
-
+        total_chunks = 0
         total_words = 0
         total_characters = 0
-        try:
-            async for batch in backend.iter_documents(batch_size=5000):
+        async with aclosing(backend.iter_documents(batch_size=5000)) as batches:
+            async for batch in batches:
                 if not batch:
                     continue
+                total_chunks += len(batch)
                 source_chunks = pd.DataFrame({"document": [doc.content for doc in batch]})
                 words, characters = KBAnalysisHelper._calculate_text_metrics(source_chunks, ["document"])
                 total_words += words
                 total_characters += characters
-        except Exception as exc:  # noqa: BLE001 — see note above
-            logger.debug(f"Backend iter_documents failed during metrics refresh: {exc}")
-            return
-
-        metadata["words"] = total_words
-        metadata["characters"] = total_characters
-        metadata["avg_chunk_size"] = round(total_characters / total_chunks, 1) if total_chunks > 0 else 0.0
-
-    @staticmethod
-    def update_text_metrics(kb_path: Path, metadata: dict, chroma: Chroma | None = None) -> None:
-        """Update text metrics (chunks, words, characters) for a knowledge base."""
-        created_locally = chroma is None
-        client = None
-        try:
-            if created_locally:
-                client = KBStorageHelper.get_fresh_chroma_client(kb_path)
-                chroma = Chroma(client=client, collection_name=kb_path.name, **chroma_langchain_collection_kwargs())
-
-            if chroma is None:
-                return
-            collection = chroma._collection  # noqa: SLF001
-            metadata["chunks"] = collection.count()
-
-            if metadata["chunks"] > 0:
-                total_words = 0
-                total_characters = 0
-                # Use a robust batch size to avoid SQLite limits and memory pressure
-                batch_size = 5000
-
-                for offset in range(0, metadata["chunks"], batch_size):
-                    results = collection.get(
-                        include=["documents"],
-                        limit=batch_size,
-                        offset=offset,
-                    )
-                    if not results["documents"]:
-                        break
-
-                    # Chroma collections always return the text content within the 'documents' field
-                    source_chunks = pd.DataFrame({"document": results["documents"]})
-                    words, characters = KBAnalysisHelper._calculate_text_metrics(source_chunks, ["document"])
-                    total_words += words
-                    total_characters += characters
-
-                metadata["words"] = total_words
-                metadata["characters"] = total_characters
-                metadata["avg_chunk_size"] = (
-                    round(total_characters / metadata["chunks"], 1) if metadata["chunks"] > 0 else 0.0
-                )
-        except (OSError, ValueError, TypeError, json.JSONDecodeError, chromadb.errors.ChromaError) as e:
-            logger.debug(f"Metrics update failed for {kb_path.name}: {e}")
-        finally:
-            if created_locally:
-                client = None
-                chroma = None
-                KBStorageHelper.release_chroma_resources(kb_path)
-
-    @staticmethod
-    def _detect_embedding_provider(kb_path: Path) -> str:
-        """Internal helper to detect the embedding provider."""
-        provider_patterns = {
-            "OpenAI": ["openai", "text-embedding-ada", "text-embedding-3"],
-            "Azure OpenAI": ["azure"],
-            "HuggingFace": ["sentence-transformers", "huggingface", "bert-"],
-            "Cohere": ["cohere", "embed-english", "embed-multilingual"],
-            "Google": ["palm", "gecko", "google"],
-            "Ollama": ["ollama"],
-            "Chroma": ["chroma"],
-        }
-
-        for config_file in kb_path.glob("*.json"):
-            try:
-                with config_file.open("r", encoding="utf-8") as f:
-                    config_data = json.load(f)
-                    if not isinstance(config_data, dict):
-                        continue
-
-                    config_str = json.dumps(config_data).lower()
-                    provider_fields = ["embedding_provider", "provider", "embedding_model_provider"]
-                    for field in provider_fields:
-                        if field in config_data:
-                            provider_value = str(config_data[field]).lower()
-                            for provider, patterns in provider_patterns.items():
-                                if any(pattern in provider_value for pattern in patterns):
-                                    return provider
-                            if provider_value and provider_value != "unknown":
-                                return provider_value.title()
-
-                    for provider, patterns in provider_patterns.items():
-                        if any(pattern in config_str for pattern in patterns):
-                            return provider
-
-            except (OSError, json.JSONDecodeError):
-                logger.exception("Error reading config file '%s'", config_file)
-                continue
-
-        if (kb_path / "chroma").exists():
-            return "Chroma"
-        if (kb_path / "vectors.npy").exists():
-            return "Local"
-
-        return "Unknown"
-
-    @staticmethod
-    def _detect_embedding_model(kb_path: Path) -> str:
-        """Internal helper to detect the embedding model."""
-        metadata_file = kb_path / "embedding_metadata.json"
-        if metadata_file.exists():
-            try:
-                with metadata_file.open("r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-                    if isinstance(metadata, dict) and "embedding_model" in metadata:
-                        model_value = str(metadata.get("embedding_model", "unknown"))
-                        if model_value and model_value.lower() != "unknown":
-                            return model_value
-            except (OSError, json.JSONDecodeError):
-                logger.exception("Error reading embedding metadata file '%s'", metadata_file)
-
-        for config_file in kb_path.glob("*.json"):
-            if config_file.name == "embedding_metadata.json":
-                continue
-
-            try:
-                with config_file.open("r", encoding="utf-8") as f:
-                    config_data = json.load(f)
-                    if not isinstance(config_data, dict):
-                        continue
-
-                    model_fields = ["embedding_model", "model", "embedding_model_name", "model_name"]
-                    for field in model_fields:
-                        if field in config_data:
-                            model_value = str(config_data[field])
-                            if model_value and model_value.lower() != "unknown":
-                                return model_value
-
-                    if "openai" in json.dumps(config_data).lower():
-                        openai_models = ["text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"]
-                        config_str = json.dumps(config_data).lower()
-                        for model in openai_models:
-                            if model in config_str:
-                                return model
-
-                    if "model" in config_data:
-                        model_name = str(config_data["model"])
-                        hf_patterns = ["sentence-transformers", "all-MiniLM", "all-mpnet", "multi-qa"]
-                        if any(pattern in model_name for pattern in hf_patterns):
-                            return model_name
-
-            except (OSError, json.JSONDecodeError):
-                logger.exception("Error reading config file '%s'", config_file)
-                continue
-
-        return "Unknown"
+        metadata.update(
+            chunks=total_chunks,
+            words=total_words,
+            characters=total_characters,
+            avg_chunk_size=round(total_characters / total_chunks, 1) if total_chunks else 0.0,
+        )
 
     @staticmethod
     def _calculate_text_metrics(df: pd.DataFrame, text_columns: list[str]) -> tuple[int, int]:
@@ -581,7 +510,7 @@ class KBIngestionHelper:
     @staticmethod
     async def perform_ingestion(
         kb_name: str,
-        kb_path: Path,
+        kb_path: Path | None,
         files_data: list[tuple[str, bytes]] | None,
         chunk_size: int,
         chunk_overlap: int,
@@ -595,8 +524,19 @@ class KBIngestionHelper:
         source_metadata: dict | None = None,
         source: KBIngestionSource | None = None,
         per_file_metadata: dict[str, dict] | None = None,
+        kb_owner: CurrentActiveUser | None = None,
     ) -> dict[str, object]:
         """Orchestrate the ingestion of content into a knowledge base.
+
+        ``current_user`` is the user who started the run and ``kb_owner`` the
+        knowledge base's owner (defaults to ``current_user``). They differ when an
+        authorization plugin shares the knowledge base. Everything that locates the
+        knowledge base follows the owner: the ``knowledge_base`` row, the run's
+        ``kb_id``, the backend's ``user_id`` (which names owner-scoped storage and
+        resolves the owner's connection variables), and rollback cleanup. What the
+        actor brings stays with the actor: the embedding model credentials (so a
+        collaborator never spends the owner's keys) and the ingestion source (the
+        actor's uploads, folders, and connector credentials).
 
         Accepts either a preloaded ``files_data`` list (the long-standing
         file-upload path) or a ``source`` — any ``KBIngestionSource``
@@ -627,6 +567,7 @@ class KBIngestionHelper:
             get_embedding_provider,
         )
 
+        owner = kb_owner if kb_owner is not None else current_user
         embedding_provider = get_embedding_provider(model_selection)
         embedding_model = get_embedding_model(model_selection)
 
@@ -660,8 +601,9 @@ class KBIngestionHelper:
         # During the Phase 1.5 rollout some KBs still only exist in
         # JSON files; in that case ``kb_id`` stays None and the run
         # row keeps pointing at ``kb_name`` for N-1 compatibility.
-        kb_record = await knowledge_base_service.get_by_user_and_name(current_user.id, kb_name)
+        kb_record = await knowledge_base_service.get_by_user_and_name(owner.id, kb_name)
         kb_record_id = kb_record.id if kb_record is not None else None
+        restored_status, restored_failure_reason = status_before_ingestion(kb_record)
         run_id = await ingestion_run_service.create_run(
             kb_name=kb_name,
             user_metadata=dict(source_metadata or {}),
@@ -694,22 +636,13 @@ class KBIngestionHelper:
         encoded_metadata_tag = json.dumps(source_metadata) if source_metadata else ""
         source_extension_tags: set[str] = set()
         try:
+            # Heartbeat until finalize_run, so another worker's orphan sweep
+            # cannot fail this live run. It stops first, since both rewrite
+            # job_metadata.
+            await job_service.start_keep_alive(task_job_id)
             embeddings = await KBIngestionHelper.build_embeddings(embedding_provider, embedding_model, current_user)
-            backend_type_value = (
-                kb_record.backend_type if kb_record and kb_record.backend_type else BackendType.CHROMA.value
-            )
-            backend_config = (kb_record.backend_config or {}) if kb_record is not None else {}
-            backend = create_backend(
-                backend_type_value,
-                kb_name=kb_name,
-                kb_path=kb_path,
-                backend_config=backend_config,
-                embedding_function=embeddings,
-                # Forward the user id so Mongo/Astra/Postgres backends can
-                # pull their connection URI / tokens from Primeagent's
-                # variable_service instead of forcing the server to export
-                # matching env vars.
-                user_id=getattr(current_user, "id", None),
+            backend = await backend_for_name(
+                owner.id, kb_name, embedding_function=embeddings, expected_record=kb_record
             )
 
             job_id_str = str(task_job_id)
@@ -807,8 +740,8 @@ class KBIngestionHelper:
                     ),
                     size_bytes=size_bytes,
                 )
-                # Track extension for the legacy ``source_types`` list
-                # in the KB's ``embedding_metadata.json``.
+                # Track extension for the KB row's ``source_types`` list,
+                # which drives the file-type icon in the KB list.
                 if "." in content_obj.file_name:
                     source_extension_tags.add(content_obj.file_name.rsplit(".", 1)[-1].lower())
 
@@ -825,39 +758,47 @@ class KBIngestionHelper:
             else:
                 final_status = IngestionRunStatus.SUCCEEDED
 
-            metadata = KBAnalysisHelper.get_metadata(kb_path, fast=True)
-            # Backend-agnostic metrics refresh — ``raw_langchain_store`` was
-            # Chroma-only and broke Mongo/Astra/Postgres with AttributeError
-            # (which then falsely marked the run failed and rolled back the
-            # chunks we'd just written).
-            await KBAnalysisHelper.update_text_metrics_via_backend(metadata, backend)
-            metadata["size"] = KBStorageHelper.get_directory_size(kb_path)
-            metadata["chunk_size"] = chunk_size
-            metadata["chunk_overlap"] = chunk_overlap
-            metadata["separator"] = separator or None
-            metadata_path = kb_path / "embedding_metadata.json"
-            existing_source_types = metadata.get("source_types", [])
-            metadata["source_types"] = sorted(set(existing_source_types) | source_extension_tags)
-            metadata_path.write_text(json.dumps(metadata, indent=2))
+            # Refresh the counters straight onto the ``knowledge_base`` row —
+            # there is no on-disk sidecar to keep in sync any more. The scratch
+            # dict is just a carrier for ``update_text_metrics_via_backend``,
+            # which is backend-agnostic: the older Chroma-only path broke
+            # Mongo/Astra/Postgres with AttributeError, which then falsely marked
+            # the run failed and rolled back chunks we had already written.
+            metrics: dict[str, Any] = {}
+            try:
+                await KBAnalysisHelper.update_text_metrics_via_backend(metrics, backend)
+            except Exception as exc:  # noqa: BLE001 -- cached metrics must not roll back a successful write
+                metrics = {}
+                await logger.awarning("KB metrics refresh lagged for %s: %s", kb_name, type(exc).__name__)
 
-            # Mirror the refreshed stats onto the DB row. Done after
-            # the JSON write so if the DB update fails, older service
-            # versions still see a consistent filesystem view.
+            size_bytes = None
+            try:
+                size_bytes = (
+                    KBStorageHelper.get_directory_size(kb_path)
+                    if kb_path is not None
+                    else await backend.storage_size_bytes()
+                )
+            except Exception as exc:  # noqa: BLE001 -- size refresh must not discard successful metrics
+                await logger.awarning("KB size refresh lagged for %s: %s", kb_name, type(exc).__name__)
+
+            existing_source_types = list(kb_record.source_types or []) if kb_record is not None else []
+            merged_source_types = sorted(set(existing_source_types) | source_extension_tags)
+
             if kb_record_id is not None:
                 try:
                     await knowledge_base_service.update_stats(
                         kb_record_id,
-                        chunks=metadata.get("chunks", 0),
-                        words=metadata.get("words", 0),
-                        characters=metadata.get("characters", 0),
-                        size_bytes=metadata.get("size", 0),
-                        source_types=metadata.get("source_types", []),
+                        chunks=metrics.get("chunks"),
+                        words=metrics.get("words"),
+                        characters=metrics.get("characters"),
+                        size_bytes=size_bytes,
+                        source_types=merged_source_types,
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
                         separator=separator or None,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    await logger.awarning("KB DB stat update lagged for %s: %s", kb_name, exc)
+                    await logger.awarning("KB DB stat update lagged for %s: %s", kb_name, type(exc).__name__)
                 # Clear any previous failure marker once the run finishes
                 # writing chunks; ``final_status`` (PARTIAL/SUCCEEDED) is
                 # not "failed", so the KB row should reflect READY.
@@ -897,17 +838,17 @@ class KBIngestionHelper:
                 kb_name,
                 backend_type=kb_record.backend_type if kb_record is not None else None,
                 backend_config=kb_record.backend_config if kb_record is not None else None,
-                user_id=getattr(current_user, "id", None),
+                user_id=getattr(owner, "id", None),
             )
             if kb_record_id is not None:
                 try:
                     await knowledge_base_service.update_status(
                         kb_record_id,
-                        status=KnowledgeBaseStatus.FAILED,
-                        failure_reason=final_error,
+                        status=restored_status,
+                        failure_reason=restored_failure_reason,
                     )
                 except Exception as status_exc:  # noqa: BLE001
-                    await logger.awarning("KB status update to FAILED (cancel) lagged for %s: %s", kb_name, status_exc)
+                    await logger.awarning("KB status restore after cancel lagged for %s: %s", kb_name, status_exc)
             return {"message": "Job cancelled", "ingestion_run_id": str(run_id)}
         except Exception as exc:
             final_status = IngestionRunStatus.FAILED
@@ -923,7 +864,7 @@ class KBIngestionHelper:
                 kb_name,
                 backend_type=kb_record.backend_type if kb_record is not None else None,
                 backend_config=kb_record.backend_config if kb_record is not None else None,
-                user_id=getattr(current_user, "id", None),
+                user_id=getattr(owner, "id", None),
             )
             if kb_record_id is not None:
                 try:
@@ -935,9 +876,16 @@ class KBIngestionHelper:
                 except Exception as status_exc:  # noqa: BLE001
                     await logger.awarning("KB status update to FAILED lagged for %s: %s", kb_name, status_exc)
             raise
+        except asyncio.CancelledError:
+            # A shutdown or a system cancel interrupted the run. Without this the
+            # finally would record it as the SUCCEEDED it was initialized to.
+            final_status = IngestionRunStatus.FAILED
+            final_error = "Ingestion was interrupted before it finished."
+            raise
         finally:
             if backend is not None:
                 await backend.teardown()
+            await job_service.stop_keep_alive(task_job_id)
             await ingestion_run_service.finalize_run(
                 run_id,
                 summary=summary,
@@ -948,10 +896,10 @@ class KBIngestionHelper:
     @staticmethod
     async def cleanup_chroma_chunks_by_job(
         job_id: uuid.UUID,
-        kb_path: Path,
+        kb_path: Path | None,  # noqa: ARG004 - compatibility signature
         kb_name: str,
-        backend_type: str | None = None,
-        backend_config: dict | None = None,
+        backend_type: str | None = None,  # noqa: ARG004 - routing comes from the row
+        backend_config: dict | None = None,  # noqa: ARG004 - routing comes from the row
         user_id=None,
     ) -> None:
         """Delete every chunk written by ``job_id`` from this KB.
@@ -961,81 +909,23 @@ class KBIngestionHelper:
         rollbacks safe even when multiple concurrent jobs write to the same
         collection.
 
-        Name kept for backward compatibility — the cleanup now runs through
-        whichever backend the KB is configured with, not just Chroma.
-        Defaults to Chroma so existing callers still work.
+        The historical name and arguments remain for saved callers. Routing
+        always comes from the owner's current row and crosses the same lifecycle
+        fence as ingestion, so cleanup cannot write into a retired generation.
         """
-        effective_type = backend_type or BackendType.CHROMA.value
-        backend = create_backend(
-            effective_type,
-            kb_name=kb_name,
-            kb_path=kb_path,
-            backend_config=backend_config or {},
-            user_id=user_id,
-        )
+        backend = None
         try:
+            backend = await backend_for_name(user_id, kb_name)
             await backend.delete_by({METADATA_KEY_JOB_ID: str(job_id)})
             await logger.ainfo(f"Cleaned up chunks for job {job_id} in knowledge base '{kb_name}'")
-        except (OSError, ValueError, TypeError, chromadb.errors.ChromaError) as cleanup_error:
+        except Exception as cleanup_error:  # noqa: BLE001 - rollback must preserve the ingestion failure
             await logger.aerror(f"Failed to clean up chunks for job {job_id}: {cleanup_error}")
         finally:
-            await backend.teardown()
-
-    @staticmethod
-    async def write_documents_to_chroma(
-        *,
-        documents: list[Document],
-        chroma: Chroma,
-        task_job_id: uuid.UUID,
-        job_service: JobService,
-    ) -> int:
-        """Write pre-built Documents into an open Chroma collection.
-
-        This is the shared primitive used by both file-based KB ingestion
-        (``perform_ingestion``) and message-based Memory Base ingestion.
-
-        Documents must already be chunked and have their metadata populated
-        by the caller — this method only handles the batched write, cancellation
-        checking, and retry logic.
-
-        Args:
-            documents: LangChain Document objects ready for embedding.
-            chroma: An already-constructed ``Chroma`` instance pointing at the
-                target collection.
-            task_job_id: Job ID used to poll for cancellation.
-            job_service: Service for checking job status.
-
-        Returns:
-            Number of documents successfully written.  If the job is cancelled
-            mid-batch this will be less than ``len(documents)``.
-
-        Raises:
-            Exception: Re-raises any non-cancellation write failure after the
-                retry budget is exhausted.
-        """
-        written = 0
-        for i in range(0, len(documents), INGESTION_BATCH_SIZE):
-            if await KBIngestionHelper.is_job_cancelled(job_service, task_job_id):
-                return written
-
-            batch = documents[i : i + INGESTION_BATCH_SIZE]
-            for attempt in range(MAX_RETRY_ATTEMPTS):
-                if await KBIngestionHelper.is_job_cancelled(job_service, task_job_id):
-                    return written
+            if backend is not None:
                 try:
-                    await chroma.aadd_documents(batch)
-                    break
-                except Exception as e:
-                    if attempt == MAX_RETRY_ATTEMPTS - 1:
-                        raise
-                    wait = (attempt + 1) * EXPONENTIAL_BACKOFF_MULTIPLIER
-                    await logger.awarning("Write failed, retrying in %ds: %s", wait, e)
-                    await asyncio.sleep(wait)
-
-            written += len(batch)
-            await asyncio.sleep(0.01)
-
-        return written
+                    await backend.teardown()
+                except Exception as cleanup_error:  # noqa: BLE001 - closing cleanup must preserve the ingestion failure
+                    await logger.aerror("Failed to close ingestion cleanup backend: %s", cleanup_error)
 
     @staticmethod
     async def write_documents_to_backend(
@@ -1047,12 +937,12 @@ class KBIngestionHelper:
     ) -> int:
         """Write pre-built Documents through a ``BaseVectorStoreBackend``.
 
-        Backend-agnostic counterpart to :meth:`write_documents_to_chroma`.
-        Used by the multi-backend KB ingestion path so Mongo/Astra/
-        Postgres/OpenSearch ingestions share the same batching,
-        cancellation-checking, and exponential-backoff retry logic that
-        Memory Base's Chroma path gets from
-        :meth:`write_documents_to_chroma`.
+        The single write primitive for every ingestion path — file-based
+        Knowledge Bases and message-based Memory Bases alike — so batching,
+        cancellation checking, and exponential-backoff retry behave identically
+        whatever backend the KB is on. A Chroma-only counterpart used to exist
+        for Memory Bases; it was removed so the local-only path cannot be
+        reintroduced by accident.
 
         Documents must already be chunked with metadata populated.
 
@@ -1076,6 +966,13 @@ class KBIngestionHelper:
                 try:
                     await backend.add_documents(batch)
                     break
+                except (BackendConfigurationError, StorageUnavailableError):
+                    # A stale source/routing fence requires a new job snapshot.
+                    # Permanent backend configuration also cannot improve here.
+                    # Retrying either within this batch only
+                    # burns the backoff budget (~20s) on a call that cannot
+                    # succeed, so surface it immediately.
+                    raise
                 except Exception as exc:
                     if attempt == MAX_RETRY_ATTEMPTS - 1:
                         raise
@@ -1098,8 +995,8 @@ class KBIngestionHelper:
     async def build_embeddings(provider: str, model: str, current_user):
         """Build a LangChain embeddings instance for a stored KB.
 
-        The provider/model pair is the source of truth recorded in the KB's
-        ``embedding_metadata.json`` at creation time. We resolve the embedding
+        The provider/model pair is the source of truth recorded on the KB's
+        ``knowledge_base`` row at creation time. We resolve the embedding
         class and parameter mapping straight from the static registry rather
         than the user-filtered catalog, so retrieval keeps working when:
 
@@ -1140,5 +1037,11 @@ class KBIngestionHelper:
             },
         }
 
-        embedding_model = EmbeddingModelComponent(model=[selected_option], _user_id=current_user.id)
+        # Force None so input defaults (localhost Ollama / blank api_base) do not override globals.
+        embedding_model = EmbeddingModelComponent(
+            model=[selected_option],
+            ollama_base_url=None,
+            api_base=None,
+            _user_id=current_user.id,
+        )
         return embedding_model.build_embeddings()

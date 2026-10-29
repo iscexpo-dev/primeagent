@@ -12,6 +12,8 @@ Primeagent integrates with the [Model Context Protocol (MCP)](https://modelconte
 This page describes how to use Primeagent as an MCP server that exposes your flows as [tools](https://modelcontextprotocol.io/docs/concepts/tools) that [MCP clients](https://modelcontextprotocol.io/clients) can use when generating responses.
 
 Primeagent MCP servers support both the **streamable HTTP** transport and **Server-Sent Events (SSE)** as a fallback.
+The default project MCP server configuration uses streamable HTTP transport at the URL path `/streamable`.
+To serve only streamable HTTP, see [Disable the legacy MCP SSE transport](#disable-legacy-sse).
 
 For information about using Primeagent as an MCP client and managing MCP server connections within flows, see [Use Primeagent as an MCP client](/mcp-client).
 
@@ -29,7 +31,7 @@ For information about using Primeagent as an MCP client and managing MCP server 
 
 When you create a [Primeagent project](/concepts-flows#projects), Primeagent automatically adds the project to your MCP server's configuration and makes the project's flows available as MCP tools.
 
-If your Primeagent server has authentication enabled (`AUTO_LOGIN=false`), the project's MCP server is automatically configured with API key authentication, and a new API key is generated specifically for accessing the new project's flows.
+If your Primeagent server has authentication enabled (`PRIMEAGENT_AUTO_LOGIN=false`), the project's MCP server is automatically configured with API key authentication, and a new API key is generated specifically for accessing the new project's flows.
 For more information, see [MCP server authentication](#authentication).
 
 
@@ -113,6 +115,22 @@ However, the description mentions it's for "Emily's resume" not Alex's. I don't 
 
 </details>
 
+### Configure tool execution timeouts
+
+There are three ways to set tool execution timeouts: the MCP Tools component timeout setting, a global environment variable, and Primeagent's default fallback. How you configure these determines their effect in resolving the actual timeout limit for each tool call.
+
+Primeagent times are evaluated in the following order:
+
+1. Per-component timeout is set directly on an MCP Tools component in your flow. To configure per-component timeout in the [**MCP Tools** component](/mcp-tools), open the advanced settings tab and enter a value in the **Tool Execution Timeout (seconds)** field. A value of `0` disables the per-component override and falls back to the global setting.
+
+2. Global timeout is set with the `PRIMEAGENT_MCP_TOOL_EXECUTION_TIMEOUT` environment variable. The default is 180 seconds.
+
+3. If neither `PRIMEAGENT_MCP_TOOL_EXECUTION_TIMEOUT` or `PRIMEAGENT_MCP_SERVER_TIMEOUT` is configured, Primeagent defaults to 180 seconds.
+
+To support tool calls that take longer than 180 seconds, set `PRIMEAGENT_MCP_TOOL_EXECUTION_TIMEOUT` to a value greater than `180` to raise the global limit, or set the **Tool Execution Timeout (seconds)** field on a specific MCP Tools component to a value greater than `180` to raise the limit for that component only.
+
+If `PRIMEAGENT_MCP_SERVER_TIMEOUT` is set to a value greater than `PRIMEAGENT_MCP_TOOL_EXECUTION_TIMEOUT`, the server timeout takes precedence and becomes the actual limit for tool calls.
+
 {/* The anchor on this section (connect-clients-to-use-the-servers-actions) is currently a link target in the Primeagent UI. Do not change. */}
 ## Connect clients to your Primeagent MCP server {#connect-clients-to-use-the-servers-actions}
 
@@ -146,6 +164,8 @@ For example:
           "command": "uvx",
           "args": [
             "mcp-proxy",
+            "--transport",
+            "streamablehttp",
             "http://PRIMEAGENT_SERVER_ADDRESS/api/v1/mcp/project/PROJECT_ID/streamable"
           ]
         }
@@ -161,7 +181,7 @@ For example:
     If your Primeagent server requires authentication, you must include your Primeagent API key or OAuth settings in the configuration.
     For more information, see [MCP server authentication](#authentication).
 
-6. To include other environment variables with your MCP server command, add an `env` object with key-value pairs of environment variables:
+6. To include other environment variables with your MCP server command, add an `env` object with key-value pairs of environment variables. For example:
 
     ```json
     {
@@ -170,6 +190,8 @@ For example:
           "command": "uvx",
           "args": [
             "mcp-proxy",
+            "--transport",
+            "streamablehttp",
             "http://PRIMEAGENT_SERVER_ADDRESS/api/v1/mcp/project/PROJECT_ID/streamable"
           ],
           "env": {
@@ -179,6 +201,10 @@ For example:
       }
     }
     ```
+
+    Don't add API keys in the `env` object, as these variables are specifically for the `mcp-proxy` process.
+    Instead, add API keys under `args`.
+    For an example, see [MCP server authentication](#authentication).
 
 7. Save and close your client's MCP configuration file.
 
@@ -219,17 +245,38 @@ For more information, see the MCP documentation for your client, such as [Cursor
 
 Each [Primeagent project](/concepts-flows#projects) has its own MCP server with its own MCP server authentication settings.
 
-When you create a new project, Primeagent automatically configures authentication for the project's MCP server based on your Primeagent server's authentication settings. If authentication is enabled (`AUTO_LOGIN=false`), the project is automatically configured with API key authentication, and a new API key is generated for accessing the project's flows.
+When you create a new project, Primeagent automatically configures authentication for the project's MCP server based on your Primeagent server's authentication settings. If authentication is enabled (`PRIMEAGENT_AUTO_LOGIN=false`), the project is automatically configured with API key authentication, and a new API key is generated for accessing the project's flows.
 
 To configure authentication for a Primeagent MCP server, go to the **Projects** page in Primeagent, click the **MCP Server** tab, click <Icon name="Fingerprint" aria-hidden="true"/> **Edit Auth**, and then select your preferred authentication method:
 
 <Tabs groupId="auth-type">
 <TabItem value="API key" label="API key">
 
-When authenticating your MCP server with a Primeagent API key, your project's MCP server **JSON** code snippets and **Auto install** configuration automatically include the `--headers` and `x-api-key` arguments.
+When authenticating your MCP server with a Primeagent API key, your project's MCP server **JSON** code snippets and **Auto install** configuration automatically include the `--headers` and `x-api-key` arguments in the **args** array (for streamable transport).
 
 Click <Icon name="key" aria-hidden="true"/> **Generate API key** to automatically insert a new Primeagent API key into the code template.
 Alternatively, you can replace `YOUR_API_KEY` with an existing Primeagent API key.
+
+To add your API key to the configuration, use three separate entries in `args`: `"--headers"`, `"x-api-key"`, and your key value. For example:
+
+```json
+{
+  "mcpServers": {
+    "PROJECT_NAME": {
+      "command": "uvx",
+      "args": [
+        "mcp-proxy",
+        "--transport",
+        "streamablehttp",
+        "--headers",
+        "x-api-key",
+        "YOUR_API_KEY",
+        "http://PRIMEAGENT_SERVER_ADDRESS/api/v1/mcp/project/PROJECT_ID/streamable"
+      ]
+    }
+  }
+}
+```
 
 </TabItem>
 <TabItem value="OAuth" label="OAuth">
@@ -291,20 +338,10 @@ Only use this option when Primeagent is running in a trusted environment.
 </TabItem>
 </Tabs>
 
-## MCP server environment variables
 
-The following environment variables set behaviors related to your Primeagent projects' MCP servers:
-
-| Variable | Format | Default | Description |
-|----------|--------|---------|-------------|
-| `PRIMEAGENT_MCP_SERVER_ENABLED` | Boolean | `True` | Whether to initialize an MCP server for each of your Primeagent projects. If `false`, Primeagent doesn't initialize MCP servers. |
-| `PRIMEAGENT_MCP_SERVER_ENABLE_PROGRESS_NOTIFICATIONS` | Boolean | `False` | If `true`, Primeagent MCP servers send progress notifications. |
-| `PRIMEAGENT_MCP_SERVER_TIMEOUT` | Integer | `20` | The number of seconds to wait before an MCP server operation expires due to poor connectivity or long-running requests. |
-| `PRIMEAGENT_MCP_MAX_SESSIONS_PER_SERVER` | Integer | `10` | Maximum number of MCP sessions to keep per unique server. |
-| `PRIMEAGENT_ADD_PROJECTS_TO_MCP_SERVERS` | Boolean | `True` | Whether to automatically add newly created projects to the user's MCP servers configuration. If `false`, projects must be manually added to MCP servers. |
 
 {/* The anchor on this section (deploy-your-server-externally) is currently a link target in the Primeagent UI. Do not change. */}
-### Deploy your Primeagent MCP server externally {#deploy-your-server-externally}
+## Deploy your Primeagent MCP server externally {#deploy-your-server-externally}
 
 To deploy your Primeagent MCP server externally, see [Deploy a public Primeagent server](/deployment-public-server).
 
@@ -367,6 +404,41 @@ The default address is `http://localhost:6274`.
     From this tab, you can monitor how your flows are being registered as tools by MCP, as well as test the tools with custom input values.
 
 5. To quit MCP Inspector, press <kbd>Control+C</kbd> in the same terminal window where you started it.
+
+## Disable the legacy MCP SSE transport {#disable-legacy-sse}
+
+Set `PRIMEAGENT_MCP_SSE_ENABLED=false` to return `404` from the legacy SSE transport and its message endpoint.
+Streamable HTTP is unaffected.
+
+## Restrict MCP server management to superusers {#restrict-mcp-server-management}
+
+To prevent non-superusers from editing MCP server connections, set `PRIMEAGENT_MCP_SERVERS_LOCKED=true`.
+
+When set to `true`, non-superusers can use existing MCP servers that are already configured, but they cannot configure MCP server connections in the UI or API.
+Superusers retain full access to MCP server configuration.
+
+Locking the MCP server configuration for users does not disable Primeagent's built-in MCP server for serving flows as MCP tools.
+
+## MCP server environment variables {#mcp-server-environment-variables}
+
+The following environment variables set behaviors related to your Primeagent projects' MCP servers:
+
+| Variable | Format | Default | Description |
+|----------|--------|---------|-------------|
+| `PRIMEAGENT_MCP_SERVER_ENABLED` | Boolean | `True` | Whether to initialize an MCP server for each of your Primeagent projects. If `false`, Primeagent doesn't initialize MCP servers. |
+| `PRIMEAGENT_MCP_SSE_ENABLED` | Boolean | `True` | Whether to serve the legacy SSE transport. If `false`, SSE and its message endpoint return `404`. Streamable HTTP is unaffected. See [Disable the legacy MCP SSE transport](#disable-legacy-sse). |
+| `PRIMEAGENT_MCP_SERVER_ENABLE_PROGRESS_NOTIFICATIONS` | Boolean | `False` | If `true`, Primeagent MCP servers send progress notifications. |
+| `PRIMEAGENT_SKIP_MCP_AUTO_INIT` | Boolean | `False` | If `true`, skip background MCP server auto-initialization on startup. Use this on offline, firewalled, or CI hosts so startup does not wait on outbound MCP connections. |
+| `PRIMEAGENT_MCP_COMPOSER_ENABLED` | Boolean | `True` | Whether to start the MCP Composer service. |
+| `PRIMEAGENT_MCP_SERVER_TIMEOUT` | Integer | `60` | Timeout in seconds for MCP connection setup and tool execution. See [Configure tool execution timeouts](#configure-tool-execution-timeouts). |
+| `PRIMEAGENT_MCP_TOOL_EXECUTION_TIMEOUT` | Integer | `180` | Global timeout in seconds for MCP tool calls. See [Configure tool execution timeouts](#configure-tool-execution-timeouts). |
+| `PRIMEAGENT_MCP_MAX_SESSIONS_PER_SERVER` | Integer | `10` | Maximum number of MCP sessions to keep per unique server. |
+| `PRIMEAGENT_ADD_PROJECTS_TO_MCP_SERVERS` | Boolean | `True` | Whether to automatically add newly created projects to the user's MCP servers configuration. If `false`, projects must be manually added to MCP servers. |
+| `PRIMEAGENT_MCP_SERVERS_LOCKED` | Boolean | `False` | If `true`, non-superusers cannot add, edit, or remove MCP server connections through the UI or API. Superusers retain full access. For more information, see [Restrict MCP server management to superusers](#restrict-mcp-server-management). |
+| `PRIMEAGENT_MCP_SERVER_ALLOWED_PACKAGES` | String | Not set | Comma-separated allowlist of package names that MCP `npx`/`uvx` stdio servers may download and run. Leave unset for single-tenant compatibility. An empty value blocks all package runners. |
+| `PRIMEAGENT_MCP_SERVER_ENV_ALLOWLIST` | String | Not set | Comma-separated allowlist of environment-variable names an MCP stdio config may set. Leave unset for single-tenant compatibility; production preflight warns when it is unset. An empty value blocks all tenant-supplied environment variables. |
+| `PRIMEAGENT_MCP_SERVER_INTERPRETER_HARDENING` | Boolean | `False` | If `true`, blocks tenant-controlled Python, Node.js, and shell MCP entrypoints. Package wrappers and the authenticated internal Primeagent MCP server still work. |
+| `PRIMEAGENT_MCP_SERVER_DOCKER_HARDENING` | Boolean | `False` | If `true`, applies a strict argument policy to MCP `docker` stdio servers so tenants cannot mount the host filesystem or use privileged flags. |
 
 ## Troubleshoot Primeagent MCP servers {#troubleshooting-mcp-server}
 

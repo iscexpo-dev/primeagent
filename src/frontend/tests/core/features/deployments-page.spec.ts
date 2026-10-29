@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "../../fixtures";
 import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
 import {
@@ -11,33 +12,40 @@ test.skip(
   "Requires PRIMEAGENT_FEATURE_WXO_DEPLOYMENTS=true",
 );
 
-async function navigateToDeploymentsTab(
-  page: Parameters<typeof test>[2]["page"],
-) {
+async function navigateToDeploymentsTab(page: Page) {
   await awaitBootstrapTest(page, { skipModal: true });
   await page.getByTestId("deployments-btn").click();
   await page.waitForSelector('[data-testid="subtab-deployments"]');
 }
 
+// Empty providers + empty deployments — the catch-all the empty-state tests
+// share. Kept local (the shared setupDeploymentMocks returns a populated
+// providers list, which would break these empty-state assertions).
+async function mockEmptyDeploymentsAndProviders(page: Page) {
+  await page.route("**/api/v1/deployments/providers*", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ provider_accounts: [] }),
+    });
+  });
+
+  await page.route("**/api/v1/deployments*", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ deployments: [] }),
+    });
+  });
+}
+
 test(
   "Renders Deployments tab with sub-tab toggles",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
-    await page.route("**/api/v1/deployments/providers*", (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ provider_accounts: [] }),
-      });
-    });
-
-    await page.route("**/api/v1/deployments*", (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ deployments: [] }),
-      });
-    });
+    await mockEmptyDeploymentsAndProviders(page);
 
     await awaitBootstrapTest(page, { skipModal: true });
     await page.getByTestId("deployments-btn").click();
@@ -50,23 +58,11 @@ test(
 
 test(
   "Deployments empty state shows create button when no providers exist",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
-    await page.route("**/api/v1/deployments/providers*", (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ provider_accounts: [] }),
-      });
-    });
-
-    await page.route("**/api/v1/deployments*", (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ deployments: [] }),
-      });
-    });
+    await mockEmptyDeploymentsAndProviders(page);
 
     await awaitBootstrapTest(page, { skipModal: true });
     await page.getByTestId("deployments-btn").click();
@@ -78,23 +74,11 @@ test(
 
 test(
   "Providers empty state shows add provider button when switching to providers tab",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
-    await page.route("**/api/v1/deployments/providers*", (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ provider_accounts: [] }),
-      });
-    });
-
-    await page.route("**/api/v1/deployments*", (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ deployments: [] }),
-      });
-    });
+    await mockEmptyDeploymentsAndProviders(page);
 
     await awaitBootstrapTest(page, { skipModal: true });
     await page.getByTestId("deployments-btn").click();
@@ -108,7 +92,9 @@ test(
 
 test(
   "Deployment list renders a row for each deployment",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/deployments*", (route) => {
       route.fulfill({
@@ -136,7 +122,9 @@ test(
 
 test(
   "Provider list renders a row for each provider",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/deployments*", (route) => {
       route.fulfill({
@@ -166,7 +154,9 @@ test(
 
 test(
   "Delete deployment opens type-to-confirm dialog",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/deployments/providers*", (route) => {
       route.fulfill({
@@ -198,7 +188,9 @@ test(
 
 test(
   "Delete deployment button is disabled until deployment name is typed",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/deployments/providers*", (route) => {
       route.fulfill({
@@ -235,7 +227,9 @@ test(
 
 test(
   "Delete deployment — typing correct name and confirming calls DELETE",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/deployments/providers*", (route) => {
       route.fulfill({
@@ -283,7 +277,9 @@ test(
 
 test(
   "Cancel delete deployment dismisses dialog without calling DELETE",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     let deleteRequestCount = 0;
 
@@ -337,7 +333,9 @@ test(
 
 test(
   "Names filter is passed to API when fetching deployments",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     let resolveNamesRequest: ((url: string) => void) | undefined;
     const namesRequest = new Promise<string>((resolve) => {

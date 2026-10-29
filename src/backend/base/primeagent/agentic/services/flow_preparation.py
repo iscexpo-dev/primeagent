@@ -1,8 +1,10 @@
 """Flow data preparation and model injection."""
 
+import contextlib
 import copy
 import json
 import logging
+import os
 from pathlib import Path
 
 from wfx.base.models.model_metadata import MODEL_PROVIDER_METADATA, get_provider_param_mapping
@@ -43,6 +45,73 @@ def available_model_providers(global_variables: dict[str, str] | None) -> list[s
                     providers.append(provider)
                 break
     return providers
+
+
+def inject_history_limit_into_flow(flow_data: dict, limit: int | None) -> dict:
+    """Set the memory window (``n_messages``) on the flow's Agent components.
+
+    Runtime override for the ``/history N`` command — the dominant memory lever
+    (the Agent's DB memory), which the buffer-injection env var does not control.
+    Best-effort: ``None``/negative is a no-op; an Agent without the field is left
+    untouched.
+    """
+    if limit is None or limit < 0:
+        return flow_data
+    for node in flow_data.get("data", {}).get("nodes", []):
+        node_data = node.get("data", {})
+        if node_data.get("type") != "Agent":
+            continue
+        field = node_data.get("node", {}).get("template", {}).get("n_messages")
+        if isinstance(field, dict):
+            field["value"] = limit
+    return flow_data
+
+
+MAX_ASSISTANT_ITERATIONS = 200
+# Pinned assistant step budget (a COST decision, tripwire-tested): PrimeagentAssistant.json
+# pins it on its Agents and the Python builder flow defaults to it — one source of truth.
+DEFAULT_ASSISTANT_ITERATIONS = 100
+ASSISTANT_ITERATIONS_ENV = "PRIMEAGENT_ASSISTANT_ITERATIONS"
+
+
+def assistant_iterations_default() -> int:
+    """Step budget for a request that carries no ``/iterations N`` override.
+
+    ``/iterations N`` tunes one browser session; an operator running Primeagent for a
+    team whose flows are multi-stage by nature needs the DEFAULT to move, which is
+    what this env var does (same shape as ``PRIMEAGENT_ASSISTANT_HISTORY_TURNS``).
+    Precedence is per-request > env > pinned default, and the value is clamped to
+    ``[1, MAX_ASSISTANT_ITERATIONS]`` so a bad value can neither disable the cap nor
+    run away.
+    """
+    raw = os.environ.get(ASSISTANT_ITERATIONS_ENV, "")
+    try:
+        return max(1, min(int(raw), MAX_ASSISTANT_ITERATIONS))
+    except (TypeError, ValueError):
+        return DEFAULT_ASSISTANT_ITERATIONS
+
+
+def inject_iterations_into_flow(flow_data: dict, limit: int | None) -> dict:
+    """Set the step budget (``max_iterations``) on the flow's Agent components.
+
+    ``max_iterations`` caps the Agent's model-call loop and derives LangGraph's
+    ``recursion_limit`` (``max_iterations * 2 + 5``), so a low pin makes even a
+    small compound turn (build a 4-component flow, then report it) die on
+    "Recursion limit reached". Best-effort: ``None`` is a no-op (the flow default
+    stands); values are clamped to ``[1, MAX_ASSISTANT_ITERATIONS]`` so a bad input
+    can neither disable the cap nor run away.
+    """
+    if limit is None:
+        return flow_data
+    clamped = max(1, min(int(limit), MAX_ASSISTANT_ITERATIONS))
+    for node in flow_data.get("data", {}).get("nodes", []):
+        node_data = node.get("data", {})
+        if node_data.get("type") != "Agent":
+            continue
+        field = node_data.get("node", {}).get("template", {}).get("max_iterations")
+        if isinstance(field, dict):
+            field["value"] = clamped
+    return flow_data
 
 
 def inject_model_into_flow(
@@ -255,12 +324,33 @@ def load_and_prepare_flow(
     model_name: str | None,
     api_key_var: str | None,
     provider_vars: dict[str, str] | None = None,
+    history_limit: int | None = None,
 ) -> str:
     """Load flow file and prepare JSON with model injection."""
     flow_data = _load_flow_template(flow_path)
 
     if provider and model_name:
         flow_data = inject_model_into_flow(flow_data, provider, model_name, api_key_var, provider_vars)
+
+    # global_variables reaches here as provider_vars; the /history command's limit
+    # rides in it as HISTORY_LIMIT when not passed explicitly.
+    if history_limit is None and provider_vars:
+        raw = provider_vars.get("HISTORY_LIMIT")
+        if raw not in (None, ""):
+            try:
+                history_limit = int(raw)
+            except (TypeError, ValueError):
+                history_limit = None
+    flow_data = inject_history_limit_into_flow(flow_data, history_limit)
+
+    # The per-request step budget rides in provider_vars as ITERATIONS_LIMIT; without
+    # one the deployment default applies, so the env override reaches JSON flows too.
+    iterations = assistant_iterations_default()
+    raw_iterations = (provider_vars or {}).get("ITERATIONS_LIMIT")
+    if raw_iterations not in (None, ""):
+        with contextlib.suppress(TypeError, ValueError):
+            iterations = int(raw_iterations)
+    flow_data = inject_iterations_into_flow(flow_data, iterations)
 
     flow_data = inject_wfx_components_path(flow_data)
     flow_data = inject_assistant_fs_root(flow_data)

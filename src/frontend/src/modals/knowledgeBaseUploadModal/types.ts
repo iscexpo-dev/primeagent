@@ -1,4 +1,4 @@
-import type { ModelOption } from "@/components/core/parameterRenderComponent/components/modelInputComponent/types";
+import type { ModelOption } from "@/components/core/parameterRenderComponent/components/modelInputComponent";
 
 export interface KnowledgeBaseUploadModalProps {
   open?: boolean;
@@ -17,6 +17,8 @@ export interface KnowledgeBaseUploadModalProps {
   };
   hideAdvanced?: boolean;
   existingKnowledgeBaseNames?: string[];
+  /** Called when the dialog closes and focus would return to the trigger. */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 export interface ColumnConfigRow {
@@ -27,6 +29,7 @@ export interface ColumnConfigRow {
 
 export interface KnowledgeBaseFormData {
   sourceName: string;
+  dirName?: string;
   files: File[];
   embeddingModel: ModelOption[] | null;
   chunkSize?: number;

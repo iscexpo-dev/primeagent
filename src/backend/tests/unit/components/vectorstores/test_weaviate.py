@@ -7,11 +7,23 @@ network boundary (the v4 ``connect_*`` helpers and the store class) is mocked so
 the migration logic runs in CI without a live Weaviate instance.
 """
 
+import sys
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest.importorskip("wfx_bundles")
+
 from wfx.components.weaviate.weaviate import WeaviateVectorStoreComponent
 from wfx.schema.data import Data
+
+# The component moved into wfx-bundles, so ``weaviate.py`` is reachable under several
+# module identities (the ``wfx.components.weaviate.weaviate`` shim, the canonical
+# ``wfx_bundles.weaviate.weaviate``, and the runtime ``_wfx_ext.*`` ext-loader copy).
+# Patch on the module the imported class actually lives in: a fixed string target like
+# "wfx.components.weaviate.weaviate.WeaviateVectorStore" misses (mock "called 0 times")
+# when an earlier test in the suite causes the class to resolve to a different identity.
+_WEAVIATE_MODULE = sys.modules[WeaviateVectorStoreComponent.__module__]
 
 
 def test_initialization():
@@ -46,10 +58,13 @@ def test_connect_client_custom(mocker):
     assert client is mock_connect.return_value
 
 
-def test_connect_client_cloud(mocker):
+def test_connect_client_cloud(mocker, monkeypatch):
     """A Weaviate Cloud URL routes to connect_to_weaviate_cloud (gRPC resolved internally)."""
+    # The fake cluster hostname does not resolve; the SSRF guard's DNS check is
+    # exercised separately in wfx-bundles/tests/test_connector_ssrf.py.
+    monkeypatch.setenv("PRIMEAGENT_CONNECTOR_SSRF_VALIDATION_ENABLED", "false")
     mock_cloud = mocker.patch("weaviate.connect_to_weaviate_cloud", return_value=MagicMock())
-    mock_auth = mocker.patch("wfx.components.weaviate.weaviate.AuthApiKey", return_value="AUTH")
+    mock_auth = mocker.patch.object(_WEAVIATE_MODULE, "AuthApiKey", return_value="AUTH")
     component = WeaviateVectorStoreComponent(
         url="https://my-cluster.weaviate.network",
         index_name="Test",
@@ -74,7 +89,7 @@ def test_connect_client_wraps_errors(mocker):
 def test_build_vector_store_without_documents(mocker):
     mock_client = MagicMock()
     mocker.patch.object(WeaviateVectorStoreComponent, "_connect_client", return_value=mock_client)
-    mock_store_cls = mocker.patch("wfx.components.weaviate.weaviate.WeaviateVectorStore", return_value=MagicMock())
+    mock_store_cls = mocker.patch.object(_WEAVIATE_MODULE, "WeaviateVectorStore", return_value=MagicMock())
     fake_embedding = MagicMock()
 
     component = WeaviateVectorStoreComponent(url="http://localhost:8080", index_name="Test")
@@ -95,7 +110,7 @@ def test_build_vector_store_without_documents(mocker):
 def test_build_vector_store_with_documents_uses_from_documents(mocker):
     mock_client = MagicMock()
     mocker.patch.object(WeaviateVectorStoreComponent, "_connect_client", return_value=mock_client)
-    mock_store_cls = mocker.patch("wfx.components.weaviate.weaviate.WeaviateVectorStore")
+    mock_store_cls = mocker.patch.object(_WEAVIATE_MODULE, "WeaviateVectorStore")
     fake_embedding = MagicMock()
 
     component = WeaviateVectorStoreComponent(url="http://localhost:8080", index_name="Test")

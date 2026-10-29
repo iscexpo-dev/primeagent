@@ -1,9 +1,14 @@
+from pathlib import Path, PurePath, PureWindowsPath
+
+import wfx
 from wfx.base.data.utils import TEXT_FILE_TYPES, parallel_load_data, parse_text_file_to_data, retrieve_file_paths
 from wfx.custom.custom_component.component import Component
 from wfx.io import BoolInput, IntInput, MessageTextInput, MultiselectInput
 from wfx.schema.data import Data
 from wfx.schema.dataframe import DataFrame
+from wfx.services.deps import get_settings_service
 from wfx.template.field.base import Output
+from wfx.utils.file_path_security import component_file_access_scopes, enforce_local_file_access
 
 
 class DirectoryComponent(Component):
@@ -13,7 +18,7 @@ class DirectoryComponent(Component):
     icon = "folder"
     name = "Directory"
     legacy = True
-    replacement = ["data.File"]
+    replacement = ["files_and_knowledge.File"]
 
     inputs = [
         MessageTextInput(
@@ -73,6 +78,41 @@ class DirectoryComponent(Component):
         Output(display_name="Loaded Files", name="dataframe", method="as_dataframe"),
     ]
 
+    @staticmethod
+    def _has_parent_reference(path: str) -> bool:
+        path_parts = (*PurePath(path).parts, *PureWindowsPath(path).parts)
+        return any(part == ".." for part in path_parts)
+
+    @staticmethod
+    def _bundled_components_root() -> Path:
+        # The component sources shipped with wfx are public, read-only package files that the
+        # Primeagent Assistant reads wherever wfx is installed, whatever the working directory.
+        return (Path(wfx.__file__).parent / "components").resolve()
+
+    def _allowed_roots(self) -> list[Path]:
+        roots = {Path.cwd().resolve(), self._bundled_components_root()}
+        configured_roots = getattr(get_settings_service().settings, "directory_component_allowed_roots", []) or []
+        for root in configured_roots:
+            if root:
+                roots.add(Path(root).expanduser().resolve())
+        return list(roots)
+
+    def _resolve_directory_path(self, path: str) -> str:
+        path = str(path or ".").strip()
+        # Reject null bytes and parent references outright. A drive-absolute or UNC
+        # path (e.g. ``D:\\shared\\docs``) is NOT blanket-rejected here: canonicalization
+        # plus the ``_allowed_roots()`` containment check below decides whether it is
+        # allowed, so operator-configured roots on another drive remain reachable.
+        if "\x00" in path or self._has_parent_reference(path):
+            msg = "Directory path escapes the allowed root."
+            raise ValueError(msg)
+
+        resolved_path = Path(self.resolve_path(path)).expanduser().resolve()
+        if not any(resolved_path == root or resolved_path.is_relative_to(root) for root in self._allowed_roots()):
+            msg = "Directory path escapes the allowed root."
+            raise ValueError(msg)
+        return str(resolved_path)
+
     def load_directory(self) -> list[Data]:
         path = self.path
         types = self.types
@@ -83,7 +123,12 @@ class DirectoryComponent(Component):
         silent_errors = self.silent_errors
         use_multithreading = self.use_multithreading
 
-        resolved_path = self.resolve_path(path)
+        resolved_path = self._resolve_directory_path(path)
+
+        # Security: confine directory reads to the storage dir in restricted (multi-tenant)
+        # mode so a tenant cannot recursively read arbitrary server directories.
+        if not Path(resolved_path).is_relative_to(self._bundled_components_root()):
+            resolved_path = str(enforce_local_file_access(resolved_path, scope_ids=component_file_access_scopes(self)))
 
         # If no types are specified, use all supported types
         if not types:

@@ -1,3 +1,3 @@
-"""PrimeAgent document loaders components."""
+"""primeagent document loaders components."""
 
 __all__: list[str] = []

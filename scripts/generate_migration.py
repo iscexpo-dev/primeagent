@@ -150,7 +150,7 @@ def upgrade() -> None:
 
     print(f"📊 Migration Statistics:")
     print(f"  - Total rows: {{result.total}}")
-    print(f"  - Migrated: {result.migrated} ({result.migrated * 100 / result.total if result.total > 0 else 0:.1f}%)")
+    print(f"  - Migrated: {{result.migrated}} ({{result.migrated * 100 / result.total if result.total > 0 else 0:.1f}}%)")
     print(f"  - Not migrated: {{result.not_migrated}}")
 
     if result.not_migrated > 0:
@@ -184,7 +184,7 @@ def downgrade() -> None:
         SET phase = 'MIGRATE_ROLLED_BACK', completed_at = NOW()
         WHERE version_num = :version
     """), {{"version": revision}})
-''',
+''',  # noqa: E501
     "contract": '''"""
 {description}
 Phase: CONTRACT

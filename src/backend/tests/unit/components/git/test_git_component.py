@@ -2,6 +2,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("wfx_bundles")
+
 from wfx.components.git import GitLoaderComponent
 
 

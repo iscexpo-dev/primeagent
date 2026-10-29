@@ -38,7 +38,7 @@ export const useDarkStore = create<DarkStoreType>((set, get) => ({
 
     // if lastUpdated is null or the difference is greater than 2 hours
     if (lastUpdated === null || diff > 7200000) {
-      getRepoStars("khulnasoft", "primeagent").then((res) => {
+      getRepoStars("khulnasoft-bot", "primeagent").then((res) => {
         window.localStorage.setItem("githubStars", res?.toString() ?? "0");
         window.localStorage.setItem(
           "githubStarsLastUpdated",
@@ -49,7 +49,9 @@ export const useDarkStore = create<DarkStoreType>((set, get) => ({
     }
   },
   discordCount: 0,
+  // Every community surface calls this on mount; skip once a count has loaded.
   refreshDiscordCount: () => {
+    if (get().discordCount) return;
     getDiscordCount().then((res) => {
       set(() => ({ discordCount: res }));
     });

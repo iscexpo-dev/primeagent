@@ -1,6 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createApiKey } from "@/controllers/API";
 import {
   useGetFlowsMCP,
   usePatchFlowsMCP,
@@ -13,6 +12,7 @@ import {
 } from "@/controllers/API/queries/mcp/use-patch-install-mcp";
 import { ENABLE_MCP_COMPOSER } from "@/customization/feature-flags";
 import { customGetMCPUrl } from "@/customization/utils/custom-mcp-url";
+import { useCopyToClipboard } from "@/shared/hooks/use-copy-to-clipboard";
 import useAlertStore from "@/stores/alertStore";
 import useAuthStore from "@/stores/authStore";
 import type { InputFieldType } from "@/types/api";
@@ -32,7 +32,6 @@ type InstalledMCPItem = { name?: string; available?: boolean };
 type State = {
   apiKey: string;
   isGeneratingApiKey: boolean;
-  isCopied: boolean;
   loadingMCP: string[];
   authModalOpen: boolean;
   isWaitingForComposer: boolean;
@@ -87,7 +86,6 @@ export const useMcpServer = ({
   const [s, setS] = useState<State>({
     apiKey: "",
     isGeneratingApiKey: false,
-    isCopied: false,
     loadingMCP: [],
     authModalOpen: false,
     isWaitingForComposer: false,
@@ -137,6 +135,7 @@ export const useMcpServer = ({
   const generateApiKey = useCallback(async () => {
     try {
       setS((prev) => ({ ...prev, isGeneratingApiKey: true }));
+      const { createApiKey } = await import("@/controllers/API");
       const res = await createApiKey(`MCP Server ${folderName ?? ""}`);
       if (res?.api_key) {
         setS((prev) => ({ ...prev, apiKey: res.api_key }));
@@ -152,15 +151,7 @@ export const useMcpServer = ({
     }
   }, [folderName, setErrorData]);
 
-  const copyToClipboard = useCallback((payload: string) => {
-    navigator.clipboard?.writeText(payload).then(
-      () => {
-        setS((p) => ({ ...p, isCopied: true }));
-        setTimeout(() => setS((p) => ({ ...p, isCopied: false })), 1000);
-      },
-      () => {},
-    );
-  }, []);
+  const { copy: copyToClipboard, isCopied } = useCopyToClipboard();
 
   const installClient = useCallback(
     (clientName: string, clientTitle?: string, transport?: MCPTransport) => {
@@ -260,6 +251,7 @@ export const useMcpServer = ({
   const mcpJson = useMemo(() => {
     return buildMcpServerJson({
       folderName,
+      backendServerName: mcpProjectData?.server_name,
       selectedPlatform,
       apiUrl,
       isOAuthProject,
@@ -269,6 +261,7 @@ export const useMcpServer = ({
     });
   }, [
     folderName,
+    mcpProjectData?.server_name,
     selectedPlatform,
     apiUrl,
     isOAuthProject,
@@ -328,7 +321,7 @@ export const useMcpServer = ({
     apiKey: apiKeyFromStore || s.apiKey,
     isGeneratingApiKey: s.isGeneratingApiKey,
     generateApiKey,
-    isCopied: s.isCopied,
+    isCopied,
     copyToClipboard,
     loadingMCP: s.loadingMCP,
     installClient,

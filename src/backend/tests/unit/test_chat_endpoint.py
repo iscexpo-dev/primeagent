@@ -2,11 +2,14 @@ import asyncio
 import contextlib
 import json
 import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
 from httpx import codes
 from primeagent.services.database.models.flow import FlowUpdate
+from primeagent.services.deps import get_settings_service
 from primeagent.services.job_queue.service import JobQueueService
 from wfx.log.logger import logger
 from wfx.memory import aget_messages
@@ -39,7 +42,7 @@ async def test_build_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
 
 
 @pytest.mark.benchmark
-async def test_build_flow_from_request_data(client, json_memory_chatbot_no_llm, logged_in_headers):
+async def test_build_flow_from_request_data(client, json_memory_chatbot_no_llm, logged_in_headers, active_user):
     """Test building a flow from request data."""
     flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
     response = await client.get(f"api/v1/flows/{flow_id}", headers=logged_in_headers)
@@ -55,7 +58,7 @@ async def test_build_flow_from_request_data(client, json_memory_chatbot_no_llm, 
 
     # Consume and verify the events
     await consume_and_assert_stream(events_response, job_id)
-    await check_messages(flow_id)
+    await check_messages(flow_id, active_user.id)
 
 
 async def test_build_flow_validates_request_data_instead_of_stale_db_flow(
@@ -88,7 +91,35 @@ async def test_build_flow_validates_request_data_instead_of_stale_db_flow(
     assert "job_id" in response.json()
 
 
-async def test_build_flow_with_frozen_path(client, json_memory_chatbot_no_llm, logged_in_headers):
+async def test_build_flow_enforces_current_catalog_policy_and_recovers_when_cleared(
+    client, json_memory_chatbot_no_llm, logged_in_headers
+):
+    from wfx.services.deps import get_catalog_policy_service
+
+    catalog_policy_service = get_catalog_policy_service()
+    await catalog_policy_service.replace_blocked_component_keys([], actor_user_id=None)
+    flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
+    await catalog_policy_service.replace_blocked_component_keys(["ChatInput"], actor_user_id=None)
+
+    blocked_response = await client.post(
+        f"api/v1/build/{flow_id}/flow",
+        json={},
+        headers=logged_in_headers,
+    )
+    await catalog_policy_service.replace_blocked_component_keys([], actor_user_id=None)
+    allowed_response = await client.post(
+        f"api/v1/build/{flow_id}/flow",
+        json={},
+        headers=logged_in_headers,
+    )
+
+    assert blocked_response.status_code == codes.BAD_REQUEST
+    assert blocked_response.json()["detail"].endswith("ChatInput")
+    assert allowed_response.status_code == codes.OK
+    assert "job_id" in allowed_response.json()
+
+
+async def test_build_flow_with_frozen_path(client, json_memory_chatbot_no_llm, logged_in_headers, active_user):
     """Test building a flow with a frozen path."""
     flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
 
@@ -114,13 +145,13 @@ async def test_build_flow_with_frozen_path(client, json_memory_chatbot_no_llm, l
 
     # Consume and verify the events
     await consume_and_assert_stream(events_response, job_id)
-    await check_messages(flow_id)
+    await check_messages(flow_id, active_user.id)
 
 
-async def check_messages(flow_id):
+async def check_messages(flow_id, owner_id):
     if isinstance(flow_id, str):
         flow_id = UUID(flow_id)
-    messages = await aget_messages(flow_id=flow_id, order="ASC")
+    messages = await aget_messages(flow_id=flow_id, user_id=owner_id, order="ASC")
     flow_id_str = str(flow_id)
     assert len(messages) == 2
     assert messages[0].session_id == flow_id_str
@@ -471,6 +502,18 @@ async def test_cancel_build_with_cancelled_error(client, json_memory_chatbot_no_
         monkeypatch.setattr(primeagent.api.v1.chat, "cancel_flow_build", original_cancel_flow_build)
 
 
+async def test_cancel_build_public_propagates_task_cancellation(monkeypatch):
+    """The public cancellation route must not translate server task cancellation into HTTP 500."""
+    from primeagent.api.v1 import chat
+
+    queue_service = SimpleNamespace()
+    monkeypatch.setattr(chat, "_assert_public_job", AsyncMock())
+    monkeypatch.setattr(chat, "cancel_flow_build", AsyncMock(side_effect=asyncio.CancelledError))
+
+    with pytest.raises(asyncio.CancelledError):
+        await chat.cancel_build_public("public-job", queue_service)
+
+
 @pytest.mark.benchmark
 @pytest.mark.usefixtures("logged_in_headers")
 async def test_should_have_public_events_endpoint_accessible_without_auth(client):
@@ -522,7 +565,10 @@ async def test_should_have_public_cancel_endpoint_accessible_without_auth(client
 
 
 @pytest.mark.benchmark
-async def test_build_public_tmp_ignores_data_parameter(client, json_memory_chatbot_no_llm, logged_in_headers):
+@pytest.mark.security
+async def test_build_public_tmp_ignores_data_parameter(
+    client, json_memory_chatbot_no_llm, logged_in_headers, monkeypatch
+):
     """Test that build_public_tmp endpoint silently ignores data parameter for security.
 
     Security Test: Verifies that when a user attempts to provide custom flow data
@@ -543,6 +589,10 @@ async def test_build_public_tmp_ignores_data_parameter(client, json_memory_chatb
     # Create malicious flow data with different structure
     malicious_data = {"nodes": [{"id": "malicious", "data": {"type": "CustomComponent"}}], "edges": []}
 
+    # Capture the graph dispatched to the build
+    captured: dict = {}
+    _stub_start_flow_build(monkeypatch, captured)
+
     # Set a client_id cookie
     client.cookies.set("client_id", "test-security-client-123")
 
@@ -560,6 +610,65 @@ async def test_build_public_tmp_ignores_data_parameter(client, json_memory_chatb
     assert response.status_code == codes.OK
     response_data = response.json()
     assert "job_id" in response_data
+
+    # The build must run the stored flow, never the malicious data
+    stored_node_ids = {node["id"] for node in json.loads(json_memory_chatbot_no_llm)["data"]["nodes"]}
+    built_data = captured["data"]
+    built_node_ids = stored_node_ids if built_data is None else {node["id"] for node in built_data.nodes}
+    assert "malicious" not in built_node_ids
+    assert built_node_ids == stored_node_ids
+
+
+@pytest.mark.benchmark
+@pytest.mark.security
+async def test_build_public_tmp_rate_limits_each_client_and_flow(
+    client, json_memory_chatbot_no_llm, logged_in_headers, monkeypatch
+):
+    """Anonymous builds are bounded without sharing counters across public flows."""
+
+    async def create_public_flow():
+        flow_data = json.loads(json_memory_chatbot_no_llm)
+        flow_data["id"] = str(uuid.uuid4())
+        flow_id = await create_flow(client, json.dumps(flow_data), logged_in_headers)
+        response = await client.patch(
+            f"api/v1/flows/{flow_id}",
+            json={"access_type": "PUBLIC"},
+            headers=logged_in_headers,
+        )
+        assert response.status_code == codes.OK
+        return flow_id
+
+    first_flow_id = await create_public_flow()
+    second_flow_id = await create_public_flow()
+    started_source_flow_ids = []
+
+    async def fake_start_flow_build(**kwargs):
+        started_source_flow_ids.append(kwargs["source_flow_id"])
+        return str(uuid.uuid4())
+
+    monkeypatch.setattr("primeagent.api.v1.chat.start_flow_build", fake_start_flow_build)
+    settings = get_settings_service().settings
+    monkeypatch.setattr(settings, "rate_limit_enabled", True)
+    monkeypatch.setattr(settings, "public_flow_rate_limit_per_minute", 2)
+
+    client.cookies.clear()
+    client.cookies.set("client_id", "test-public-build-rate-limit-client")
+    request_kwargs = {
+        "json": {"inputs": {"session": "test_session"}},
+        "headers": {"Content-Type": "application/json"},
+    }
+
+    for _ in range(2):
+        response = await client.post(f"api/v1/build_public_tmp/{first_flow_id}/flow", **request_kwargs)
+        assert response.status_code == codes.OK
+
+    limited_response = await client.post(f"api/v1/build_public_tmp/{first_flow_id}/flow", **request_kwargs)
+    assert limited_response.status_code == codes.TOO_MANY_REQUESTS
+    assert limited_response.headers["Retry-After"] == "60"
+
+    other_flow_response = await client.post(f"api/v1/build_public_tmp/{second_flow_id}/flow", **request_kwargs)
+    assert other_flow_response.status_code == codes.OK
+    assert started_source_flow_ids == [first_flow_id, first_flow_id, second_flow_id]
 
 
 @pytest.mark.benchmark
@@ -642,7 +751,7 @@ async def test_build_public_tmp_checks_public_access_before_validation(
         raise ValueError(public_access_validation_message)
 
     monkeypatch.setattr(
-        "primeagent.api.v1.chat.validate_flow_for_current_settings",
+        "primeagent.api.v1.chat.validate_catalog_policy_for_flow",
         fail_if_validation_runs,
     )
 
@@ -652,8 +761,115 @@ async def test_build_public_tmp_checks_public_access_before_validation(
         headers={"Content-Type": "application/json"},
     )
 
-    assert response.status_code == codes.FORBIDDEN
-    assert response.json()["detail"] == "Flow is not public"
+    assert response.status_code == codes.NOT_FOUND
+    assert response.json()["detail"] == "Flow not found"
+
+
+async def test_build_public_tmp_enforces_current_catalog_policy_with_generic_error(
+    client, json_memory_chatbot_no_llm, logged_in_headers
+):
+    from wfx.services.deps import get_catalog_policy_service
+
+    catalog_policy_service = get_catalog_policy_service()
+    await catalog_policy_service.replace_blocked_component_keys([], actor_user_id=None)
+    flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
+    response = await client.patch(
+        f"api/v1/flows/{flow_id}",
+        json={"access_type": "PUBLIC"},
+        headers=logged_in_headers,
+    )
+    assert response.status_code == codes.OK
+    await catalog_policy_service.replace_blocked_component_keys(["ChatInput"], actor_user_id=None)
+    client.cookies.set("client_id", "test-catalog-policy-client")
+
+    blocked_response = await client.post(
+        f"api/v1/build_public_tmp/{flow_id}/flow",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+    await catalog_policy_service.replace_blocked_component_keys([], actor_user_id=None)
+    allowed_response = await client.post(
+        f"api/v1/build_public_tmp/{flow_id}/flow",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert blocked_response.status_code == codes.BAD_REQUEST
+    assert blocked_response.json()["detail"] == "This flow cannot be executed."
+    assert "ChatInput" not in blocked_response.text
+    assert allowed_response.status_code == codes.OK
+    assert "job_id" in allowed_response.json()
+
+
+async def test_build_public_tmp_sanitizes_catalog_identity_unavailable_response(
+    client, json_memory_chatbot_no_llm, logged_in_headers, monkeypatch
+):
+    from wfx.utils.flow_validation import (
+        PUBLIC_CATALOG_POLICY_UNAVAILABLE_MESSAGE,
+        CatalogPolicyIdentityUnavailableError,
+    )
+
+    flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
+    response = await client.patch(
+        f"api/v1/flows/{flow_id}",
+        json={"access_type": "PUBLIC"},
+        headers=logged_in_headers,
+    )
+    assert response.status_code == codes.OK
+    client.cookies.set("client_id", "test-catalog-identity-unavailable-client")
+    raw_message = "Catalog identities unavailable: internal generation 42"
+
+    def identities_unavailable(_target):
+        raise CatalogPolicyIdentityUnavailableError(raw_message)
+
+    monkeypatch.setattr(
+        "primeagent.api.v1.chat.validate_catalog_policy_for_flow",
+        identities_unavailable,
+    )
+
+    response = await client.post(
+        f"api/v1/build_public_tmp/{flow_id}/flow",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == codes.SERVICE_UNAVAILABLE
+    assert response.json()["detail"] == PUBLIC_CATALOG_POLICY_UNAVAILABLE_MESSAGE
+    assert raw_message not in response.text
+
+
+@pytest.mark.security
+async def test_build_public_tmp_sanitizes_unexpected_gate_value_error(
+    client, json_memory_chatbot_no_llm, logged_in_headers, monkeypatch
+):
+    """Anonymous validation failures never disclose stored flow internals."""
+    flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
+    response = await client.patch(
+        f"api/v1/flows/{flow_id}",
+        json={"access_type": "PUBLIC"},
+        headers=logged_in_headers,
+    )
+    assert response.status_code == codes.OK
+    client.cookies.set("client_id", "test-sanitized-value-error-client")
+    raw_message = "invalid node SecretProvider-1 with credential super-secret"
+
+    def invalid_stored_flow(_target):
+        raise ValueError(raw_message)
+
+    monkeypatch.setattr(
+        "primeagent.api.v1.chat.validate_catalog_policy_for_flow",
+        invalid_stored_flow,
+    )
+
+    response = await client.post(
+        f"api/v1/build_public_tmp/{flow_id}/flow",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == codes.BAD_REQUEST
+    assert response.json()["detail"] == "This flow cannot be executed."
+    assert raw_message not in response.text
 
 
 @pytest.mark.benchmark
@@ -691,6 +907,63 @@ async def test_build_public_tmp_rejects_code_execution_components(
     assert response.status_code == codes.OK
 
     client.cookies.set("client_id", "test-code-exec-client")
+    response = await client.post(
+        f"api/v1/build_public_tmp/{flow_id}/flow",
+        json={"inputs": {"session": "test_session"}},
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == codes.BAD_REQUEST
+    assert response.json()["detail"] == "This flow cannot be executed."
+
+
+@pytest.mark.benchmark
+@pytest.mark.security
+async def test_build_public_tmp_rejects_mcp_stdio_server_config(client, json_memory_chatbot_no_llm, logged_in_headers):
+    """Unauthenticated public builds must reject an MCP Tools node using the stdio transport.
+
+    The OS command lives in the ``mcp_server`` field VALUE, not in ``code``, so the
+    trusted-code substitution performed for public builds does not neutralise it. Without
+    an explicit check, triggering the public flow spawns that process as the server account.
+    """
+    flow_dict = json.loads(json_memory_chatbot_no_llm)
+    flow_dict["data"]["nodes"].append(
+        {
+            "id": "MCPTools-pub1",
+            "type": "genericNode",
+            "position": {"x": 0, "y": 0},
+            "data": {
+                "id": "MCPTools-pub1",
+                "type": "MCPTools",
+                "node": {
+                    "display_name": "MCP Tools",
+                    "template": {
+                        "mcp_server": {
+                            "type": "mcp",
+                            "name": "mcp_server",
+                            "value": {
+                                "name": "local",
+                                "config": {"command": "python", "args": ["-m", "some_module"]},
+                            },
+                        }
+                    },
+                },
+            },
+        }
+    )
+    flow_id = await create_flow(client, json.dumps(flow_dict), logged_in_headers)
+
+    response = await client.patch(
+        f"api/v1/flows/{flow_id}",
+        json={"access_type": "PUBLIC"},
+        headers=logged_in_headers,
+    )
+    assert response.status_code == codes.OK
+
+    # The shared client persists access-token cookies from ``logged_in_headers``; clearing
+    # them is the only way to exercise the genuinely unauthenticated public path.
+    client.cookies.clear()
+    client.cookies.set("client_id", "test-mcp-stdio-client")
     response = await client.post(
         f"api/v1/build_public_tmp/{flow_id}/flow",
         json={"inputs": {"session": "test_session"}},
@@ -857,6 +1130,44 @@ async def test_cancel_build_cross_user_blocked(client, json_memory_chatbot_no_ll
     assert response.status_code == 404
 
 
+@pytest.mark.security
+async def test_ownerless_queue_cannot_be_read_or_cancelled_through_v1_routes(client, user_two):
+    """A live queue with no registered owner is private even when its id is known."""
+    from primeagent.services.deps import get_queue_service
+
+    queue_service = get_queue_service()
+    job_id = str(uuid.uuid4())
+    queue_service.create_queue(job_id)
+
+    async def keep_running():
+        await asyncio.sleep(3600)
+
+    queue_service.start_job(job_id, keep_running())
+    task = queue_service.get_queue_data(job_id)[2]
+    assert task is not None
+
+    try:
+        login_data = {"username": user_two.username, "password": "hashed_password"}  # pragma: allowlist secret
+        login_response = await client.post("api/v1/login", data=login_data)
+        assert login_response.status_code == codes.OK
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+        events_response = await asyncio.wait_for(
+            client.get(f"api/v1/build/{job_id}/events?event_delivery=polling", headers=headers), timeout=2
+        )
+        cancel_response = await client.post(f"api/v1/build/{job_id}/cancel", headers=headers)
+
+        assert events_response.status_code == codes.NOT_FOUND
+        assert cancel_response.status_code == codes.NOT_FOUND
+        assert not task.done()
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await queue_service.cleanup_job(job_id)
+
+
 @pytest.mark.benchmark
 async def test_build_public_tmp_without_data_parameter(client, json_memory_chatbot_no_llm, logged_in_headers):
     """Test that build_public_tmp endpoint works without data parameter.
@@ -945,7 +1256,7 @@ async def test_get_build_events_public_tmp_job_accessible_by_any_auth_user(
 ):
     """A job started via build_public_tmp has no registered owner and is accessible to any authenticated user.
 
-    Verifies that get_build_events skips the ownership check when get_job_owner returns None.
+    Verifies that the public marker permits access when the queue has no owner.
     """
     flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
     patch_response = await client.patch(
@@ -988,7 +1299,7 @@ async def test_cancel_build_public_tmp_job_accessible_by_any_auth_user(
 ):
     """A job started via build_public_tmp has no registered owner and can be cancelled by any authenticated user.
 
-    Verifies that cancel_build skips the ownership check when get_job_owner returns None.
+    Verifies that the public marker permits cancellation when the queue has no owner.
     """
     flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
     patch_response = await client.patch(
@@ -1086,6 +1397,100 @@ def _send_unauthenticated(client, client_id: str) -> None:
 
 @pytest.mark.benchmark
 @pytest.mark.security
+async def test_build_public_tmp_strips_persisted_owner_secrets_before_dispatch(
+    client, json_memory_chatbot_no_llm, logged_in_headers, monkeypatch
+):
+    """The public V1 build may execute trusted code, but never a secret embedded in the owner's graph."""
+    import primeagent.api.v1.chat as chat_module
+
+    flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
+    patch_response = await client.patch(
+        f"api/v1/flows/{flow_id}",
+        json={"access_type": "PUBLIC"},
+        headers=logged_in_headers,
+    )
+    assert patch_response.status_code == codes.OK
+
+    prepared = json.loads(json_memory_chatbot_no_llm)["data"]
+    prepared["nodes"][0]["data"]["node"]["template"]["owner_api_key"] = {
+        "name": "owner_api_key",
+        "password": True,
+        "value": "sk-owner-secret",  # pragma: allowlist secret
+    }
+
+    async def _prepare(_flow_data):
+        return prepared
+
+    captured: dict = {}
+    monkeypatch.setattr(chat_module, "prepare_public_flow_build", _prepare)
+    _stub_start_flow_build(monkeypatch, captured)
+    _send_unauthenticated(client, "secret-isolation-client")
+
+    response = await client.post(
+        f"api/v1/build_public_tmp/{flow_id}/flow",
+        json={"inputs": {"session": "secret-isolation-session"}},
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == codes.OK
+    dispatched = captured["data"]
+    assert dispatched is not None
+    assert dispatched.nodes[0]["data"]["node"]["template"]["owner_api_key"]["value"] is None
+    assert prepared["nodes"][0]["data"]["node"]["template"]["owner_api_key"]["value"] == "sk-owner-secret"
+    from primeagent.services.authorization.public_access import PUBLIC_ANONYMOUS_ACTOR_ID
+
+    assert captured["current_user"].id == PUBLIC_ANONYMOUS_ACTOR_ID
+
+
+@pytest.mark.benchmark
+@pytest.mark.security
+async def test_build_public_tmp_reauthorizes_reloaded_flow_after_grant_transition(
+    client, json_memory_chatbot_no_llm, logged_in_headers, monkeypatch
+):
+    """A grant revoked between admission and reload cannot execute the later snapshot."""
+    import primeagent.api.v1.chat as chat_module
+    from primeagent.api.utils.flow_utils import compute_virtual_flow_id
+    from primeagent.services.authorization.public_access import public_execution_user
+    from primeagent.services.database.models.flow.model import AccessTypeEnum, Flow
+    from primeagent.services.deps import session_scope
+
+    flow_id = await create_flow(client, json_memory_chatbot_no_llm, logged_in_headers)
+    patch_response = await client.patch(
+        f"api/v1/flows/{flow_id}",
+        json={"access_type": "PUBLIC"},
+        headers=logged_in_headers,
+    )
+    assert patch_response.status_code == codes.OK
+
+    client_id = "v1-reload-revocation-client"
+
+    async def _admit_first_snapshot_then_revoke(**_kwargs):
+        async with session_scope() as session:
+            flow = await session.get(Flow, flow_id)
+            assert flow is not None
+            flow.access_type = AccessTypeEnum.PRIVATE
+            session.add(flow)
+            await session.commit()
+        return public_execution_user(), compute_virtual_flow_id(client_id, flow_id, principal_type="client")
+
+    captured: dict = {}
+    monkeypatch.setattr(chat_module, "verify_public_flow_and_get_user", _admit_first_snapshot_then_revoke)
+    _stub_start_flow_build(monkeypatch, captured)
+    _send_unauthenticated(client, client_id)
+
+    response = await client.post(
+        f"api/v1/build_public_tmp/{flow_id}/flow",
+        json={"inputs": {"session": "transition"}},
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == codes.NOT_FOUND
+    assert response.json() == {"detail": "Flow not found"}
+    assert captured == {}
+
+
+@pytest.mark.benchmark
+@pytest.mark.security
 async def test_build_public_tmp_namespaces_caller_session(
     client, json_memory_chatbot_no_llm, logged_in_headers, monkeypatch
 ):
@@ -1119,7 +1524,7 @@ async def test_build_public_tmp_namespaces_caller_session(
     )
     assert response.status_code == codes.OK
 
-    expected_namespace = str(compute_virtual_flow_id(client_id, flow_id))
+    expected_namespace = str(compute_virtual_flow_id(client_id, flow_id, principal_type="client"))
     sent_inputs = captured["inputs"]
     assert sent_inputs is not None
     assert sent_inputs.session == f"{expected_namespace}:{victim_session}"
@@ -1147,7 +1552,7 @@ async def test_build_public_tmp_session_already_namespaced_unchanged(
 
     client_id = "ns-passthrough-client"
     _send_unauthenticated(client, client_id)
-    namespace = str(compute_virtual_flow_id(client_id, flow_id))
+    namespace = str(compute_virtual_flow_id(client_id, flow_id, principal_type="client"))
     already_scoped = f"{namespace}:thread-1"
 
     response = await client.post(
@@ -1263,7 +1668,7 @@ async def test_build_public_tmp_empty_session_is_namespaced(
     )
     assert response.status_code == codes.OK
 
-    expected_namespace = str(compute_virtual_flow_id(client_id, flow_id))
+    expected_namespace = str(compute_virtual_flow_id(client_id, flow_id, principal_type="client"))
     sent_session = captured["inputs"].session
     assert sent_session != ""
     assert sent_session == f"{expected_namespace}:"
@@ -1296,14 +1701,14 @@ async def test_build_public_tmp_authenticated_namespace_uses_user_id(
     )
     assert response.status_code == codes.OK
 
-    expected_namespace = str(compute_virtual_flow_id(active_user.id, flow_id))
+    expected_namespace = str(compute_virtual_flow_id(active_user.id, flow_id, principal_type="user"))
     assert captured["inputs"].session == f"{expected_namespace}:thread-A"
 
 
 @pytest.mark.benchmark
 @pytest.mark.security
 async def test_build_public_tmp_namespacing_blocks_memory_query_collision(
-    client, json_memory_chatbot_no_llm, logged_in_headers, monkeypatch
+    client, json_memory_chatbot_no_llm, logged_in_headers, active_user, monkeypatch
 ):
     """End-to-end proof that namespacing prevents Memory query collision.
 
@@ -1328,8 +1733,9 @@ async def test_build_public_tmp_namespacing_blocks_memory_query_collision(
     await aadd_messages(
         Message(text="victim-secret", sender="User", sender_name="User", session_id=victim_session),
         flow_id=flow_id,
+        user_id=active_user.id,
     )
-    seeded = await aget_messages(session_id=victim_session)
+    seeded = await aget_messages(session_id=victim_session, flow_id=flow_id, user_id=active_user.id)
     assert any(m.text == "victim-secret" for m in seeded)
 
     captured: dict = {}
@@ -1346,10 +1752,10 @@ async def test_build_public_tmp_namespacing_blocks_memory_query_collision(
     namespaced_session = captured["inputs"].session
     assert namespaced_session != victim_session
 
-    leaked = await aget_messages(session_id=namespaced_session)
+    leaked = await aget_messages(session_id=namespaced_session, flow_id=flow_id, user_id=active_user.id)
     assert all(m.text != "victim-secret" for m in leaked)
 
-    still_seeded = await aget_messages(session_id=victim_session)
+    still_seeded = await aget_messages(session_id=victim_session, flow_id=flow_id, user_id=active_user.id)
     assert any(m.text == "victim-secret" for m in still_seeded)
 
 
@@ -1423,6 +1829,116 @@ async def test_job_queue_service_cleanup_removes_public_registration():
 
     # Why: if cleanup_job ever drops the discard call, is_public_job still returns True here
     assert svc.is_public_job(job_id) is False
+
+
+@pytest.mark.security
+@pytest.mark.parametrize(
+    ("route", "expected_detail"),
+    [
+        ("events?event_delivery=polling", "Public flow events are unavailable."),
+        ("cancel", "Public flow cancellation failed."),
+    ],
+)
+@pytest.mark.parametrize("failure_kind", ["backend", "unexpected"])
+async def test_public_marker_outage_returns_fixed_503(client, monkeypatch, route, expected_detail, failure_kind):
+    """A Redis marker failure cannot disclose backend connection details to anonymous callers."""
+    from primeagent.services.deps import get_queue_service
+    from primeagent.services.job_queue.service import JobQueueBackendUnavailableError
+
+    queue_service = get_queue_service()
+    secret_detail = "Redis unavailable at localhost:6379 db=1"  # noqa: S105  # pragma: allowlist secret
+    failure = (
+        JobQueueBackendUnavailableError(secret_detail) if failure_kind == "backend" else RuntimeError(secret_detail)
+    )
+
+    async def fail_marker(_job_id):
+        raise failure
+
+    monkeypatch.setattr(queue_service, "is_public_job_async", fail_marker)
+    job_id = str(uuid.uuid4())
+    url = f"api/v1/build_public_tmp/{job_id}/{route}"
+    response = await (client.get(url) if route.startswith("events") else client.post(url))
+
+    assert response.status_code == codes.SERVICE_UNAVAILABLE
+    assert response.json() == {"detail": expected_detail}
+    assert secret_detail not in response.text
+
+
+@pytest.mark.security
+async def test_public_events_failure_has_fixed_wire_detail_and_logs_original(client, monkeypatch):
+    """An internal public-events failure is logged server-side but never reflected to an anonymous caller."""
+    import primeagent.api.v1.chat as chat_module
+    from fastapi import HTTPException
+    from primeagent.services.deps import get_queue_service
+
+    job_id = str(uuid.uuid4())
+    secret_detail = "redis backend failed with credential=owner-secret"  # noqa: S105  # pragma: allowlist secret
+    queue_service = get_queue_service()
+    await queue_service.register_public_job(job_id)
+    log_error = AsyncMock()
+
+    async def fail_events(**_kwargs):
+        raise HTTPException(status_code=500, detail=secret_detail)
+
+    monkeypatch.setattr(chat_module, "get_flow_events_response", fail_events)
+    monkeypatch.setattr(chat_module, "logger", SimpleNamespace(aerror=log_error))
+    try:
+        response = await client.get(f"api/v1/build_public_tmp/{job_id}/events?event_delivery=polling")
+    finally:
+        queue_service._public_jobs.discard(job_id)
+
+    assert response.status_code == codes.INTERNAL_SERVER_ERROR
+    assert response.json() == {"detail": "Public flow events are unavailable."}
+    assert secret_detail not in response.text
+    assert secret_detail in str(log_error.await_args)
+
+
+@pytest.mark.security
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "expected_detail", "log_method"),
+    [
+        (ValueError("owner queue id leaked"), codes.NOT_FOUND, "Job not found", "awarning"),
+        (
+            RuntimeError("redis credential owner-secret"),  # pragma: allowlist secret
+            codes.INTERNAL_SERVER_ERROR,
+            "Public flow cancellation failed.",
+            "aexception",
+        ),
+    ],
+)
+async def test_public_cancel_failure_has_fixed_wire_detail_and_logs_original(
+    client,
+    monkeypatch,
+    failure,
+    expected_status,
+    expected_detail,
+    log_method,
+):
+    """Public cancellation maps internal failures to fixed details while retaining diagnostics in logs."""
+    import primeagent.api.v1.chat as chat_module
+    from primeagent.services.deps import get_queue_service
+
+    job_id = str(uuid.uuid4())
+    queue_service = get_queue_service()
+    await queue_service.register_public_job(job_id)
+    log = AsyncMock()
+    logger = SimpleNamespace(awarning=AsyncMock(), aexception=AsyncMock())
+    setattr(logger, log_method, log)
+
+    async def fail_cancel(**_kwargs):
+        raise failure
+
+    monkeypatch.setattr(chat_module, "cancel_flow_build", fail_cancel)
+    monkeypatch.setattr(chat_module, "logger", logger)
+    try:
+        response = await client.post(f"api/v1/build_public_tmp/{job_id}/cancel")
+    finally:
+        queue_service._public_jobs.discard(job_id)
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert str(failure) not in response.text
+    assert str(failure) in str(log.await_args)
 
 
 @pytest.mark.benchmark

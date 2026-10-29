@@ -118,7 +118,7 @@ class TestTelemetryService:
     @pytest.mark.asyncio
     async def test_start_and_stop_lifecycle(self):
         """Test that start creates worker/client and stop cleans them up."""
-        svc = TelemetryService(base_url="http://localhost:0")
+        svc = TelemetryService(base_url="http://localhost:0", write_key="test-key", do_not_track=False)
         svc.start()
         assert svc._running is True
         assert svc._worker_task is not None
@@ -160,7 +160,7 @@ class TestTelemetryService:
     @pytest.mark.asyncio
     async def test_teardown_after_start(self):
         """Test that teardown properly stops a started service."""
-        svc = TelemetryService(base_url="http://localhost:0")
+        svc = TelemetryService(base_url="http://localhost:0", write_key="test-key", do_not_track=False)
         svc.start()
         assert svc._running is True
         await svc.teardown()
@@ -270,14 +270,12 @@ class TestVariableService:
     @pytest.mark.asyncio
     async def test_get_variable_absorbs_extra_kwargs(self, variables):
         """Extra kwargs are accepted for compatibility with primeagent call signature."""
-        os.environ["WFX_KWARG_TEST"] = "value-from-env"
+        os.environ["KWARG_TEST"] = "value-from-env"
         try:
-            value = await variables.get_variable(
-                user_id="random-uuid", name="WFX_KWARG_TEST", field="value", session=None
-            )
+            value = await variables.get_variable(user_id="random-uuid", name="KWARG_TEST", field="value", session=None)
             assert value == "value-from-env"
         finally:
-            del os.environ["WFX_KWARG_TEST"]
+            del os.environ["KWARG_TEST"]
 
     @pytest.mark.asyncio
     async def test_strict_no_bearer_token_from_access_token_env(self, variables):

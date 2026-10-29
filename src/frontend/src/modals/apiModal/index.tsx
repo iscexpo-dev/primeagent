@@ -1,10 +1,10 @@
-import { TweaksComponent } from "@/components/core/codeTabsComponent/components/tweaksComponent";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { CustomAPIGenerator } from "@/customization/components/custom-api-generator";
 import { CustomLink } from "@/customization/components/custom-link";
+import { handleBlockedSave } from "@/hooks/flows/handle-blocked-save";
 import useSaveFlow from "@/hooks/flows/use-save-flow";
 import useAuthStore from "@/stores/authStore";
 import useFlowStore from "@/stores/flowStore";
@@ -38,8 +38,9 @@ export default function ApiModal({
   const { t } = useTranslation();
   const _autoLogin = useAuthStore((state) => state.autoLogin);
   const nodes = useFlowStore((state) => state.nodes);
-  const [openTweaks, setOpenTweaks] = useState(false);
-  const tweaks = useTweaksStore((state) => state.tweaks);
+  // API exposure is managed per-parameter on the node (LE-1810) — this
+  // secondary modal only edits the endpoint name now.
+  const [openEndpointName, setOpenEndpointName] = useState(false);
   const [open, setOpen] =
     mySetOpen !== undefined && myOpen !== undefined
       ? [myOpen, mySetOpen]
@@ -88,18 +89,18 @@ export default function ApiModal({
       endpointName && endpointName.length > 0 ? endpointName : null;
 
     if (autoSaving) {
-      saveFlow(newFlow);
+      saveFlow(newFlow).catch(handleBlockedSave);
     } else {
       setCurrentFlow(newFlow);
     }
   }
 
   useEffect(() => {
-    if (!openTweaks && endpointName !== flowEndpointName) handleSave();
-    else if (openTweaks) {
+    if (!openEndpointName && endpointName !== flowEndpointName) handleSave();
+    else if (openEndpointName) {
       setEndpointName(flowEndpointName ?? "");
     }
-  }, [openTweaks]);
+  }, [openEndpointName]);
 
   return (
     <>
@@ -138,16 +139,11 @@ export default function ApiModal({
                 variant="ghost"
                 size="icon"
                 className="h-8 select-none px-3"
-                onClick={() => setOpenTweaks(true)}
-                data-testid="tweaks-button"
+                onClick={() => setOpenEndpointName(true)}
+                data-testid="endpoint-name-button"
               >
-                <IconComponent
-                  name="SlidersHorizontal"
-                  className="h-3.5 w-3.5"
-                />
-                <span>
-                  {t("modal.api.inputSchema")} ({Object.keys(tweaks)?.length}){" "}
-                </span>
+                <IconComponent name="Link" className="h-3.5 w-3.5" />
+                <span>{t("modal.api.endpointName")}</span>
               </Button>
               <Separator orientation="vertical" className="ml-2 h-8" />
             </div>
@@ -164,55 +160,40 @@ export default function ApiModal({
       </BaseModal>
 
       <BaseModal
-        open={openTweaks}
-        setOpen={setOpenTweaks}
-        size="medium-small-tall"
+        open={openEndpointName}
+        setOpen={setOpenEndpointName}
+        size="smaller"
       >
         <BaseModal.Header>
-          <IconComponent name="SlidersHorizontal" className="text-f h-6 w-6" />
-          <span className="pl-2">{t("modal.api.inputSchema")}</span>
+          <IconComponent name="Link" className="text-f h-6 w-6" />
+          <span className="pl-2">{t("modal.api.endpointName")}</span>
         </BaseModal.Header>
         <BaseModal.Content overflowHidden className="flex flex-col gap-4">
-          {true && (
-            <Label>
-              <div className="edit-flow-arrangement mt-2">
-                <span className="shrink-0 text-mmd font-medium">
-                  {t("modal.api.endpointName")}
+          <Label>
+            <div className="edit-flow-arrangement mt-2">
+              <span className="shrink-0 text-mmd font-medium">
+                {t("modal.api.endpointName")}
+              </span>
+              {!validEndpointName && (
+                <span className="edit-flow-span">
+                  {t("modal.api.endpointValidation", {
+                    maxLength: MAX_LENGTH,
+                  })}
                 </span>
-                {!validEndpointName && (
-                  <span className="edit-flow-span">
-                    {t("modal.api.endpointValidation", {
-                      maxLength: MAX_LENGTH,
-                    })}
-                  </span>
-                )}
-              </div>
-              <Input
-                className="nopan nodelete nodrag noflow mt-2 font-normal"
-                onChange={handleEndpointNameChange}
-                type="text"
-                name="endpoint_name"
-                value={endpointName ?? ""}
-                placeholder={t("modal.api.endpointPlaceholder")}
-                maxLength={MAX_LENGTH}
-                minLength={MIN_LENGTH}
-                id="endpoint_name"
-              />
-            </Label>
-          )}
-          <div className="flex flex-1 flex-col gap-2 overflow-hidden">
-            <div className="flex flex-col gap-1">
-              <span className="shrink-0 text-sm font-medium">
-                {t("modal.api.exposeApi")}
-              </span>
-              <span className="text-mmd text-muted-foreground">
-                {t("modal.api.exposeApiDescription")}
-              </span>
+              )}
             </div>
-            <div className="min-h-0 w-full flex-1 flex-col overflow-y-auto overflow-x-hidden rounded-lg bg-muted custom-scroll">
-              <TweaksComponent open={openTweaks} />
-            </div>
-          </div>
+            <Input
+              className="nopan nodelete nodrag noflow mt-2 font-normal"
+              onChange={handleEndpointNameChange}
+              type="text"
+              name="endpoint_name"
+              value={endpointName ?? ""}
+              placeholder={t("modal.api.endpointPlaceholder")}
+              maxLength={MAX_LENGTH}
+              minLength={MIN_LENGTH}
+              id="endpoint_name"
+            />
+          </Label>
         </BaseModal.Content>
       </BaseModal>
     </>

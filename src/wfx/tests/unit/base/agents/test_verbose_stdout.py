@@ -6,7 +6,7 @@ agent's ``verbose`` input defaulted to ``True`` and was passed straight to
 ``AgentExecutor``, which attaches a ``StdOutCallbackHandler`` that prints via
 ``print()`` -- bypassing Primeagent's logging system.
 
-See https://github.com/khulnasoft/primeagent/issues/13662.
+See https://github.com/khulnasoft-bot/primeagent/issues/13662.
 """
 
 import io

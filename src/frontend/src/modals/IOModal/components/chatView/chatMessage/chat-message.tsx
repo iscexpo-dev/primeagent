@@ -3,12 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import MessageMetadata from "@/components/common/messageMetadataComponent";
 import { ContentBlockDisplay } from "@/components/core/chatComponents/ContentBlockDisplay";
+import { resolveContentBlockLayout } from "@/components/core/playgroundComponent/chat-view/chat-messages/utils/content-blocks";
 import { useUpdateMessage } from "@/controllers/API/queries/messages";
 import { CustomMarkdownField } from "@/customization/components/custom-markdown-field";
 import { CustomProfileIcon } from "@/customization/components/custom-profile-icon";
 import { ENABLE_DATASTAX_PRIMEAGENT } from "@/customization/feature-flags";
+import { applyBasePath } from "@/customization/utils/urls";
 import useFlowStore from "@/stores/flowStore";
 import useFlowsManagerStore from "@/stores/flowsManagerStore";
+import { isGroupedBlock } from "@/types/chat";
 import Robot from "../../../../../assets/robot.png";
 import IconComponent, {
   ForwardedIconComponent,
@@ -63,7 +66,7 @@ export default function ChatMessage({
   const streamChunks = (url: string) => {
     setIsStreaming(true); // Streaming starts
     return new Promise<boolean>((resolve, reject) => {
-      eventSource.current = new EventSource(url);
+      eventSource.current = new EventSource(applyBasePath(url));
       eventSource.current.onmessage = (event) => {
         const parsedData = JSON.parse(event.data);
         if (parsedData.chunk) {
@@ -74,14 +77,13 @@ export default function ChatMessage({
         setIsStreaming(false);
         eventSource.current?.close();
         setStreamUrl(undefined);
-        const errorData = event.data ? JSON.parse(event.data) : undefined;
-        if (errorData?.error) {
+        if (JSON.parse(event.data)?.error) {
           setErrorData({
             title: t("errors.errorOnStreaming"),
-            list: [errorData.error],
+            list: [JSON.parse(event.data)?.error],
           });
         }
-        updateChat?.(chat, chatMessageRef.current);
+        updateChat(chat, chatMessageRef.current);
         reject(new Error("Streaming failed"));
       };
       eventSource.current.addEventListener("close", (event) => {
@@ -131,6 +133,12 @@ export default function ChatMessage({
   const isEmpty = decodedMessage?.trim() === "";
   const { mutate: updateMessageMutation } = useUpdateMessage();
 
+  const { displayedContentBlocks, showBubbleBody } = resolveContentBlockLayout(
+    chat.content_blocks ?? [],
+    chat.message?.toString(),
+    Boolean(editMessage),
+  );
+
   const handleEditMessage = (message: string) => {
     updateMessageMutation(
       {
@@ -147,7 +155,7 @@ export default function ChatMessage({
       },
       {
         onSuccess: () => {
-          updateChat?.(chat, message);
+          updateChat(chat, message);
           setEditMessage(false);
         },
         onError: () => {
@@ -192,7 +200,10 @@ export default function ChatMessage({
   ) : null;
 
   if (chat.category === "error") {
-    const blocks = chat.content_blocks ?? [];
+    // ErrorView walks block.contents on each entry, so filter to the grouped
+    // ContentBlock shape (it has `contents`). Flat ContentType items can now
+    // also appear in content_blocks and would otherwise crash ErrorView.
+    const blocks = (chat.content_blocks ?? []).filter(isGroupedBlock);
 
     return (
       <ErrorView
@@ -299,17 +310,17 @@ export default function ChatMessage({
                 )}
                 {!chat.isSend && (
                   <MessageMetadata
-                    duration={chat.properties?.build_duration ?? undefined}
-                    usage={chat.properties?.usage ?? undefined}
+                    duration={chat.properties?.build_duration}
+                    usage={chat.properties?.usage}
                     timestamp={chat.timestamp}
                   />
                 )}
               </div>
             </div>
-            {chat.content_blocks && chat.content_blocks.length > 0 && (
+            {displayedContentBlocks.length > 0 && (
               <ContentBlockDisplay
                 playgroundPage={playgroundPage}
-                contentBlocks={chat.content_blocks}
+                contentBlocks={displayedContentBlocks}
                 isLoading={
                   chat.properties?.state === "partial" &&
                   isBuilding &&
@@ -319,7 +330,7 @@ export default function ChatMessage({
                 chatId={chat.id}
               />
             )}
-            {!chat.isSend ? (
+            {!chat.isSend && !showBubbleBody ? null : !chat.isSend ? (
               <div className="form-modal-chat-text-position flex-grow">
                 <div className="form-modal-chat-text">
                   {hidden && chat.thought && chat.thought !== "" && (
@@ -422,7 +433,7 @@ export default function ChatMessage({
             )}
           </div>
           {!editMessage && (
-            <div className="invisible absolute bottom-full right-0 group-hover:visible">
+            <div className="pointer-events-none absolute bottom-full right-0 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
               <div>
                 <EditMessageButton
                   onCopy={() => {
@@ -431,7 +442,7 @@ export default function ChatMessage({
                   onEdit={
                     playgroundPage ? undefined : () => setEditMessage(true)
                   }
-                  className="h-fit group-hover:visible"
+                  className="h-fit"
                   isBotMessage={!chat.isSend}
                   onEvaluate={handleEvaluateAnswer}
                   evaluation={chat.properties?.positive_feedback}

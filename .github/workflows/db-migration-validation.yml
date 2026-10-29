@@ -25,6 +25,9 @@ env:
 jobs:
   migration-pip-venv:
     name: "Migration Test: pip/venv (stable → nightly)"
+    # Witness-flow setup uses the auto-login endpoint; opt in for this isolated test.
+    env:
+      PRIMEAGENT_AUTO_LOGIN: "true"
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -45,13 +48,14 @@ jobs:
 
     steps:
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.0.0
         with:
+          version: latest-known
           enable-cache: false
 
       - name: Create test directory
@@ -108,7 +112,7 @@ jobs:
           # Wait for startup
           timeout 60 bash -c 'until curl -f http://127.0.0.1:7860/health_check 2>/dev/null; do sleep 2; done'
 
-          # Get auth token via auto_login (works under default AUTO_LOGIN=true, no credentials needed)
+          # Get auth token via auto_login (explicitly enabled for this test).
           TOKEN=$(curl -fsS http://127.0.0.1:7860/api/v1/auto_login | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
           if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
             echo "❌ Failed to get authentication token"
@@ -169,7 +173,7 @@ jobs:
           # `python -m primeagent` could keep running the stable version and no real nightly migration
           # is exercised (false-positive test).
           echo "Removing stable primeagent to force a clean install of the nightly dev version..."
-          uv pip uninstall -y primeagent primeagent-base || true
+          uv pip uninstall primeagent primeagent-base || true
 
           # Extract version from Docker tag (format: khulnasoft/primeagent:v1.10.0.dev20260522)
           if [[ "$NIGHTLY_TAG" == *":"* ]]; then
@@ -182,8 +186,8 @@ jobs:
 
             # Scope pre-release resolution to the primeagent stack only. uv accepts a
             # pre-release for a package when its own requirement carries a pre-release
-            # marker, but NOT via transitive pins (primeagent -> primeagent-base -> wfx ->
-            # primeagent-sdk are exact ==devN pins on nightlies), so each lockstep package
+            # marker, but NOT via transitive pins (primeagent -> primeagent-base ->
+            # wfx -> primeagent-sdk are exact ==devN pins on nightlies), so each lockstep package
             # must be requested directly. A global --prerelease=allow is NOT safe here:
             # it lets unrelated dependencies resolve to alphas (pydantic 2.14.0a1 broke
             # langchain-core imports on the first canonical-prerelease nightly).
@@ -249,7 +253,7 @@ jobs:
 
           timeout 60 bash -c 'until curl -f http://127.0.0.1:7860/health_check 2>/dev/null; do sleep 2; done'
 
-          # Get auth token via auto_login (works under default AUTO_LOGIN=true, no credentials needed)
+          # Get auth token via auto_login (explicitly enabled for this test).
           TOKEN=$(curl -fsS http://127.0.0.1:7860/api/v1/auto_login | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
           if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
             echo "❌ Failed to get authentication token"
@@ -289,7 +293,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: migration-pip-venv-logs
           path: |
@@ -304,7 +308,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Create Docker Compose test directory
         run: |
@@ -322,6 +326,15 @@ jobs:
                 - "7860:7860"
               environment:  # pragma: allowlist secret
                 - PRIMEAGENT_DATABASE_URL=postgresql://primeagent:primeagent@postgres:5432/primeagent  # pragma: allowlist secret
+                # The published Docker image ships secure-by-default: its Dockerfile bakes
+                # PRIMEAGENT_AUTO_LOGIN=false and there is no built-in superuser password (#13822).
+                # This migration test authenticates via GET /api/v1/auto_login, which requires
+                # AUTO_LOGIN=true, so pin it here (overriding the image ENV) to keep that token
+                # flow working and ensure boot never lands in the "Username and password must be
+                # set" branch. The explicit superuser credentials are a fallback for that branch.
+                - PRIMEAGENT_AUTO_LOGIN=true
+                - PRIMEAGENT_SUPERUSER=primeagent  # pragma: allowlist secret
+                - PRIMEAGENT_SUPERUSER_PASSWORD=primeagent  # pragma: allowlist secret
               depends_on:
                 postgres:
                   condition: service_healthy
@@ -367,7 +380,7 @@ jobs:
       - name: Create witness flow via API
         working-directory: docker-migration-test
         run: |
-          # Get auth token via auto_login (works under default AUTO_LOGIN=true, no credentials needed)
+          # Get auth token via auto_login (explicitly enabled for this test).
           TOKEN=$(curl -fsS http://localhost:7860/api/v1/auto_login | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
           if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
             echo "❌ Failed to get authentication token"
@@ -448,7 +461,7 @@ jobs:
       - name: Verify witness data persisted
         working-directory: docker-migration-test
         run: |
-          # Get auth token via auto_login (works under default AUTO_LOGIN=true, no credentials needed)
+          # Get auth token via auto_login (explicitly enabled for this test).
           TOKEN=$(curl -fsS http://localhost:7860/api/v1/auto_login | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
           if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
             echo "❌ Failed to get authentication token"
@@ -488,7 +501,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: migration-docker-compose-logs
           path: |

@@ -107,7 +107,7 @@ describe("computeSectionVisibility", () => {
 
     // Regression: searching for "Agent" with MCP servers configured should
     // show both core components AND MCP results, not hide core components.
-    // See: https://github.com/khulnasoft/primeagent/pull/11513
+    // See: https://github.com/khulnasoft-bot/primeagent/pull/11513
     it("should show BOTH components and MCP when search matches both", () => {
       const result = computeSectionVisibility({
         ...baseInput,
@@ -181,6 +181,73 @@ describe("computeSectionVisibility", () => {
       });
 
       expect(result.isMcpTabActive).toBe(false);
+    });
+  });
+
+  // Regression: the "Discover more components" button used to render whenever
+  // the components section was visible, including when the bundles section was
+  // already on screen — clicking it then switched to a section that was already
+  // rendered, so the button looked dead.
+  describe("showDiscoverMore", () => {
+    it("should show the shortcut on the components tab when bundles exist", () => {
+      const result = computeSectionVisibility({
+        ...baseInput,
+        hasBundleItems: true,
+      });
+
+      expect(result.showDiscoverMore).toBe(true);
+    });
+
+    it("should hide the shortcut when there are no bundles to discover", () => {
+      const result = computeSectionVisibility({
+        ...baseInput,
+        hasBundleItems: false,
+      });
+
+      expect(result.showDiscoverMore).toBe(false);
+    });
+
+    it("should hide the shortcut during search, where bundles already render", () => {
+      const result = computeSectionVisibility({
+        ...baseInput,
+        activeSection: "search",
+        hasSearchInput: true,
+        hasBundleItems: true,
+      });
+
+      expect(result.showBundles).toBe(true);
+      expect(result.showDiscoverMore).toBe(false);
+    });
+
+    it("should hide the shortcut on the bundles tab", () => {
+      const result = computeSectionVisibility({
+        ...baseInput,
+        activeSection: "bundles",
+        hasBundleItems: true,
+      });
+
+      expect(result.showDiscoverMore).toBe(false);
+    });
+
+    it("should hide the shortcut when the components section is hidden", () => {
+      const result = computeSectionVisibility({
+        ...baseInput,
+        hasCoreComponents: false,
+        hasBundleItems: true,
+      });
+
+      expect(result.showComponents).toBe(false);
+      expect(result.showDiscoverMore).toBe(false);
+    });
+
+    it("should hide the shortcut with the legacy sidebar, which renders every section", () => {
+      const result = computeSectionVisibility({
+        ...baseInput,
+        enableNewSidebar: false,
+        hasBundleItems: true,
+      });
+
+      expect(result.showDiscoverMore).toBe(false);
     });
   });
 

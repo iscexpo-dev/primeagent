@@ -5,15 +5,15 @@ import { TEXTS } from "../../utils/constants/texts";
 
 import { openBlankFlow } from "../../utils/flow/open-blank-flow";
 import {
-  closeAdvancedOptions,
-  disableInspectPanel,
-  enableInspectPanel,
-  openAdvancedOptions,
+  closeParametersPanel,
+  openParametersPanel,
 } from "../../utils/open-advanced-options";
 
 test(
   "user should be able to use nested component",
-  { tag: ["@release", "@workspace"] },
+  {
+    tag: ["@release", "@workspace"],
+  },
   async ({ page }) => {
     await openBlankFlow(page);
     await page.getByTestId("sidebar-search-input").click();
@@ -56,13 +56,14 @@ test(
 
     await page.getByText(TEXTS.save).last().click();
 
-    await disableInspectPanel(page);
-
     await page.getByTestId("div-generic-node").click();
 
-    await openAdvancedOptions(page);
+    // LE-1810: the panel only manages parameters — the dict value is edited
+    // on the node itself.
+    await openParametersPanel(page);
+    await closeParametersPanel(page);
 
-    await page.getByTestId("edit_dict_nesteddict_edit_metadata").last().click();
+    await page.getByTestId("dict_nesteddict_metadata").first().click();
     await page.getByTitle("Switch to tree mode (current mode: text)").click();
     await page.waitForSelector(".jse-bracket", {
       timeout: 3000,
@@ -85,9 +86,5 @@ test(
     expect(await page.getByText("proptest", { exact: true }).count()).toBe(0);
 
     await page.getByText(TEXTS.save, { exact: true }).last().click();
-
-    await closeAdvancedOptions(page);
-
-    await enableInspectPanel(page);
   },
 );

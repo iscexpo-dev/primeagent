@@ -9,12 +9,13 @@ import orjson
 import pytest
 from httpx import AsyncClient
 from primeagent.api.v1.schemas import FlowListCreate, ResultDataResponse
-from primeagent.initial_setup.setup import load_starter_projects
+from primeagent.initial_setup.setup import filter_starter_projects_by_available_components, load_starter_projects
+from primeagent.interface.components import get_and_cache_all_types_dict
 from primeagent.services.database.models.base import orjson_dumps
 from primeagent.services.database.models.flow import Flow, FlowCreate, FlowUpdate
 from primeagent.services.database.models.folder.model import FolderCreate
 from primeagent.services.database.utils import session_getter
-from primeagent.services.deps import get_db_service
+from primeagent.services.deps import get_db_service, get_settings_service
 from wfx.graph.utils import log_transaction, log_vertex_build
 
 
@@ -351,7 +352,7 @@ async def test_delete_folder_with_flows_with_transaction_and_build(client: Async
     assert response.status_code == 201, f"Expected status code 201, but got {response.status_code}"
 
     created_folder = response.json()
-    folder_id = created_folder["id"]
+    folder_id = UUID(created_folder["id"])
 
     # Create ten flows
     number_of_flows = 10
@@ -359,7 +360,7 @@ async def test_delete_folder_with_flows_with_transaction_and_build(client: Async
     flow_ids = []
     for flow in flows:
         flow.folder_id = folder_id
-        response = await client.post("api/v1/flows/", json=flow.model_dump(), headers=logged_in_headers)
+        response = await client.post("api/v1/flows/", json=flow.model_dump(mode="json"), headers=logged_in_headers)
         assert response.status_code == 201
         flow_ids.append(response.json()["id"])
 
@@ -423,7 +424,7 @@ async def test_get_flows_from_folder_pagination(client: AsyncClient, logged_in_h
     assert response.status_code == 201, f"Expected status code 201, but got {response.status_code}"
 
     created_folder = response.json()
-    folder_id = created_folder["id"]
+    folder_id = UUID(created_folder["id"])
 
     response = await client.get(
         f"api/v1/projects/{folder_id}", headers=logged_in_headers, params={"page": 1, "size": 50}
@@ -488,6 +489,41 @@ async def test_create_flows(client: AsyncClient, json_flow: str, logged_in_heade
     assert response_data[1]["name"] == flow_2_unique_name
     assert response_data[1]["description"] == "description"
     assert response_data[1]["data"] == data
+
+
+@pytest.mark.usefixtures("session")
+async def test_create_flows_duplicate_name_returns_clean_409(client: AsyncClient, json_flow: str, logged_in_headers):
+    """A (user_id, name) collision in the batch endpoint must surface as a clean 409.
+
+    Regression: the duplicate INSERT used to reach ``session.flush()`` unhandled, leaking the raw
+    SQL statement and bound parameters and — un-rolled-back on SQLite — pinning the write lock so
+    the next writer busy-waited ``busy_timeout`` before "database is locked". The endpoint now rolls
+    back and maps the violation, so the error is fast and the session stays usable.
+    """
+    flow = orjson.loads(json_flow)
+    data = flow["data"]
+    taken_name = str(uuid4())
+
+    # Seed the name once.
+    seed = FlowListCreate(flows=[FlowCreate(name=taken_name, description="seed", data=data)])
+    seed_response = await client.post("api/v1/flows/batch/", json=seed.dict(), headers=logged_in_headers)
+    assert seed_response.status_code == 201
+
+    # Re-inserting the same name collides on UNIQUE(user_id, name).
+    dup = FlowListCreate(flows=[FlowCreate(name=taken_name, description="dup", data=data)])
+    dup_response = await client.post("api/v1/flows/batch/", json=dup.dict(), headers=logged_in_headers)
+    assert dup_response.status_code == 409
+    assert dup_response.json()["detail"] == "Name must be unique"
+    # No SQLAlchemy statement / bound parameters / driver hint may leak to the client.
+    body = dup_response.text.lower()
+    assert "insert into" not in body
+    assert "sqlalche.me" not in body
+    assert "user_id" not in body
+
+    # The session was rolled back (lock released), so a fresh write still succeeds immediately.
+    follow_up = FlowListCreate(flows=[FlowCreate(name=str(uuid4()), description="after", data=data)])
+    follow_up_response = await client.post("api/v1/flows/batch/", json=follow_up.dict(), headers=logged_in_headers)
+    assert follow_up_response.status_code == 201
 
 
 @pytest.mark.usefixtures("session")
@@ -951,6 +987,117 @@ async def test_upload_zip_with_mixed_valid_invalid(client: AsyncClient, json_flo
 
 
 @pytest.mark.usefixtures("session")
+async def test_upload_zip_exceeding_aggregate_size_limit(
+    client: AsyncClient, json_flow: str, logged_in_headers, monkeypatch
+):
+    """Entries individually under the per-entry limit but over the aggregate limit → 400."""
+    import primeagent.api.utils.zip_utils as zip_utils_mod
+
+    flow = orjson.loads(json_flow)
+    data = flow["data"]
+    small_flow = {"name": "small_flow", "data": {"nodes": [], "edges": []}}
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zf:
+        zf.writestr("small.json", json.dumps(small_flow))
+        zf.writestr("big_1.json", json.dumps({"name": "big_1", "data": data}))
+        zf.writestr("big_2.json", json.dumps({"name": "big_2", "data": data}))
+
+    # Allow each entry individually but cap the aggregate below their combined size
+    with zipfile.ZipFile(io.BytesIO(zip_buffer.getvalue()), "r") as zf:
+        sizes = {info.filename: info.file_size for info in zf.infolist()}
+    per_entry_limit = max(sizes.values()) + 1
+    aggregate_limit = sum(sizes.values()) - 1
+    monkeypatch.setattr(zip_utils_mod, "MAX_ENTRY_UNCOMPRESSED_BYTES", per_entry_limit)
+    monkeypatch.setattr(zip_utils_mod, "MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES", aggregate_limit)
+
+    zip_buffer.seek(0)
+    response = await client.post(
+        "api/v1/flows/upload/",
+        files={"file": ("aggregate.zip", zip_buffer.getvalue(), "application/zip")},
+        headers=logged_in_headers,
+    )
+    assert response.status_code == 400
+    assert "aggregate limit" in response.json()["detail"]
+
+
+@pytest.mark.usefixtures("session")
+async def test_upload_zip_skipped_entries_not_counted_against_aggregate(
+    client: AsyncClient, json_flow: str, logged_in_headers, monkeypatch
+):
+    """Entries skipped for the per-entry limit are never read, so they don't count against the aggregate."""
+    import primeagent.api.utils.zip_utils as zip_utils_mod
+
+    flow = orjson.loads(json_flow)
+    data = flow["data"]
+    small_flow = {"name": "small_flow", "data": {"nodes": [], "edges": []}}
+    big_flow = {"name": "big_flow", "data": data}
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zf:
+        zf.writestr("small.json", json.dumps(small_flow))
+        zf.writestr("big.json", json.dumps(big_flow))
+
+    # Per-entry limit between the two entry sizes; aggregate limit above the
+    # small entry but below the sum of both declared sizes.
+    with zipfile.ZipFile(io.BytesIO(zip_buffer.getvalue()), "r") as zf:
+        sizes = {info.filename: info.file_size for info in zf.infolist()}
+    per_entry_limit = (sizes["small.json"] + sizes["big.json"]) // 2
+    monkeypatch.setattr(zip_utils_mod, "MAX_ENTRY_UNCOMPRESSED_BYTES", per_entry_limit)
+    monkeypatch.setattr(zip_utils_mod, "MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES", sizes["small.json"] + 1)
+
+    zip_buffer.seek(0)
+    response = await client.post(
+        "api/v1/flows/upload/",
+        files={"file": ("skipped.zip", zip_buffer.getvalue(), "application/zip")},
+        headers=logged_in_headers,
+    )
+    assert response.status_code == 201
+    response_data = response.json()
+    assert len(response_data) == 1
+    assert response_data[0]["name"] == "small_flow"
+
+
+@pytest.mark.usefixtures("session")
+async def test_upload_zip_with_duplicate_filename(client: AsyncClient, json_flow: str, logged_in_headers, monkeypatch):
+    """Duplicate filenames: each entry must be read by its own ZipInfo.
+
+    A filename-based read resolves to the last entry with that name, so an
+    oversized duplicate behind a small first entry would be fully decompressed
+    before any size check. The oversized duplicate must be skipped by its own
+    declared size while the small first entry still imports.
+    """
+    import primeagent.api.utils.zip_utils as zip_utils_mod
+
+    flow = orjson.loads(json_flow)
+    data = flow["data"]
+    small_flow = {"name": "dup_small", "data": {"nodes": [], "edges": []}}
+    big_flow = {"name": "dup_big", "data": data}
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zf:
+        zf.writestr("dup.json", json.dumps(small_flow))
+        zf.writestr("dup.json", json.dumps(big_flow))
+
+    with zipfile.ZipFile(io.BytesIO(zip_buffer.getvalue()), "r") as zf:
+        sizes = [info.file_size for info in zf.infolist()]
+    small_size, big_size = sizes
+    assert small_size < big_size
+    monkeypatch.setattr(zip_utils_mod, "MAX_ENTRY_UNCOMPRESSED_BYTES", (small_size + big_size) // 2)
+
+    zip_buffer.seek(0)
+    response = await client.post(
+        "api/v1/flows/upload/",
+        files={"file": ("duplicates.zip", zip_buffer.getvalue(), "application/zip")},
+        headers=logged_in_headers,
+    )
+    assert response.status_code == 201
+    response_data = response.json()
+    assert len(response_data) == 1
+    assert response_data[0]["name"] == "dup_small"
+
+
+@pytest.mark.usefixtures("session")
 async def test_upload_zip_to_projects_filename_none(client: AsyncClient, json_flow: str, logged_in_headers):
     """When filename has no stem (e.g. '.zip'), the project name defaults to 'Imported Project'."""
     flow = orjson.loads(json_flow)
@@ -1198,6 +1345,7 @@ async def test_get_nonexistent_flow(client: AsyncClient, logged_in_headers):
 
 @pytest.mark.usefixtures("active_user")
 async def test_update_flow_idempotency(client: AsyncClient, json_flow: str, logged_in_headers):
+    """Repeating an upsert preserves flow content while its write timestamp may advance."""
     flow_data = orjson.loads(json_flow)
     data = flow_data["data"]
     flow_data = FlowCreate(name="Test Flow", description="description", data=data)
@@ -1206,7 +1354,12 @@ async def test_update_flow_idempotency(client: AsyncClient, json_flow: str, logg
     updated_flow = FlowCreate(name="Updated Flow", description="description", data=data)
     response1 = await client.put(f"api/v1/flows/{flow_id}", json=updated_flow.model_dump(), headers=logged_in_headers)
     response2 = await client.put(f"api/v1/flows/{flow_id}", json=updated_flow.model_dump(), headers=logged_in_headers)
-    assert response1.json() == response2.json()
+    assert response1.status_code == response2.status_code == 200
+    first, second = response1.json(), response2.json()
+    first_updated_at = datetime.fromisoformat(first.pop("updated_at"))
+    second_updated_at = datetime.fromisoformat(second.pop("updated_at"))
+    assert second_updated_at >= first_updated_at
+    assert first == second
 
 
 @pytest.mark.usefixtures("active_user")
@@ -1234,8 +1387,13 @@ async def test_delete_nonexistent_flow(client: AsyncClient, logged_in_headers):
 async def test_read_only_starter_projects(client: AsyncClient, logged_in_headers):
     response = await client.get("api/v1/flows/basic_examples/", headers=logged_in_headers)
     starter_projects = await load_starter_projects()
+    all_types_dict = await get_and_cache_all_types_dict(get_settings_service())
+    available_starter_projects = filter_starter_projects_by_available_components(starter_projects, all_types_dict)
+
     assert response.status_code == 200
-    assert len(response.json()) == len(starter_projects)
+    assert sorted(project["name"] for project in response.json()) == sorted(
+        project["name"] for _, project in available_starter_projects
+    )
 
 
 async def test_sqlite_pragmas():
@@ -1331,14 +1489,14 @@ async def test_read_folder_with_flows(client: AsyncClient, json_flow: str, logge
     response = await client.post("api/v1/projects/", json=project.model_dump(), headers=logged_in_headers)
     assert response.status_code == 201
     created_folder = response.json()
-    folder_id = created_folder["id"]
+    folder_id = UUID(created_folder["id"])
 
     # Create a flow in the project
     flow_data = orjson.loads(json_flow)
     data = flow_data["data"]
     flow = FlowCreate(name=flow_name, description="description", data=data)
     flow.folder_id = folder_id
-    response = await client.post("api/v1/flows/", json=flow.model_dump(), headers=logged_in_headers)
+    response = await client.post("api/v1/flows/", json=flow.model_dump(mode="json"), headers=logged_in_headers)
     assert response.status_code == 201
 
     # Read the project with flows
@@ -1367,7 +1525,7 @@ async def test_read_folder_with_search(client: AsyncClient, json_flow: str, logg
     response = await client.post("api/v1/projects/", json=project.model_dump(), headers=logged_in_headers)
     assert response.status_code == 201
     created_folder = response.json()
-    folder_id = created_folder["id"]
+    folder_id = UUID(created_folder["id"])
 
     # Create two flows in the project
     flow_data = orjson.loads(json_flow)
@@ -1382,8 +1540,8 @@ async def test_read_folder_with_search(client: AsyncClient, json_flow: str, logg
     )
     flow1.folder_id = folder_id
     flow2.folder_id = folder_id
-    await client.post("api/v1/flows/", json=flow1.model_dump(), headers=logged_in_headers)
-    await client.post("api/v1/flows/", json=flow2.model_dump(), headers=logged_in_headers)
+    await client.post("api/v1/flows/", json=flow1.model_dump(mode="json"), headers=logged_in_headers)
+    await client.post("api/v1/flows/", json=flow2.model_dump(mode="json"), headers=logged_in_headers)
 
     # Read the project with search
     response = await client.get(
@@ -1403,7 +1561,7 @@ async def test_read_folder_with_component_filter(client: AsyncClient, json_flow:
     response = await client.post("api/v1/projects/", json=project.model_dump(), headers=logged_in_headers)
     assert response.status_code == 201
     created_folder = response.json()
-    folder_id = created_folder["id"]
+    folder_id = UUID(created_folder["id"])
 
     # Create a component flow in the project
     flow_data = orjson.loads(json_flow)
@@ -1416,7 +1574,7 @@ async def test_read_folder_with_component_filter(client: AsyncClient, json_flow:
         is_component=True,
     )
     component_flow.folder_id = folder_id
-    await client.post("api/v1/flows/", json=component_flow.model_dump(), headers=logged_in_headers)
+    await client.post("api/v1/flows/", json=component_flow.model_dump(mode="json"), headers=logged_in_headers)
 
     # Read the project with component filter
     response = await client.get(

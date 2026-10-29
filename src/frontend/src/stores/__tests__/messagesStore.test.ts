@@ -394,7 +394,7 @@ describe("useMessagesStore", () => {
       });
 
       act(() => {
-        result.current.updateMessageText(mockMessage.id ?? "", " - appended");
+        result.current.updateMessageText(mockMessage.id, " - appended");
       });
 
       expect(result.current.messages[0].text).toBe("Hello world - appended");
@@ -408,12 +408,12 @@ describe("useMessagesStore", () => {
       });
 
       act(() => {
-        result.current.updateMessageText(mockMessage.id ?? "", " - first");
+        result.current.updateMessageText(mockMessage.id, " - first");
       });
       expect(result.current.messages[0].text).toBe("Hello world - first");
 
       act(() => {
-        result.current.updateMessageText(mockMessage.id ?? "", " - second");
+        result.current.updateMessageText(mockMessage.id, " - second");
       });
       expect(result.current.messages[0].text).toBe(
         "Hello world - first - second",
@@ -464,7 +464,7 @@ describe("useMessagesStore", () => {
       });
 
       act(() => {
-        result.current.updateMessageText(mockMessage.id ?? "", "");
+        result.current.updateMessageText(mockMessage.id, "");
       });
 
       expect(result.current.messages[0].text).toBe("Hello world");
@@ -530,8 +530,8 @@ describe("useMessagesStore", () => {
       let removedMessages;
       await act(async () => {
         removedMessages = await result.current.removeMessages([
-          mockMessage.id ?? "",
-          mockMessage2.id ?? "",
+          mockMessage.id,
+          mockMessage2.id,
         ]);
       });
 
@@ -572,8 +572,8 @@ describe("useMessagesStore", () => {
       let removedMessages;
       await act(async () => {
         removedMessages = await result.current.removeMessages([
-          mockMessage.id ?? "",
-          mockMessage2.id ?? "",
+          mockMessage.id,
+          mockMessage2.id,
         ]);
       });
 
@@ -606,9 +606,7 @@ describe("useMessagesStore", () => {
 
       let removedMessages;
       await act(async () => {
-        removedMessages = await result.current.removeMessages([
-          mockMessage.id ?? "",
-        ]);
+        removedMessages = await result.current.removeMessages([mockMessage.id]);
       });
 
       expect(removedMessages).toEqual([mockMessage2]);
@@ -671,7 +669,7 @@ describe("useMessagesStore", () => {
       act(() => {
         result.current.setMessages([mockMessage]);
         result.current.addMessage(mockMessage2);
-        result.current.updateMessageText(mockMessage.id ?? "", " - updated");
+        result.current.updateMessageText(mockMessage.id, " - updated");
       });
 
       expect(result.current.messages).toHaveLength(2);
@@ -688,7 +686,7 @@ describe("useMessagesStore", () => {
 
       act(() => {
         for (let i = 0; i < 10; i++) {
-          result.current.updateMessageText(mockMessage.id ?? "", ` ${i}`);
+          result.current.updateMessageText(mockMessage.id, ` ${i}`);
         }
       });
 
@@ -705,7 +703,7 @@ describe("useMessagesStore", () => {
         ...mockMessage,
         category: "test-category",
         properties: { key: "value", nested: { prop: true } },
-        content_blocks: [{ type: "text", content: "block content" } as unknown],
+        content_blocks: [{ type: "text", content: "block content" } as any],
       };
 
       act(() => {

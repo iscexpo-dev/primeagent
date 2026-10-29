@@ -1,24 +1,36 @@
 [project]
 name = "primeagent-base"
-version = "0.10.1"
+version = "1.13.0"
 description = "A Python package with a built-in web application"
 requires-python = ">=3.10,<3.15"
 license = "MIT"
 keywords = ["nlp", "langchain", "openai", "gpt", "gui"]
 readme = "README.md"
-maintainers = [{ name = "Md Sulaiman", email = "ceo@khulnasoft.com" }]
-
+maintainers = [
+    { name = "Md Sulaiman", email = "dev.sulaiman@icloud.com" },
+    { name = "KhulnaSoft, Ltd", email = "info@khulnasoft.com "}
+]
 dependencies = [
-    "wfx~=1.10.1",
-    "fastapi>=0.135.0,<1.0.0",
+    "wfx[sqlite]==1.13.0",
+    "fastapi>=0.139.0,<1.0.0",
+    "starlette>=1.5.0",
     "slowapi>=0.1.9,<1.0.0",
     "httpx[http2]>=0.27,<1.0.0",
+    "h2>=4.4.1",
     "aiofile>=3.9.0,<4.0.0",
-    "uvicorn>=0.30.0,<1.0.0",
+    "uvicorn>=0.45.0,<1.0.0",
+    # The listener's Slack Socket Mode client (services/triggers/providers/slack).
+    # Already resolved through wfx's uvicorn[standard]; declared because
+    # primeagent-base imports it directly. 13.0 is the first release with the
+    # websockets.asyncio client API.
+    "websockets>=13.0,<16.0",
     "gunicorn>=25.3.0,<27.0.0",
     "langchain~=1.3.0",
     "langchain-community~=0.4.1",
     "langchain-mongodb>=0.11.0",
+    # langchain-mongodb always installs pymongo; publish the patched floor on this unconditional path.
+    "pymongo>=4.18.2,<5.0.0",  # CVE-2026-88029, CVE-2026-96747, CVE-2026-96748, CVE-2026-96749
+    "urllib3>=2.8.0,<3.0.0",  # CVE-2026-97688
     "langchain-perplexity>=1.0.0,<2.0.0",
     "langchain-qdrant>=1.0.0,<2.0.0",
     "langchain-weaviate>=0.0.6",
@@ -28,21 +40,23 @@ dependencies = [
     "structlog>=25.4.0,<26.0.0",
     "rich>=13.7.0,<14.0.0",
     "langchain-experimental~=0.4.1",
-    "sqlmodel~=0.0.37",
-    "pydantic>=2.13.0,<3.0.0",
+    "sqlmodel~=0.0.46",
+    "pydantic>=2.13.0,<2.14",
     "pydantic-settings>=2.2.0,<3.0.0",
     "email-validator>=2.0.0",
-    "typer>=0.13.0,<1.0.0",
+    "typer>=0.19.0,<1.0.0",
     "cachetools>=6.0.0",
     "platformdirs>=4.2.0,<5.0.0",
+    "pyyaml>=6.0.2,<7.0.0",
     "python-multipart>=0.0.12,<1.0.0",
     "orjson>=3.11.6,<4.0.0",
-    "alembic>=1.13.0,<2.0.0",
-    "passlib>=1.7.4,<2.0.0",
-    "bcrypt==4.0.1",
-    "pillow>=12.1.1,<13.0.0",
+    "alembic>=1.13.0,<1.19.0",
+    # Schedule triggers (TRG-2). Cron semantics live in primeagent-base only; the
+    # wfx component validates expressions syntactically so wfx keeps no cron dep.
+    "croniter>=2.0.0,<7.0.0",
+    "pillow>=12.3.0,<13.0.0",
     "docstring-parser>=0.16,<1.0.0",
-    "PyJWT>=2.12.1",
+    "PyJWT>=2.15.1,<3.0.0",  # CVE-2026-102266, CVE-2026-102267, CVE-2026-102271, CVE-2026-102272, CVE-2026-102274
     "pandas>=2.2.3",
     "multiprocess>=0.70.14,<1.0.0",
     "duckdb>=1.0.0,<2.0.0",
@@ -50,24 +64,27 @@ dependencies = [
     "jq>=1.7.0,<2.0.0; sys_platform != 'win32'",
     "nest-asyncio>=1.6.0,<2.0.0",
     "emoji>=2.12.0,<3.0.0",
-    "cryptography>=48.0.1",
+    "cryptography>=50.0.0",
     "asyncer>=0.0.5,<1.0.0",
     "pyperclip>=1.8.2,<2.0.0",
     "uncurl>=0.0.11,<1.0.0",
     "sentry-sdk[fastapi,loguru]>=2.5.1,<3.0.0",
     "chardet>=7.3.0",
-    "firecrawl-py>=1.0.16,<2.0.0",
     "opentelemetry-api>=1.30.0,<2.0.0",
     "opentelemetry-sdk>=1.30.0,<2.0.0",
     "opentelemetry-exporter-prometheus>=0.50b0,<1.0.0",
     "opentelemetry-exporter-otlp>=1.30.0,<2.0.0",
     "opentelemetry-instrumentation-fastapi>=0.50b0,<1.0.0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.50b0,<1.0.0",
     "opentelemetry-instrumentation-requests>=0.50b0,<1.0.0",
     "opentelemetry-instrumentation-urllib3>=0.50b0,<1.0.0",
+    # Process CPU, memory, GC and thread counts. Without it the only metrics the APM gets are
+    # request-shaped, so "is the service healthy" cannot be answered when nothing is failing yet.
+    "opentelemetry-instrumentation-system-metrics>=0.50b0,<1.0.0",
     "prometheus-client>=0.20.0,<1.0.0",
     "aiofiles>=24.1.0,<25.0.0",
-    "pip>=26.0.0,<27.0.0",
-    "setuptools>=80.0.0,<81.0.0",
+    "pip>=26.2.1,<27.0.0",
+    "setuptools>=83.0.0,<84.0.0",
     "nanoid>=2.0.0,<3.0.0",
     "filelock>=3.20.1,<4.0.0",
     "grandalf>=0.8.0,<1.0.0",
@@ -76,13 +93,15 @@ dependencies = [
     "assemblyai>=0.33.0,<1.0.0",
     "fastapi-pagination>=0.13.1,<1.0.0",
     "defusedxml>=0.7.1,<1.0.0",
-    "pypdf>=6.10.0,<7.0.0",
+    "pypdf>=6.19.0,<7.0.0",
     "validators>=0.34.0,<1.0.0",
     "networkx>=3.4.2,<4.0.0",
     "json-repair>=0.30.3,<1.0.0",
-    "mcp>=1.17.0,<2.0.0",
+    "mcp>=1.30.0,<2.0.0",
+    "a2a-sdk>=1.2.1,<2.0.0",
+    "ag-ui-protocol==0.1.18",
     "aiosqlite>=0.20.0,<1.0.0",
-    "greenlet>=3.5.0,<4.0.0",
+    "greenlet>=3.1.1,<4.0.0",
     "jsonquerylang>=1.1.1,<2.0.0",
     "sqlalchemy[aiosqlite]>=2.0.38,<3.0.0",
     'elevenlabs==1.58.1; python_version == "3.12"',
@@ -91,20 +110,34 @@ dependencies = [
     "ibm-watsonx-ai>=1.3.1,<2.0.0",
     "langchain-ibm~=1.1.0",
     "trustcall>=0.0.38,<1.0.0",
-    "langchain-chroma~=0.2.6",
     "jaraco-context>=6.1.0",
     "wheel>=0.46.2,<1.0.0",
-    "onnxruntime>=1.20,<1.24; python_version<'3.14'", # >=1.24 does not support Python 3.10; allow 1.23.x for agent-lifecycle-toolkit compatibility
+    "onnxruntime>=1.20,<1.24; python_version<'3.14'", # >=1.24 does not support Python 3.10
     "onnxruntime>=1.26; python_version>='3.14'",
     "dynaconf>=3.2.13,<4.0.0",
     "pyasn1>=0.6.3,<0.7.0",
     "langgraph-checkpoint>4.0.0,<5.0.0",
-    "transformers>=5.6.0,<6.0.0",
-]
-
-[tool.uv]
-override-dependencies = [
-    "litellm>=1.85.1,<2.0.0"
+    # CVE-2026-9856: reject path traversal when saving named chat templates (5.10.0 was yanked).
+    "transformers>=5.10.1,<6.0.0",
+    # Service-complete runtime dependencies. Provider component SDKs remain
+    # owned by wfx-* extension distributions.
+    "redis>=7.4.0,<8.0.0",
+    "langfuse~=3.8",
+    "langwatch~=0.10.0; python_version < '3.14'",
+    "langsmith>=0.3.42,<1.0.0",
+    "arize-phoenix-otel>=0.6.1",
+    "openinference-instrumentation-langchain>=0.1.29",
+    "opik>=2.0.0,<3.0.0",
+    # Opik installs LiteLLM even without the optional litellm extra.
+    # Block the compromised 1.107.0 release in published wheel metadata.
+    "litellm>=1.103.1,<2.0.0,!=1.104.0rc1,!=1.107.0",
+    # Newer Opik releases cap LiteLLM below its security floor on Python 3.10.
+    # Publish the compatible version constraint so fresh wheel installs stay valid.
+    "opik==2.2.7; python_version < '3.11'",
+    "traceloop-sdk>=0.43.1,<1.0.0",
+    "openlayer>=0.9.0,<1.0.0",
+    "kubernetes>=31.0.0,<33.0.0",
+    "aiobotocore>=3.7.0,<4.0.0",
 ]
 
 [dependency-groups]
@@ -167,11 +200,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.urls]
-Repository = "https://github.com/khulnasoft/primeagent"
+Repository = "https://github.com/khulnasoft-bot/primeagent"
 Documentation = "https://docs.prime.khulnasoft.com"
 # Optional dependencies
 [project.optional-dependencies]
 audio = [
+    "openai>=1.68.2,<3.0.0",
     "webrtcvad>=2.0.10",
 ]
 
@@ -185,13 +219,16 @@ local = [
     "ctransformers>=0.2"
 ]
 
+# Opt-in microVM sandbox backend for code-execution components (issue #12029).
+sandbox = ["wfx[sandbox]==1.13.0"]
+
 # Individual database providers
 couchbase = ["couchbase>=4.2.1"]
-cassandra = ["cassio>=0.1.7"]
+cassandra = ["wfx[cassandra]==1.13.0"]  # Compatibility spelling for the wfx-datastax extension.
 clickhouse = ["clickhouse-connect==0.7.19"]
 
 
-mongodb = ["pymongo>=4.10.1"]
+mongodb = ["pymongo>=4.18.2,<5.0.0"]
 supabase = ["supabase>=2.6.0,<3.0.0"]
 redis = ["redis>=7.4.0,<8.0.0"]
 elasticsearch = ["elasticsearch~=8.19", "langchain-elasticsearch~=1.0.0"]
@@ -204,24 +241,20 @@ faiss = [
 qdrant = ["qdrant-client>=1.12.0,<2.0.0"]
 qdrant-vectors = ["langchain-qdrant>=1.0.0,<2.0.0"]
 weaviate = ["weaviate-client>=4.10.2,<5.0.0"]
-chroma = [
-    "chromadb>=1.0.0,<2.0.0",
-    "langchain-chroma~=0.2.6"
-]
+# Retired in 1.13. Kept as an empty installation compatibility alias.
+chroma = []
 upstash = ["upstash-vector==0.6.0"]
 pinecone = ["langchain-pinecone~=0.2.13; python_version < '3.14'"]
 milvus = ["langchain-milvus~=0.3.2"]
 mongodb-vectors = ["langchain-mongodb>=0.11.0"]
-astradb = ["langchain-astradb~=1.0.0"]
+# astradb graduated to the standalone wfx-datastax bundle (a regular dep of
+# primeagent); langchain-astradb lives there now, not in primeagent-base.
 
 # Individual LLM providers
-openai = ["langchain-openai>=1.1.6", "openai>=1.68.2,<3.0.0"]
-anthropic = ["langchain-anthropic~=1.4.6"]
-cohere = ["langchain-cohere~=0.5.0"]
 google = [
     "langchain-google-genai~=4.1.2",
     "langchain-google-vertexai>=3.2.0",
-    "langchain-google-community~=3.0.2",
+    "langchain-google-community~=5.0.0",
     "langchain-google-calendar-tools~=0.0.1",
     "google-api-python-client~=2.161",
 ]
@@ -240,14 +273,14 @@ ctransformers = ["ctransformers>=0.2.10"]
 # which only supports Python 3.14 from pydantic 2.13 onward. Without this guard
 # the langfuse SDK raises pydantic.v1.errors.ConfigError on import in Python
 # 3.14 environments (e.g. the official Docker image), causing tracing to
-# silently no-op. See https://github.com/khulnasoft/primeagent/issues/13317.
+# silently no-op. See https://github.com/khulnasoft-bot/primeagent/issues/13317.
 langfuse = ["langfuse~=3.8", "pydantic>=2.13.0"]
 langwatch = ["langwatch~=0.10.0; python_version < '3.14'"]
 langsmith = ["langsmith>=0.3.42,<1.0.0"]
 arize = ["arize-phoenix-otel>=0.6.1"]
 
 # Individual document loaders
-pypdf = ["pypdf>=6.10.0,<7.0.0"]
+pypdf = ["pypdf>=6.19.0,<7.0.0"]
 docx = ["python-docx>=1.1.0"]
 pytube = ["pytube==15.0.0"]
 
@@ -255,24 +288,16 @@ pytube = ["pytube==15.0.0"]
 # crewai is commented out due to httpx version conflict
 # crewai = ["crewai>=0.126.0"]
 smolagents = ["smolagents>=1.8.0"]
-opendsstar = [
-    "OpenDsStar==1.0.26; python_version >= '3.11' and python_version < '3.14' and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
-]
 
 # Individual tools
-beautifulsoup = ["beautifulsoup4==4.12.3"]
+beautifulsoup = ["wfx==1.13.0"]  # beautifulsoup4 is now a hard wfx dependency
 serpapi = ["google-search-results>=2.4.1,<3.0.0"]
 google-api = ["google-api-python-client~=2.161"]
 wikipedia = ["wikipedia==1.4.0"]
 fake-useragent = ["fake-useragent>=2.0.0"]
 # duckduckgo: the runtime dep for the extracted wfx-duckduckgo bundle.
-# Public consumers should install wfx-duckduckgo directly (pip-installing
-# primeagent-base no longer pulls in ddgs by default).  The extra remains
-# defined here so docker/build_and_push_base.Dockerfile can route ddgs
-# through the locked sync (``uv sync --extra duckduckgo``) instead of an
-# unpinned ``uv pip install ddgs`` that would silently drift across
-# rebuilds.  Keep the version range in lockstep with the bundle's
-# pyproject so the lockfile resolves a single ddgs version.
+# Public consumers should install wfx-duckduckgo directly. The compatibility
+# extra remains so older explicit primeagent-base[duckduckgo] installs still work.
 duckduckgo = ["ddgs>=9.0.0"]
 yfinance = ["yfinance==0.2.50"]
 wolframalpha = ["wolframalpha==5.1.3"]
@@ -283,25 +308,32 @@ fastavro = [
     'fastavro==1.9.7; python_version < "3.13"',
     'fastavro>=1.9.8,<2.0.0; python_version >= "3.13"',
 ]
-gitpython = ["GitPython>=3.1.50"]
-nltk = ["nltk>=3.9.4"]
+gitpython = ["GitPython>=3.1.58"]
+nltk = ["nltk>=3.10.3"]
 lark = ["lark==1.2.2"]
 
 # Additional dependencies from requirements
-huggingface = ["huggingface-hub[inference]>=1.0.0,<2.0.0"]
-metaphor = ["metaphor-python==0.1.23"]
+huggingface = ["huggingface-hub>=1.0.0,<2.0.0"]
+# Backwards-compatible alias: the Exa Search component moved to the wfx-exa
+# bundle and now uses exa-py; metaphor-python is deprecated and unused.
+metaphor = ["exa-py>=1.14,<3"]
 metal = ["metal_sdk==2.5.1"]
 markup = ["MarkupSafe==3.0.2"]
-aws = ["boto3>=1.34.162,<2.0.0", "langchain-aws~=1.1.0"]
+# Deliberately retained after the wfx-amazon graduation: boto3 backs wfx's
+# synchronous S3 file helpers. The backend storage service uses aiobotocore.
+aws = ["boto3>=1.34.162,<2.0.0"]
 numexpr = ["numexpr>=2.10.2"]
 qianfan = ["qianfan==0.3.5"]
-pgvector = ["pgvector>=0.4.2"]
+pgvector = [
+    "pgvector>=0.4.2",
+    "psycopg[binary]>=3.1,<4.0",
+]
 litellm = [
-    "litellm>=1.85.1,<2.0.0",
+    "litellm>=1.103.1,<2.0.0,!=1.104.0rc1,!=1.107.0",
     # Runtime deps from litellm[proxy] that primeagent-ide hits when logging
     # to langfuse via litellm.proxy.proxy_server (issue #12228). The full
-    # [proxy] extra pins boto3==1.43.1, which conflicts with our aioboto3
-    # transitive cap, so we pull in just the missing modules instead.
+    # Pull in only the modules Primeagent uses from litellm[proxy] rather than
+    # its much larger dependency surface.
     "apscheduler>=3.10.4,<4.0.0",
     "cryptography",
 ]
@@ -309,10 +341,10 @@ zep = ["zep-python==2.0.2"]
 youtube = ["youtube-transcript-api>=1.0.0,<2.0.0"]
 markdown = ["Markdown>=3.8.0"]
 kubernetes = ["kubernetes==31.0.0"]
-json-repair = ["json_repair==0.30.3"]
+json-repair = ["json_repair>=0.60.1"]
 composio = [
-    "composio==0.9.2",
-    "composio-langchain==0.9.2"
+    "composio==0.16.0",
+    "composio-langchain==0.16.0"
 ]
 ragstack = ["ragstack-ai-knowledge-store==0.2.1; python_version < '3.13'"]
 opensearch = ["opensearch-py==2.8.0"]
@@ -321,29 +353,24 @@ mem0 = ["mem0ai>=2.0.2,<3.0.0"]
 needle = ["needle-python>=0.4.0"]
 sseclient = ["sseclient-py==1.8.0"]
 openinference = ["openinference-instrumentation-langchain>=0.1.29"]
-mcp = ["mcp>=1.17.0,<2.0.0"]
+mcp = ["mcp>=1.30.0,<2.0.0"]
 ag2 = ["ag2>=0.1.0"]
 scrapegraph = ["scrapegraph-py>=1.12.0"]
 apify = ["apify-client>=1.8.1"]
 spider = ["spider-client>=0.0.27,<1.0.0"]
 
-# ALTK (Agent Lifecycle Toolkit)
-# Updated to 0.10.1+ for PyTorch 2.6.0 compatibility (addresses torch.load RCE vulnerability)
-# Upper bound prevents breaking changes in future major versions
-# Excluded on macOS x86_64: PyTorch dropped Intel Mac wheel builds after v2.2.2
-# Python 3.14: agent-lifecycle-toolkit 0.10.x dropped its own <3.14 cap (now
-# requires-python >=3.10) and does not depend on OpenDsStar, so the python_version
-# gate is removed; the dependency tree resolves on 3.14 within the primeagent lock.
-altk = ["agent-lifecycle-toolkit>=0.10.1,<1.0; sys_platform != 'darwin' or platform_machine != 'x86_64'"]
+# Retired in 1.13.0. Keep the empty extra for installation compatibility.
+altk = []
 
 # Toolguard Integration
-toolguard = ["toolguard>=0.2.20,<1.0.0"]
+toolguard = ["wfx[toolguard]==1.13.0"]  # toolguard relocated to wfx
 
 # Additional LangChain integrations
 # Excluded on macOS x86_64: transitive torch dependency (via sentence-transformers) has no Intel Mac wheels
 langchain-huggingface = ["langchain-huggingface~=1.2.0; sys_platform != 'darwin' or platform_machine != 'x86_64'"]
 langchain-unstructured = ["langchain-unstructured~=1.0.0"]
-graph-retriever = ["langchain-graph-retriever==0.8.0", "graph-retriever==0.8.0"]
+# graph-retriever graduated to the standalone wfx-datastax bundle (a regular
+# dep of primeagent); langchain-graph-retriever / graph-retriever live there now.
 langchain-mcp-adapters = ["langchain-mcp-adapters>=0.1.14,<0.2.0"]
 
 # Additional monitoring
@@ -354,7 +381,7 @@ openlayer = ["openlayer>=0.9.0,<1.0.0"]
 # Document processing / OCR
 docling = [
     "docling-core>=2.77.0,<3.0.0",
-    "docling-slim[cli,convert-core,extract-core,feat-ocr-rapidocr,format-latex,format-office,format-pdf,format-web,models-local,service-client]>=2.36.1,<3.0.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "docling-slim[cli,convert-core,extract-core,feat-ocr-rapidocr,format-latex,format-office,format-pdf,format-web,models-local,service-client]>=2.132.0,<3.0.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
 docling-chunking = [
     "primeagent-base[docling]",
@@ -375,7 +402,7 @@ jigsawstack = ["jigsawstack==0.2.7"]
 assemblyai = ["assemblyai==0.35.1"]
 
 # Data processing
-datasets = ["datasets>2.14.7,<5.0.0"]
+datasets = ["datasets>2.14.7,<6.0.0"]
 fastparquet = ["fastparquet>=2024.11.0,<2025.0.0"]
 
 # Vision / ML
@@ -383,6 +410,11 @@ vlmrun = ["vlmrun[all]>=0.2.0"]
 cuga = [
     "cuga>=0.2.20,<0.3.0; sys_platform != 'darwin' and python_version < '3.14'",
     "cuga>=0.2.20,<0.3.0; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version < '3.14'",
+    # Temporary compatibility valve: newer langchain-litellm releases require cryptography<49.
+    "langchain-litellm==0.5.1; sys_platform != 'darwin' and python_version < '3.14'",
+    "langchain-litellm==0.5.1; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version < '3.14'",
+    "litellm>=1.103.1,<2.0.0,!=1.104.0rc1,!=1.107.0; sys_platform != 'darwin' and python_version < '3.14'",
+    "litellm>=1.103.1,<2.0.0,!=1.104.0rc1,!=1.107.0; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version < '3.14'",
 ]
 mlx = [
     "mlx>=0.29.0; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version >= '3.12'",
@@ -392,8 +424,12 @@ mlx = [
 # MCP
 fastmcp = ["fastmcp>=3.2.0"]
 
-# AWS extras
-aioboto3 = ["aioboto3>=15.2.0,<16.0.0"]
+# AWS async client. S3 storage uses aiobotocore directly so boto3 is no longer
+# constrained by aioboto3's exact pin to aiobotocore 2.25.1.
+aiobotocore = ["aiobotocore>=3.7.0,<4.0.0"]
+# Preserve the legacy extra name so existing primeagent-base[aioboto3] install
+# commands continue to enable Primeagent's async S3 backend.
+aioboto3 = ["aiobotocore>=3.7.0,<4.0.0"]
 
 # Astra
 astrapy = ["astrapy>=2.1.0,<3.0.0"]
@@ -404,131 +440,15 @@ gassist = ["gassist>=0.0.1; sys_platform == 'win32'"]
 # SDKs for IBM watsonx Orchestrate deployment adapter.
 ibm-watsonx-clients = [
     "ibm-cloud-sdk-core~=3.24.4",
-    "ibm-watsonx-orchestrate-core~=2.8.0; python_version >= '3.11' and python_version < '3.14'",
-    "ibm-watsonx-orchestrate-clients~=2.8.0; python_version >= '3.11' and python_version < '3.14'",
+    "ibm-watsonx-orchestrate-core~=2.12.0; python_version >= '3.11'",
+    "ibm-watsonx-orchestrate-clients~=2.12.0; python_version >= '3.11'",
 ]
 
-complete = [
-    "primeagent-base[couchbase]",
-    "primeagent-base[cassandra]",
-    "primeagent-base[clickhouse]",
-    "primeagent-base[mongodb]",
-    "primeagent-base[supabase]",
-    "primeagent-base[redis]",
-    "primeagent-base[elasticsearch]",
-    "primeagent-base[faiss]",
-    "primeagent-base[qdrant]",
-    "primeagent-base[qdrant-vectors]",
-    "primeagent-base[weaviate]",
-    "primeagent-base[chroma]",
-    "primeagent-base[upstash]",
-    "primeagent-base[pinecone]",
-    "primeagent-base[milvus]",
-    "primeagent-base[mongodb-vectors]",
-    "primeagent-base[astradb]",
-    "primeagent-base[openai]",
-    "primeagent-base[anthropic]",
-    "primeagent-base[cohere]",
-    "primeagent-base[google]",
-    "primeagent-base[ollama]",
-    "primeagent-base[nvidia]",
-    "primeagent-base[mistral]",
-    "primeagent-base[sambanova]",
-    "primeagent-base[groq]",
-    "primeagent-base[langfuse]",
-    "primeagent-base[langwatch]",
-    "primeagent-base[langsmith]",
-    "primeagent-base[arize]",
-    "primeagent-base[pypdf]",
-    "primeagent-base[docx]",
-    "primeagent-base[pytube]",
-    # "primeagent-base[crewai]",  # commented out due to httpx version conflict
-    "primeagent-base[smolagents]",
-    "primeagent-base[opendsstar]",
-    "primeagent-base[beautifulsoup]",
-    "primeagent-base[serpapi]",
-    "primeagent-base[google-api]",
-    "primeagent-base[wikipedia]",
-    "primeagent-base[fake-useragent]",
-    # duckduckgo was an extra of primeagent-base; it has been moved to
-    # the standalone wfx-duckduckgo bundle (now a regular dep of primeagent).
-    "primeagent-base[yfinance]",
-    "primeagent-base[wolframalpha]",
-    "primeagent-base[pyarrow]",
-    "primeagent-base[fastavro]",
-    "primeagent-base[gitpython]",
-    "primeagent-base[nltk]",
-    "primeagent-base[lark]",
-    "primeagent-base[huggingface]",
-    "primeagent-base[metaphor]",
-    "primeagent-base[metal]",
-    "primeagent-base[markup]",
-    "primeagent-base[aws]",
-    "primeagent-base[numexpr]",
-    "primeagent-base[qianfan]",
-    "primeagent-base[pgvector]",
-    "primeagent-base[litellm]",
-    "primeagent-base[zep]",
-    "primeagent-base[youtube]",
-    "primeagent-base[markdown]",
-    "primeagent-base[kubernetes]",
-    "primeagent-base[json-repair]",
-    "primeagent-base[composio]",
-    "primeagent-base[ragstack]",
-    "primeagent-base[opensearch]",
-    "primeagent-base[atlassian]",
-    "primeagent-base[mem0]",
-    "primeagent-base[needle]",
-    "primeagent-base[sseclient]",
-    "primeagent-base[openinference]",
-    "primeagent-base[mcp]",
-    "primeagent-base[ag2]",
-    "primeagent-base[scrapegraph]",
-    "primeagent-base[apify]",
-    "primeagent-base[spider]",
-    # ALTK
-    "primeagent-base[altk]",
-    # Toolguard
-    "primeagent-base[toolguard]",
-    # Additional LangChain integrations
-    "primeagent-base[langchain-huggingface]",
-    "primeagent-base[langchain-unstructured]",
-    "primeagent-base[graph-retriever]",
-    "primeagent-base[langchain-mcp-adapters]",
-    # Additional monitoring
-    "primeagent-base[opik]",
-    "primeagent-base[traceloop]",
-    "primeagent-base[openlayer]",
-    # Document processing / OCR
-    "primeagent-base[docling]",
-    "primeagent-base[easyocr]",
-    # Additional tools
-    "primeagent-base[cleanlab]",
-    "primeagent-base[twelvelabs]",
-    "primeagent-base[jigsawstack]",
-    "primeagent-base[assemblyai]",
-    # Data processing
-    "primeagent-base[datasets]",
-    "primeagent-base[fastparquet]",
-    # Vision / ML
-    "primeagent-base[vlmrun]",
-    "primeagent-base[cuga]",
-    "primeagent-base[mlx]",
-    # MCP
-    "primeagent-base[fastmcp]",
-    # AWS extras
-    "primeagent-base[aioboto3]",
-    # Astra
-    "primeagent-base[astrapy]",
-    # Windows-specific
-    "primeagent-base[gassist]",
-    # wxO deployment adapter,
-    "primeagent-base[ibm-watsonx-clients]"
-]
-
-all = [
-    "primeagent-base[complete]",
-]
+# Deprecated compatibility spellings for the 1.12 line. The base distribution
+# is service-complete without extras; retain these names so existing install
+# commands continue to resolve without changing the installed dependency set.
+complete = []
+all = []
 
 [project.scripts]
-primeagent-base = "primeagent.primeagent_launcher:main"
+primeagent = "primeagent.primeagent_launcher:main"

@@ -2,6 +2,9 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+
+pytest.importorskip("wfx_bundles")
+
 from pydantic.v1 import SecretStr
 from wfx.components.litellm.litellm_proxy import LiteLLMProxyComponent
 from wfx.inputs.inputs import IntInput, SecretStrInput, SliderInput, StrInput
@@ -40,6 +43,10 @@ class TestLiteLLMProxyComponent(ComponentTestBaseWithoutClient):
     @pytest.fixture
     def file_names_mapping(self):
         return []
+
+    @pytest.fixture
+    def skipped_outputs(self):
+        return dict.fromkeys(["model_output", "text_output"], "connects to a running LiteLLM proxy")
 
     def test_initialization(self, component_class):
         component = component_class()

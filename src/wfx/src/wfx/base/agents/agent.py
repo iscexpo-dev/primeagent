@@ -19,7 +19,6 @@ from wfx.inputs.inputs import InputTypes
 from wfx.io import BoolInput, HandleInput, IntInput, MessageInput
 from wfx.log.logger import logger
 from wfx.memory import delete_message
-from wfx.schema.content_block import ContentBlock
 from wfx.schema.data import Data
 from wfx.schema.log import OnTokenFunctionType
 from wfx.schema.message import Message
@@ -266,7 +265,12 @@ class LCAgentComponent(Component):
             sender=MESSAGE_SENDER_AI,
             sender_name=sender_name,
             properties={"icon": "Bot", "state": "partial"},
-            content_blocks=[ContentBlock(title="Agent Steps", contents=[])],
+            # `text=""` sentinel so MessageTable's no_content check accepts
+            # an in-flight agent message whose content_blocks haven't been
+            # populated yet. Mirrors ChatInput's convention.
+            text="",
+            # Flat chronological event log; see wfx.base.agents.events.
+            content_blocks=[],
             session_id=session_id or uuid.uuid4(),
         )
 
@@ -303,11 +307,13 @@ class LCAgentComponent(Component):
                 if msg_id:
                     await delete_message(id_=msg_id)
             await self._send_message_event(e.agent_message, category="remove_message")
-            logger.error(f"ExceptionWithMessageError: {e}")
+            # exception(), not error(f"...{e}"): this class's str() interpolates the model's
+            # partial completion, and passing the exception rather than formatting it is what
+            # gives the exported record an error.type to triage on.
+            logger.exception("Agent run failed after a partial message was emitted")
             raise
-        except Exception as e:
-            # Log or handle any other exceptions
-            logger.error(f"Error: {e}")
+        except Exception:
+            logger.exception("Agent run failed")
             raise
 
         # Extract accumulated token usage from callback handler
@@ -327,6 +333,19 @@ class LCAgentComponent(Component):
     @abstractmethod
     def create_agent_runnable(self) -> Runnable:
         """Create the agent."""
+
+    def resolve_duplicate_tool_names(self) -> None:
+        """Make the connected tools individually addressable by the LLM.
+
+        Two nodes of the same component type each derive the same tool name, so
+        without this the model cannot tell them apart and every call lands on
+        one of them. This agent is the first place the whole tool set is
+        visible, and names that do not collide are left untouched.
+        """
+        from wfx.base.tools.component_tool import disambiguate_tool_names
+
+        if getattr(self, "tools", None):
+            self.tools = disambiguate_tool_names(self.tools)
 
     def validate_tool_names(self) -> None:
         """Validate tool names to ensure they match the required pattern."""
@@ -355,6 +374,7 @@ class LCToolsAgentComponent(LCAgentComponent):
     ]
 
     def build_agent(self) -> AgentExecutor:
+        self.resolve_duplicate_tool_names()
         self.validate_tool_names()
         agent = self.create_agent_runnable()
         return AgentExecutor.from_agent_and_tools(

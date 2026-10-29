@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from wfx.base.models.anthropic_constants import ANTHROPIC_MODELS
 from wfx.base.models.google_generative_ai_constants import GOOGLE_GENERATIVE_AI_MODELS
@@ -46,6 +45,12 @@ class TestLanguageModelComponent(ComponentTestBaseWithoutClient):
         """Return the file names mapping for version-specific files."""
         # No version-specific files for this component
         return []
+
+    @pytest.fixture
+    def skipped_outputs(self):
+        return {
+            "text_output": "sends the prompt to a live LLM",
+        }
 
     @pytest.fixture
     def openai_api_key(self):
@@ -355,6 +360,8 @@ class TestLanguageModelComponent(ComponentTestBaseWithoutClient):
 
     async def test_google_live_api(self, component_class, google_api_key):
         """Test that the component can create a model with a real API key."""
+        chat_google_generative_ai = pytest.importorskip("langchain_google_genai").ChatGoogleGenerativeAI
+
         component = component_class(
             model=[
                 {
@@ -374,7 +381,7 @@ class TestLanguageModelComponent(ComponentTestBaseWithoutClient):
         )
 
         model = component.build_model()
-        assert isinstance(model, ChatGoogleGenerativeAI)
+        assert isinstance(model, chat_google_generative_ai)
 
     # ---------------------------------------------------------------------------
     # update_build_config field-visibility tests (#2 + #5)

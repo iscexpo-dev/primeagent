@@ -24,7 +24,7 @@ describe("getWidgetCode", () => {
       expect(code).toContain("<script");
       expect(code).toContain("src=");
       expect(code).toContain(
-        "https://cdn.jsdelivr.net/gh/khulnasoft/primeagent-embedded-chat",
+        "https://cdn.jsdelivr.net/gh/khulnasoft-bot/primeagent-embedded-chat",
       );
       expect(code).toContain("@v1.0.8");
       expect(code).toContain("</script>");
@@ -51,7 +51,7 @@ describe("getWidgetCode", () => {
       // Check for script tag
       expect(code).toContain("<script");
       expect(code).toContain(
-        "https://cdn.jsdelivr.net/gh/khulnasoft/primeagent-embedded-chat@v1.0.8",
+        "https://cdn.jsdelivr.net/gh/khulnasoft-bot/primeagent-embedded-chat@v1.0.8",
       );
 
       // Check for primeagent-chat component
@@ -75,7 +75,7 @@ describe("getWidgetCode", () => {
 
       // Should use multi-line format for non-copy mode
       expect(code).toContain("src=");
-      expect(code).toContain("https://cdn.jsdelivr.net/gh/khulnasoft");
+      expect(code).toContain("https://cdn.jsdelivr.net/gh/khulnasoft-bot");
       expect(code).toContain("build/static/js/bundle.min.js");
     });
 
@@ -87,7 +87,7 @@ describe("getWidgetCode", () => {
 
       // Should use single-line format for copy mode
       expect(code).toContain(
-        "https://cdn.jsdelivr.net/gh/khulnasoft/primeagent-embedded-chat@v1.0.8/dist/build/static/js/bundle.min.js",
+        "https://cdn.jsdelivr.net/gh/khulnasoft-bot/primeagent-embedded-chat@v1.0.8/dist/build/static/js/bundle.min.js",
       );
       expect(code).not.toContain("\nbuild/static");
     });
@@ -248,7 +248,7 @@ describe("getWidgetCode", () => {
 
       // Single-line CDN URL
       expect(code).toContain(
-        "https://cdn.jsdelivr.net/gh/khulnasoft/primeagent-embedded-chat@v1.0.8/dist/build/static/js/bundle.min.js",
+        "https://cdn.jsdelivr.net/gh/khulnasoft-bot/primeagent-embedded-chat@v1.0.8/dist/build/static/js/bundle.min.js",
       );
       expect(code).not.toContain("\nbuild/static");
     });

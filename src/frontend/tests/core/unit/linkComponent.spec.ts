@@ -6,7 +6,9 @@ import { extractAndCleanCode } from "../../utils/extract-and-clean-code";
 // TODO: This test might not be needed anymore
 test(
   "user should interact with link component",
-  { tag: ["@release", "@workspace"] },
+  {
+    tag: ["@release", "@workspace"],
+  },
   async ({ context, page }) => {
     await awaitBootstrapTest(page);
 
@@ -67,7 +69,7 @@ test(
     await page.locator('//*[@id="checkAndSaveBtn"]').click();
     await adjustScreenView(page, { numberOfZoomOut: 2 });
 
-    expect(await page.getByText("BUTTON").isVisible()).toBeTruthy();
+    await expect(page.getByTestId("title-button")).toBeVisible();
     expect(await page.getByText("Click me").isVisible()).toBeTruthy();
     expect(await page.getByTestId("link_link_link")).toBeEnabled();
     await page.getByTestId("link_link_link").click();

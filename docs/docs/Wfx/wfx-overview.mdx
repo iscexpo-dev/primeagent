@@ -1,0 +1,71 @@
+---
+title: About WFX
+slug: /wfx-overview
+---
+
+import Icon from "@site/src/components/icon";
+
+**WFX** (Primeagent Executor) is a lightweight CLI and Python library for running Primeagent flows without the full Primeagent application.
+
+Flows are built in the Primeagent visual builder, and then the flow JSON files are run with WFX.
+WFX executes flows statelessly from JSON files with minimal dependencies, no database, and no UI.
+
+WFX is similar to running Primeagent with `--backend-only`, but even more lightweight because the full Primeagent package and its dependencies do not need to be installed.
+
+If you're building flows in Primeagent with a `uv pip install primeagent` installation, you likely don't need to explore WFX, but if you're deploying and running flows from JSON files using other applications or environments, you'll find WFX is a powerful tool for executing flows.
+
+If you have installed Primeagent OSS version 1.6 or later, wfx is already included in your environment.
+
+## How WFX differs from Primeagent
+
+In Primeagent, you build and test flows in the visual builder, and the full application stores flows, messages, and users in a database.
+The same Primeagent server already uses WFX as its flow runtime.
+Installing WFX on its own decouples the runtime from the Primeagent UI and database.
+[`wfx run`](./wfx-run) executes a flow once from the command line and prints the result, and [`wfx serve`](./wfx-serve) exposes one or more flows as persistent HTTP endpoints.
+You still author flows in the Primeagent visual builder, and export the flows as JSON files.
+Standalone WFX is for executing flow JSON files without starting the Primeagent server or opening the visual editor.
+
+Under the hood, WFX uses a no-op database interface ([`NoopSession`](https://github.com/khulnasoft-bot/primeagent/blob/main/src/wfx/src/wfx/services/session.py)) instead of a real database. There is no `primeagent.db` file, and stateful operations such as saving flows, storing messages, and managing users do not persist. Operations that depend on `primeagent.db` will not work as they do in the full Primeagent application.
+
+## WFX commands
+
+WFX provides two sets of commands:
+
+**Runtime commands**, to run and serve flows locally:
+
+| Command | Description |
+|---|---|
+| [`wfx serve`](./wfx-serve) | Serve one or more flows as FastAPI endpoints at `/flows/{flow_id}/run` |
+| [`wfx run`](./wfx-run) | Execute a flow locally and stream results to `stdout` |
+| [`wfx prewarm`](./wfx-prewarm) | Pre-warm core component imports and optional flows before a fork or snapshot |
+| [`wfx-mcp`](./wfx-mcp) | Start an MCP server that connects to a running Primeagent instance |
+| `wfx observability doctor` | Send a probe span, metric, and log to the configured OTLP endpoint. See [OpenTelemetry](./observability-opentelemetry#verify-your-configuration). |
+
+For the WFX runtime commands, see [Run flows with WFX](./wfx-run) and [Serve flows with WFX](./wfx-serve).
+
+**Flow DevOps SDK commands**, to version, test, and deploy flows:
+
+| Command | Description |
+|---|---|
+| `wfx init` | Scaffold a versioned flow project with CI templates |
+| `wfx login` | Validate credentials against a remote Primeagent instance |
+| `wfx create` | Create a new flow JSON from a built-in or custom template |
+| `wfx validate` | Validate flow JSON before pushing |
+| `wfx requirements` | Generate `requirements.txt` from a flow's component dependencies |
+| `wfx status` | Compare local flow files against a remote Primeagent instance |
+| `wfx push` | Push flows to a remote instance by stable ID |
+| `wfx pull` | Pull flows from a remote instance to local files |
+| `wfx export` | Normalize flow JSON for clean git diffs |
+
+For the Flow DevOps SDK commands, see [Flow DevOps Toolkit SDK](/flow-devops-sdk).
+
+## See also
+
+- [Install WFX](./wfx-install)
+- [Run flows with WFX](./wfx-run)
+- [Serve flows with WFX](./wfx-serve)
+- [Pre-warm WFX](./wfx-prewarm)
+- [Build flows with the WFX MCP server](./wfx-mcp)
+- [Flow DevOps Toolkit SDK](./wfx-devops-sdk.mdx)
+- [WFX and Primeagent version compatibility](./wfx-compatibility)
+- [Extensions overview](./extensions-overview)

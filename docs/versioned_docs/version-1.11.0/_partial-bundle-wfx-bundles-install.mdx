@@ -1,0 +1,13 @@
+:::tip
+If you installed `wfx` directly with `uv pip install wfx`, install this provider from the long-tail metapackage:
+
+```bash
+uv pip install "wfx-bundles[<bundle>]"
+```
+
+Replace `<bundle>` with this page's provider name, for example `qdrant`.
+To install every long-tail provider at once, run `uv pip install "wfx[bundles]"`.
+See the [Bundle list](./extensions-bundle-list) for the exact extra name.
+
+If you installed Primeagent with `uv pip install primeagent`, these bundle components are already included.
+:::

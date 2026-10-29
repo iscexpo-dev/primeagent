@@ -3,7 +3,7 @@
   "sources": [
     {
       "tag": "v1.9.0",
-      "repo": "khulnasoft/primeagent",
+      "repo": "khulnasoft-bot/primeagent",
       "source_dir": "src/backend/base/primeagent/initial_setup/starter_projects",
       "files": {
         "basic_prompting.json": "Basic Prompting.json",

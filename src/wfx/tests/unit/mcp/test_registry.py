@@ -2,7 +2,85 @@
 
 from __future__ import annotations
 
+import pytest
 from wfx.mcp.registry import describe_component, load_registry, search_registry
+
+
+class TestDescribeConfigurationMetadata:
+    def test_exposes_options_defaults_and_bounds(self):
+        registry = {
+            "Example": {
+                "template": {
+                    "operator": {"type": "str", "options": ["equals", "contains"], "value": "equals", "required": True},
+                    "temperature": {
+                        "type": "float",
+                        "value": 0.0,
+                        "range_spec": {"min": 0.0, "max": 1.0, "step": 0.01, "step_type": "float", "other": "omit"},
+                    },
+                    "choice": {"type": "str", "options": ["known"], "combobox": True, "list": True, "value": []},
+                    "timeout": {"type": "duration", "options": ["Days"], "value": {"unit": "Days", "value": 3}},
+                }
+            }
+        }
+        fields = {field["name"]: field for field in describe_component(registry, "Example")["fields"]}
+        assert fields["operator"] == {
+            "name": "operator",
+            "type": "str",
+            "required": True,
+            "options": ["equals", "contains"],
+            "default": "equals",
+        }
+        assert fields["temperature"]["default"] == 0.0
+        assert fields["temperature"]["range_spec"] == {"min": 0.0, "max": 1.0, "step": 0.01, "step_type": "float"}
+        assert fields["choice"]["combobox"] is True
+        assert fields["choice"]["list"] is True
+        assert fields["timeout"]["default"] == {"unit": "Days", "value": 3}
+
+    def test_constrained_advanced_fields_are_described(self):
+        registry = {
+            "Example": {
+                "template": {
+                    "temperature": {
+                        "type": "slider",
+                        "advanced": True,
+                        "value": 0.1,
+                        "range_spec": {"min": 0, "max": 1},
+                    },
+                    "sender": {"type": "str", "advanced": True, "options": ["Machine", "User"], "value": "User"},
+                    "verbose": {"type": "bool", "advanced": True, "value": False},
+                    "input_value": {"type": "str", "value": ""},
+                }
+            }
+        }
+        described = describe_component(registry, "Example")
+        # `fields` keeps listing non-advanced fields only; advanced names stay a name list.
+        assert [field["name"] for field in described["fields"]] == ["input_value"]
+        assert described["advanced_fields"] == ["sender", "temperature", "verbose"]
+        constrained = {field["name"]: field for field in described["constrained_advanced_fields"]}
+        assert set(constrained) == {"temperature", "sender"}
+        assert constrained["temperature"] == {
+            "name": "temperature",
+            "type": "slider",
+            "default": 0.1,
+            "range_spec": {"min": 0, "max": 1},
+        }
+        assert constrained["sender"]["options"] == ["Machine", "User"]
+
+    @pytest.mark.parametrize(
+        ("name", "metadata"),
+        [
+            ("api_key", {}),
+            ("credential", {"password": True}),
+            ("credential", {"type": "SecretStr"}),
+            ("endpoint", {"load_from_db": True}),
+        ],
+    )
+    def test_omits_secret_defaults(self, name, metadata):
+        registry = {"Example": {"template": {name: {"type": "str", "value": "test-only-placeholder", **metadata}}}}
+        field = describe_component(registry, "Example")["fields"][0]
+        assert field["name"] == name
+        assert "default" not in field
+        assert "value" not in field
 
 
 class _StubClient:
@@ -45,6 +123,60 @@ class TestLoadRegistry:
         assert "version" not in registry
 
 
+class TestSearchRegistryQueryFilter:
+    """query= must match display_name and description, not just the class name.
+
+    Regression: SQLComponent's display_name is "SQL Database" and ChatInput's
+    is "Chat Input" — a natural-language query like "SQL Database" or "Chat
+    Input" is not a substring of the no-space class name (sqlcomponent /
+    chatinput), so callers searching by the name they actually see in the UI
+    got zero results even though the component exists.
+    """
+
+    def test_query_matches_display_name_with_spaces(self) -> None:
+        registry = {
+            "SQLComponent": {
+                "template": {},
+                "category": "data",
+                "display_name": "SQL Database",
+            },
+        }
+        names = {r["type"] for r in search_registry(registry, query="SQL Database")}
+        assert "SQLComponent" in names
+
+    def test_query_matches_description(self) -> None:
+        registry = {
+            "WebSearch": {
+                "template": {},
+                "category": "tools",
+                "display_name": "Web Search",
+                "description": "Search the web for results.",
+            },
+        }
+        names = {r["type"] for r in search_registry(registry, query="search the web")}
+        assert "WebSearch" in names
+
+    def test_query_still_matches_class_name(self) -> None:
+        """Regression: name-based matching must keep working alongside the new fields."""
+        registry = {
+            "ChatInput": {"template": {}, "category": "inputs", "display_name": "Chat Input"},
+            "Agent": {"template": {}, "category": "agents", "display_name": "Agent"},
+        }
+        names = {r["type"] for r in search_registry(registry, query="chatinput")}
+        assert names == {"ChatInput"}
+
+    def test_query_no_match_excludes_component(self) -> None:
+        registry = {
+            "SQLComponent": {
+                "template": {},
+                "category": "data",
+                "display_name": "SQL Database",
+            },
+        }
+        names = {r["type"] for r in search_registry(registry, query="nonexistent")}
+        assert names == set()
+
+
 class TestSearchRegistryCategoryFilter:
     async def test_category_filter_returns_matching_components(self) -> None:
         """search_registry(category=...) must return only components from that category."""
@@ -77,12 +209,15 @@ class TestDescribeComponentToolMode:
     """Tests for describe_component's component_as_tool detection.
 
     A component supports tool-mode whenever any INPUT field has
-    ``tool_mode=True`` — this matches the canonical heuristic in
-    ``Component._handle_tool_mode`` which serves as the runtime authority.
+    ``tool_mode=True`` or the class opts in via ``add_tool_output`` — together
+    those are ``Component._handle_tool_mode``, the runtime authority.
     Regression: previously the registry checked OUTPUTS for ``tool_mode``,
     which silently excluded most tool-capable components (FirecrawlScrapeApi,
     every component that follows the ``MessageTextInput(tool_mode=True)``
-    pattern) from the flow builder's tool wiring.
+    pattern) from the flow builder's tool wiring — and then, once the input
+    side was added, advertised a toolset for nearly everything, because
+    output-side ``tool_mode`` marks which outputs a toolset exposes rather
+    than whether the component has one.
     """
 
     def test_should_expose_component_as_tool_when_any_input_has_tool_mode(self) -> None:
@@ -147,18 +282,39 @@ class TestDescribeComponentToolMode:
 
         assert any(o["name"] == "component_as_tool" for o in result["outputs"])
 
-    def test_should_still_expose_component_as_tool_when_output_carries_tool_mode_flag(self) -> None:
-        """Backward compat: if some component sets tool_mode on an output, keep working."""
+    def test_should_not_expose_component_as_tool_when_only_an_output_carries_tool_mode(self) -> None:
+        """Output-side tool_mode is not a capability signal.
+
+        ``Output.tool_mode`` defaults to True, so ordinary components such as
+        ChatInput carry it. Reading it as the capability advertised a toolset
+        output that ``Component._handle_tool_mode`` never creates.
+        """
         registry = {
-            "LegacyTool": {
-                "outputs": [{"name": "result", "types": ["Tool"], "tool_mode": True}],
-                "template": {},
+            "PlainComponent": {
+                "outputs": [{"name": "result", "types": ["Data"], "tool_mode": True}],
+                "template": {"value": {"type": "str", "show": True}},
             }
         }
 
-        result = describe_component(registry, "LegacyTool")
+        result = describe_component(registry, "PlainComponent")
 
-        assert any(o["name"] == "component_as_tool" for o in result["outputs"])
+        assert not any(o["name"] == "component_as_tool" for o in result["outputs"])
+
+    def test_should_expose_component_as_tool_when_class_declares_add_tool_output(self) -> None:
+        """RunFlow-shaped: no tool_mode input, explicit add_tool_output opt-in."""
+        registry = {
+            "RunFlow": {
+                "outputs": [{"name": "flow_outputs", "types": ["Data"]}],
+                "template": {},
+                "add_tool_output": True,
+            }
+        }
+
+        result = describe_component(registry, "RunFlow")
+
+        tool_output = next(o for o in result["outputs"] if o["name"] == "component_as_tool")
+        assert tool_output["types"] == ["Tool"]
+        assert "tool inputs" not in tool_output["description"]
 
     def test_should_include_input_names_in_component_as_tool_description(self) -> None:
         """Include tool-mode input names in the component_as_tool description.
@@ -242,3 +398,93 @@ class TestSearchRegistryLegacyFilter:
         result = describe_component(registry, "Calculator")
         assert result["type"] == "Calculator"
         assert result.get("legacy") is True
+
+
+class TestDescribeComponentLoopInputs:
+    """allows_loop outputs double as loop-feedback connection targets.
+
+    describe_component must surface them as inputs (and flag the output)
+    so the agent can discover that e.g. Loop.item accepts the loop body's
+    tail edge — otherwise loop flows are undiscoverable by the LLM.
+    """
+
+    def _registry_with_loop(self) -> dict:
+        return {
+            "LoopComponent": {
+                "display_name": "Loop",
+                "description": "Iterates over a list.",
+                "category": "flow_controls",
+                "outputs": [
+                    {
+                        "name": "item",
+                        "types": ["Data", "JSON"],
+                        "selected": "Data",
+                        "allows_loop": True,
+                        "loop_types": ["Message"],
+                    },
+                    {"name": "done", "types": ["DataFrame", "Table"]},
+                ],
+                "template": {
+                    "data": {
+                        "display_name": "Inputs",
+                        "type": "other",
+                        "input_types": ["DataFrame", "Table", "Data", "Message"],
+                    },
+                },
+            },
+        }
+
+    def test_loop_output_is_listed_as_loop_input(self) -> None:
+        result = describe_component(self._registry_with_loop(), "LoopComponent")
+
+        loop_inputs = [i for i in result["inputs"] if i.get("type") == "loop"]
+        assert len(loop_inputs) == 1
+        assert loop_inputs[0]["name"] == "item"
+        assert loop_inputs[0]["input_types"] == ["Data", "Message"]
+
+    def test_loop_output_is_flagged(self) -> None:
+        result = describe_component(self._registry_with_loop(), "LoopComponent")
+
+        item = next(o for o in result["outputs"] if o["name"] == "item")
+        assert item.get("allows_loop") is True
+        done = next(o for o in result["outputs"] if o["name"] == "done")
+        assert "allows_loop" not in done
+
+    def test_regular_inputs_unchanged(self) -> None:
+        result = describe_component(self._registry_with_loop(), "LoopComponent")
+
+        regular = [i for i in result["inputs"] if i.get("type") != "loop"]
+        assert [i["name"] for i in regular] == ["data"]
+
+    def test_loop_input_skipped_when_template_input_has_same_name(self) -> None:
+        # Mirrors connect.py's priority: the template input wins on a name
+        # collision, so describe must not list the same port twice.
+        registry = {
+            "CollidingPorts": {
+                "display_name": "Colliding Ports",
+                "category": "flow_controls",
+                "outputs": [
+                    {
+                        "name": "item",
+                        "types": ["Data"],
+                        "selected": "Data",
+                        "allows_loop": True,
+                        "loop_types": ["Message"],
+                    },
+                ],
+                "template": {
+                    "item": {
+                        "display_name": "Item",
+                        "type": "str",
+                        "input_types": ["Message"],
+                    },
+                },
+            },
+        }
+
+        result = describe_component(registry, "CollidingPorts")
+
+        item_inputs = [i for i in result["inputs"] if i["name"] == "item"]
+        assert len(item_inputs) == 1
+        assert item_inputs[0]["input_types"] == ["Message"]
+        assert item_inputs[0].get("type") != "loop"

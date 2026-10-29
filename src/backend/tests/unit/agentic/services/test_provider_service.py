@@ -15,6 +15,20 @@ from primeagent.agentic.services.provider_service import (
     get_default_model,
     get_enabled_providers_for_user,
 )
+from wfx.services.model_provider_policy import (
+    ModelProviderPolicyContext,
+    ModelProviderPolicyPurpose,
+    ModelProviderPolicySnapshot,
+    reset_current_model_provider_policy_context,
+    set_current_model_provider_policy_context,
+)
+
+_DENIED_PROVIDER_SERVICE_CATALOG_CALLS: list[None] = []
+
+
+def _denied_provider_service_catalog_loader():
+    _DENIED_PROVIDER_SERVICE_CATALOG_CALLS.append(None)
+    return [{"name": "blocked-model", "model_type": "llm"}]
 
 
 class TestPreferredProviders:
@@ -185,6 +199,62 @@ class TestGetEnabledProvidersForUser:
         assert result == ([], {})
 
     @pytest.mark.asyncio
+    async def test_scoped_policy_denial_happens_before_provider_credentials_are_read(self):
+        """A denied Assistant flow must not inspect the user's provider variables."""
+        from primeagent.services.variable.service import DatabaseVariableService
+
+        user_id = UUID("12345678-1234-5678-1234-567812345678")
+        project_id = UUID("22345678-1234-5678-1234-567812345678")
+        workspace_id = UUID("32345678-1234-5678-1234-567812345678")
+        mock_db_service = MagicMock(spec=DatabaseVariableService)
+        mock_db_service.get_all = AsyncMock(side_effect=AssertionError("credentials read before policy denial"))
+
+        async def deny_all(*, user_id, providers, purpose, attributes=None):
+            assert attributes is None
+            assert set(providers) == {"OpenAI"}
+            candidates = frozenset({"openai"})
+            return ModelProviderPolicySnapshot(
+                context=ModelProviderPolicyContext(user_id=user_id),
+                purpose=purpose,
+                candidate_provider_ids=candidates,
+                allowed_provider_ids=frozenset(),
+            )
+
+        token = set_current_model_provider_policy_context(
+            user_id=user_id,
+            attributes={
+                "provider_scope_required": True,
+                "project_id": project_id,
+                "workspace_id": workspace_id,
+            },
+        )
+        try:
+            with (
+                patch(
+                    "primeagent.agentic.services.provider_service.get_variable_service", return_value=mock_db_service
+                ),
+                patch(
+                    "primeagent.agentic.services.provider_service.get_model_provider_variable_mapping",
+                    return_value={"OpenAI": "OPENAI_API_KEY"},
+                ),
+                patch(
+                    "primeagent.agentic.services.provider_service._get_registered_provider_names",
+                    return_value=["OpenAI"],
+                ),
+                patch(
+                    "primeagent.agentic.services.provider_service.aresolve_model_provider_policy",
+                    side_effect=deny_all,
+                ),
+            ):
+                enabled, status = await get_enabled_providers_for_user(user_id, MagicMock())
+        finally:
+            reset_current_model_provider_policy_context(token)
+
+        assert enabled == []
+        assert status == {}
+        mock_db_service.get_all.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_should_return_empty_when_no_credentials(self):
         """Should return no enabled providers when user has variables but none are credentials."""
         from primeagent.services.variable.service import DatabaseVariableService
@@ -228,6 +298,10 @@ class TestGetEnabledProvidersForUser:
                 "primeagent.agentic.services.provider_service.get_model_provider_variable_mapping",
                 return_value={"Anthropic": "ANTHROPIC_API_KEY", "OpenAI": "OPENAI_API_KEY"},
             ),
+            patch(
+                "primeagent.agentic.services.provider_service._get_registered_provider_names",
+                return_value=["Anthropic", "OpenAI"],
+            ),
             patch("primeagent.agentic.services.provider_service.os.getenv", return_value=None),
         ):
             enabled, status = await get_enabled_providers_for_user("user-1", mock_session)
@@ -260,6 +334,10 @@ class TestGetEnabledProvidersForUser:
                 "primeagent.agentic.services.provider_service.get_model_provider_variable_mapping",
                 return_value={"Anthropic": "ANTHROPIC_API_KEY", "OpenAI": "OPENAI_API_KEY"},
             ),
+            patch(
+                "primeagent.agentic.services.provider_service._get_registered_provider_names",
+                return_value=["Anthropic", "OpenAI"],
+            ),
         ):
             enabled, status = await get_enabled_providers_for_user("user-1", mock_session)
 
@@ -284,6 +362,161 @@ class TestGetEnabledProvidersForUser:
 
         assert enabled_providers == []
         assert all(not v for v in provider_status.values())
+
+    @pytest.mark.asyncio
+    async def test_policy_hidden_provider_is_absent_from_enabled_and_status(self):
+        from primeagent.services.variable.service import DatabaseVariableService
+
+        variables = []
+        for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+            variable = MagicMock()
+            variable.name = name
+            variables.append(variable)
+        mock_db_service = MagicMock(spec=DatabaseVariableService)
+        mock_db_service.get_all = AsyncMock(return_value=variables)
+        policy = MagicMock()
+        policy.filter.side_effect = lambda providers: [provider for provider in providers if provider == "OpenAI"]
+
+        with (
+            patch("primeagent.agentic.services.provider_service.get_variable_service", return_value=mock_db_service),
+            patch(
+                "primeagent.agentic.services.provider_service.get_model_provider_variable_mapping",
+                return_value={"OpenAI": "OPENAI_API_KEY", "Anthropic": "ANTHROPIC_API_KEY"},
+            ),
+            patch(
+                "primeagent.agentic.services.provider_service._get_registered_provider_names",
+                return_value=["OpenAI", "Anthropic"],
+            ),
+            patch(
+                "primeagent.agentic.services.provider_service.get_provider_required_variable_keys",
+                side_effect=lambda provider: [f"{provider.upper()}_API_KEY"],
+            ),
+            patch(
+                "primeagent.agentic.services.provider_service.aresolve_model_provider_policy",
+                new=AsyncMock(return_value=policy),
+            ) as resolve_policy,
+        ):
+            enabled, provider_status = await get_enabled_providers_for_user("user-1", MagicMock())
+
+        assert enabled == ["OpenAI"]
+        assert provider_status == {"OpenAI": True}
+        assert resolve_policy.await_args.kwargs["purpose"] is ModelProviderPolicyPurpose.CONFIGURE
+
+    @pytest.mark.asyncio
+    async def test_runtime_provider_discovery_uses_use_policy(self):
+        """Runtime discovery authorizes provider use; check-config remains configuration discovery."""
+        from primeagent.services.variable.service import DatabaseVariableService
+
+        variable = MagicMock(name="OPENAI_API_KEY")
+        variable.name = "OPENAI_API_KEY"
+        mock_db_service = MagicMock(spec=DatabaseVariableService)
+        mock_db_service.get_all = AsyncMock(return_value=[variable])
+        policy = MagicMock()
+        policy.filter.side_effect = list
+
+        with (
+            patch("primeagent.agentic.services.provider_service.get_variable_service", return_value=mock_db_service),
+            patch(
+                "primeagent.agentic.services.provider_service.get_model_provider_variable_mapping",
+                return_value={"OpenAI": "OPENAI_API_KEY"},
+            ),
+            patch(
+                "primeagent.agentic.services.provider_service._get_registered_provider_names",
+                return_value=["OpenAI"],
+            ),
+            patch(
+                "primeagent.agentic.services.provider_service.get_provider_required_variable_keys",
+                return_value=["OPENAI_API_KEY"],
+            ),
+            patch(
+                "primeagent.agentic.services.provider_service.aresolve_model_provider_policy",
+                new=AsyncMock(return_value=policy),
+            ) as resolve_policy,
+        ):
+            enabled, status = await get_enabled_providers_for_user(
+                "user-1",
+                MagicMock(),
+                purpose=ModelProviderPolicyPurpose.USE,
+            )
+
+        assert enabled == ["OpenAI"]
+        assert status == {"OpenAI": True}
+        assert resolve_policy.await_args.kwargs["purpose"] is ModelProviderPolicyPurpose.USE
+
+    @pytest.mark.asyncio
+    async def test_credentialless_extension_provider_is_enabled(self):
+        from primeagent.services.variable.service import DatabaseVariableService
+
+        mock_db_service = MagicMock(spec=DatabaseVariableService)
+        mock_db_service.get_all = AsyncMock(return_value=[])
+        policy = MagicMock()
+        policy.filter.side_effect = list
+
+        with (
+            patch("primeagent.agentic.services.provider_service.get_variable_service", return_value=mock_db_service),
+            patch("primeagent.agentic.services.provider_service.get_model_provider_variable_mapping", return_value={}),
+            patch(
+                "primeagent.agentic.services.provider_service._get_registered_provider_names",
+                return_value=["AmbientAuthCo"],
+            ),
+            patch("primeagent.agentic.services.provider_service.is_api_key_optional", return_value=True),
+            patch(
+                "primeagent.agentic.services.provider_service.get_provider_required_variable_keys",
+                return_value=[],
+            ),
+            patch(
+                "primeagent.agentic.services.provider_service.aresolve_model_provider_policy",
+                new=AsyncMock(return_value=policy),
+            ),
+        ):
+            enabled, provider_status = await get_enabled_providers_for_user("user-1", MagicMock())
+
+        assert enabled == ["AmbientAuthCo"]
+        assert provider_status == {"AmbientAuthCo": True}
+
+    @pytest.mark.asyncio
+    async def test_blocked_extension_catalog_loader_is_not_executed(self):
+        from primeagent.services.variable.service import DatabaseVariableService
+        from wfx.base.models.provider_registry import ProviderSpec, register_provider, unregister_provider
+
+        provider = "Denied Provider Service Extension"
+        register_provider(
+            ProviderSpec(
+                name=provider,
+                provider_id="denied-provider-service-extension",
+                metadata={
+                    "icon": "Bot",
+                    "variables": [],
+                    "mapping": {"model_class": "ChatOpenAI", "model_param": "model"},
+                },
+                api_key_required=False,
+                catalog_loader=f"{__name__}:_denied_provider_service_catalog_loader",
+            )
+        )
+        _DENIED_PROVIDER_SERVICE_CATALOG_CALLS.clear()
+        mock_db_service = MagicMock(spec=DatabaseVariableService)
+        mock_db_service.get_all = AsyncMock(return_value=[])
+        policy = MagicMock()
+        policy.filter.side_effect = lambda providers: [candidate for candidate in providers if candidate == "OpenAI"]
+
+        try:
+            with (
+                patch(
+                    "primeagent.agentic.services.provider_service.get_variable_service", return_value=mock_db_service
+                ),
+                patch(
+                    "primeagent.agentic.services.provider_service.aresolve_model_provider_policy",
+                    new=AsyncMock(return_value=policy),
+                ),
+                patch("primeagent.agentic.services.provider_service.os.getenv", return_value=None),
+            ):
+                enabled, provider_status = await get_enabled_providers_for_user("user-1", MagicMock())
+        finally:
+            unregister_provider(provider)
+
+        assert provider not in enabled
+        assert provider not in provider_status
+        assert _DENIED_PROVIDER_SERVICE_CATALOG_CALLS == []
 
 
 class TestBugsAndEdgeCases:
@@ -379,6 +612,10 @@ class TestBugsAndEdgeCases:
             patch(
                 "primeagent.agentic.services.provider_service.get_model_provider_variable_mapping",
                 return_value={"NoKeysProvider": None, "Anthropic": "ANTHROPIC_API_KEY"},
+            ),
+            patch(
+                "primeagent.agentic.services.provider_service._get_registered_provider_names",
+                return_value=["NoKeysProvider", "Anthropic"],
             ),
             patch(
                 "primeagent.agentic.services.provider_service.get_provider_required_variable_keys",

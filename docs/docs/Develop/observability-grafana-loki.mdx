@@ -1,0 +1,63 @@
+---
+title: Grafana Loki
+slug: /observability-grafana-loki
+---
+
+This demonstration scrapes Primeagent log files with [Grafana Alloy](https://grafana.com/oss/alloy/), and then sends JSON logs to [Grafana Loki](https://grafana.com/oss/loki/) to be viewed in a Grafana dashboard.
+
+It is _not_ OpenTelemetry.
+For traces, metrics, and OTLP logs to Grafana Cloud or an OpenTelemetry Collector, see [OpenTelemetry](./observability-opentelemetry.mdx).
+
+This page demonstrates how to connect Primeagent to the [reference Grafana stack](https://github.com/khulnasoft-bot/primeagent/tree/main/deploy/observability/grafana-loki) shipped with the Primeagent repository.
+For more information, see the [README](https://github.com/khulnasoft-bot/primeagent/tree/main/deploy/observability/grafana-loki).
+
+Grafana Alloy replaced [Promtail](https://grafana.com/docs/alloy/latest/set-up/migrate/from-promtail/), which reached end of life on March 2, 2026.
+
+To consume structured Primeagent logs with other ingestion providers, see [Logs](/logging).
+
+## Prerequisites
+
+- [Clone the Primeagent repository](/contributing-how-to-contribute#install-primeagent-from-source) to access the [reference Grafana stack](https://github.com/khulnasoft-bot/primeagent/tree/main/deploy/observability/grafana-loki). If you are using your own Grafana and Loki instances, cloning the repository is not required.
+- [Docker and Docker Compose](https://docs.docker.com/)
+
+## Configure environment variables
+
+1. In the root folder of your Primeagent application, edit your existing `.env` file or create a new one.
+2. Add the following environment variables. Replace the placeholders with the values for your deployment:
+
+   ```text
+   PRIMEAGENT_LOG_ENV=container
+   PRIMEAGENT_LOG_LEVEL=INFO
+   PRIMEAGENT_LOG_FILE=/var/log/primeagent/primeagent.log
+   PRIMEAGENT_SERVICE_NAME=primeagent
+   PRIMEAGENT_VERSION=1.10.0
+   PRIMEAGENT_ENVIRONMENT=production
+   ```
+
+   Setting `PRIMEAGENT_LOG_ENV=container` switches structlog's terminal processor to [`JSONRenderer`](https://www.structlog.org/en/stable/api.html#structlog.processors.JSONRenderer), so every line written to stdout is a JSON object containing the event message, level, timestamp, logger name, exception structure, and service metadata. For more information, see [Logs](/logging).
+
+   The shipped Alloy configuration scrapes `*.log` files from a directory rather than stdout. `PRIMEAGENT_LOG_FILE` must point at a file inside the directory that Alloy watches. Set `PRIMEAGENT_LOG_DIR` to that same directory so Primeagent creates the file in the right place.
+
+3. Start the reference Loki + Alloy + Grafana stack from the repository:
+
+   ```bash
+   cd deploy/observability/grafana-loki
+   export PRIMEAGENT_LOG_DIR=/var/log/primeagent
+   docker compose up -d
+   ```
+
+4. Launch Primeagent with your `.env` file:
+
+   ```bash
+   uv run primeagent run --env-file .env
+   ```
+
+5. Run a flow in Primeagent to generate log traffic.
+
+6. Open Grafana at `http://localhost:3000` and navigate to **Dashboards** > **Primeagent Logs** to view structured log output, including panels for structured tracebacks, PII redaction, stdlib library output, and service/environment/version coverage.
+
+## See also
+
+* [OpenTelemetry](./observability-opentelemetry.mdx)
+* [Logs](/logging)
+* [Logs endpoints](/api-logs)

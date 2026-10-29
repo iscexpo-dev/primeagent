@@ -9,12 +9,13 @@ and vector access to the configured backend registry entry.
 
 The rewritten suite covers the actual retrieval contract:
 
-* ``_get_kb_metadata`` reading ``embedding_metadata.json``.
+* ``_get_kb_metadata`` reading the ``knowledge_base`` row.
 * ``_resolve_model_selection`` preferring ``model_selection`` over
   the legacy string fields, with a clear error when neither is
   present and the string doesn't map to a current catalog entry.
 * ``retrieve_data`` orchestrating ``get_embeddings`` +
-  backend-registry ``similarity_search`` against the right KB path.
+  backend-registry ``similarity_search`` against the right KB path
+  through the owning knowledge base's guarded storage generation.
 * User-scoping + required-field guards that make retrieval safe
   across sessions.
 """
@@ -29,7 +30,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from wfx.base.knowledge_bases.backends import ChromaLocalBackend
 from wfx.base.knowledge_bases.knowledge_base_utils import get_knowledge_bases
 from wfx.components.files_and_knowledge.retrieval import KnowledgeBaseComponent
 
@@ -62,21 +62,35 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
         return KnowledgeBaseComponent
 
     @pytest.fixture(autouse=True)
-    def mock_knowledge_base_path(self, tmp_path):
-        """Pin the KB root at a fresh tmp dir for every test."""
+    def mock_knowledge_base_path(self, tmp_path, monkeypatch, active_user):  # noqa: ARG002 - orders app startup
+        """Pin the KB root at a fresh tmp dir for every test.
+
+        The user fixture starts the app before we patch its settings service.
+        Local storage path resolution goes through
+        ``KBStorageHelper.get_root_path``, which reads the setting live, so the
+        setting is what has to move — patching the wfx module-level cache alone
+        would leave the two disagreeing.
+        """
+        from primeagent.services.deps import get_settings_service
+
+        monkeypatch.setattr(get_settings_service().settings, "knowledge_bases_dir", str(tmp_path))
         with patch("wfx.components.files_and_knowledge._kb_paths._KNOWLEDGE_BASES_ROOT_PATH", tmp_path):
             yield
 
     @pytest.fixture
-    def default_kwargs(self, tmp_path, active_user):
-        kb_name = "test_kb"
-        kb_path = tmp_path / active_user.username / kb_name
-        kb_path.mkdir(parents=True, exist_ok=True)
+    async def default_kwargs(self, tmp_path, active_user, mock_knowledge_base_path):  # noqa: ARG002 - orders storage root
+        """Seed the KB's ``knowledge_base`` row — the sole authority for its config.
 
-        metadata = {
-            "embedding_provider": "HuggingFace",
-            "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-            "model_selection": {
+        Creation initializes the UUID-routed SQLite store. No metadata sidecar
+        is written because the database row owns the routing information.
+        """
+        from primeagent.api.utils import knowledge_base_service
+
+        kb_name = "test_kb"
+        await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name=kb_name,
+            model_selection={
                 "name": "sentence-transformers/all-MiniLM-L6-v2",
                 "provider": "HuggingFace",
                 "metadata": {
@@ -84,10 +98,8 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
                     "param_mapping": {"model_name": "model"},
                 },
             },
-            "chunk_size": 1000,
-            "created_at": "2026-04-01T00:00:00Z",
-        }
-        (kb_path / "embedding_metadata.json").write_text(json.dumps(metadata))
+            chunk_size=1000,
+        )
 
         return {
             "knowledge_base": kb_name,
@@ -103,19 +115,29 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
         """New-style component: no legacy filenames."""
         return []
 
+    @pytest.fixture
+    def skipped_outputs(self):
+        return {
+            "retrieve_data": "embeds the query with a live embedding provider",
+        }
+
     # ---- update_build_config ----------------------------------------
 
     async def test_get_knowledge_bases_utility(self, tmp_path, active_user):
-        (tmp_path / active_user.username / "kb1").mkdir(parents=True, exist_ok=True)
-        (tmp_path / active_user.username / "kb2").mkdir(parents=True, exist_ok=True)
-        (tmp_path / active_user.username / ".hidden").mkdir(parents=True, exist_ok=True)
+        """The dropdown lists rows, not directories."""
+        from primeagent.api.utils import knowledge_base_service
 
-        kb_list = await get_knowledge_bases(tmp_path, user_id=active_user.id)
+        # Directories alone are invisible; only rows appear.
+        (tmp_path / active_user.username / "dir_without_row").mkdir(parents=True, exist_ok=True)
+        await knowledge_base_service.create_record(user_id=active_user.id, name="kb1")
+        await knowledge_base_service.create_record(user_id=active_user.id, name="kb2")
+
+        kb_list = await get_knowledge_bases(user_id=active_user.id)
 
         assert "test_kb" in kb_list
         assert "kb1" in kb_list
         assert "kb2" in kb_list
-        assert ".hidden" not in kb_list
+        assert "dir_without_row" not in kb_list
 
     async def test_get_knowledge_bases_db_first_hides_stale_disk_dirs(self, tmp_path, active_user):
         """DB-first listing hides on-disk dirs that have no matching DB row.
@@ -136,13 +158,13 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
         (tmp_path / active_user.username / "stale_dir").mkdir(parents=True, exist_ok=True)
         await knowledge_base_service.create_record(user_id=active_user.id, name="real_kb")
 
-        kb_list = await get_knowledge_bases(tmp_path, user_id=active_user.id)
+        kb_list = await get_knowledge_bases(user_id=active_user.id)
 
         assert "real_kb" in kb_list
         # ``stale_dir`` has no DB row → it's a phantom and must not show up.
         assert "stale_dir" not in kb_list
 
-    async def test_get_knowledge_bases_skips_memory_base_associated_kbs(self, tmp_path, active_user):
+    async def test_get_knowledge_bases_skips_memory_base_associated_kbs(self, active_user):
         """Memory-base-associated KBs are filtered out of the generic KB list.
 
         Matches the listing endpoint's behavior — those KBs are exposed
@@ -153,16 +175,18 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
         await knowledge_base_service.create_record(user_id=active_user.id, name="regular_kb")
         await knowledge_base_service.create_record(user_id=active_user.id, name="memory_kb", source_types=["memory"])
 
-        kb_list = await get_knowledge_bases(tmp_path, user_id=active_user.id)
+        kb_list = await get_knowledge_bases(user_id=active_user.id)
 
         assert "regular_kb" in kb_list
         assert "memory_kb" not in kb_list
 
-    async def test_update_build_config_populates_options(self, component_class, default_kwargs, tmp_path, active_user):
+    async def test_update_build_config_populates_options(self, component_class, default_kwargs, active_user):
+        from primeagent.api.utils import knowledge_base_service
+
         component = component_class(**default_kwargs)
 
-        (tmp_path / active_user.username / "kb1").mkdir(parents=True, exist_ok=True)
-        (tmp_path / active_user.username / "kb2").mkdir(parents=True, exist_ok=True)
+        await knowledge_base_service.create_record(user_id=active_user.id, name="kb1")
+        await knowledge_base_service.create_record(user_id=active_user.id, name="kb2")
 
         build_config = {"knowledge_base": {"value": "test_kb", "options": []}}
         result = await component.update_build_config(build_config, None, "knowledge_base")
@@ -179,28 +203,32 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
 
     # ---- _get_kb_metadata --------------------------------------------
 
-    def test_get_kb_metadata_happy_path(self, component_class, default_kwargs, active_user):
+    async def test_get_kb_metadata_happy_path(self, component_class, default_kwargs):
         component = component_class(**default_kwargs)
-        kb_path = Path(default_kwargs["kb_root_path"]) / active_user.username / default_kwargs["knowledge_base"]
-        metadata = component._get_kb_metadata(kb_path)
+        metadata = await component._get_kb_metadata()
         assert metadata["embedding_provider"] == "HuggingFace"
         assert metadata["embedding_model"] == "sentence-transformers/all-MiniLM-L6-v2"
-        # New-format KBs carry the full selection dict so retrieval can
-        # pass it straight to get_embeddings.
+        # The row carries the full selection dict so retrieval can pass it
+        # straight to get_embeddings.
         assert "model_selection" in metadata
 
-    def test_get_kb_metadata_missing_file_returns_empty(self, component_class, default_kwargs, tmp_path, active_user):
-        component = component_class(**default_kwargs)
+    async def test_get_kb_metadata_without_a_row_returns_empty(
+        self, component_class, default_kwargs, tmp_path, active_user
+    ):
+        """A directory with no row yields no metadata — even with a sidecar present.
+
+        The sidecar is legacy data that only ``primeagent reconcile-kb-from-disk``
+        looks at; the component must not resurrect it.
+        """
         ghost = tmp_path / active_user.username / "ghost"
         ghost.mkdir(parents=True, exist_ok=True)
-        assert component._get_kb_metadata(ghost) == {}
+        (ghost / "embedding_metadata.json").write_text(
+            json.dumps({"embedding_provider": "OpenAI", "embedding_model": "m"})
+        )
 
-    def test_get_kb_metadata_corrupt_json_returns_empty(self, component_class, default_kwargs, tmp_path, active_user):
+        default_kwargs["knowledge_base"] = "ghost"
         component = component_class(**default_kwargs)
-        kb_path = tmp_path / active_user.username / "bad_kb"
-        kb_path.mkdir(parents=True, exist_ok=True)
-        (kb_path / "embedding_metadata.json").write_text("{not json")
-        assert component._get_kb_metadata(kb_path) == {}
+        assert await component._get_kb_metadata() == {}
 
     # ---- _resolve_model_selection ------------------------------------
 
@@ -337,10 +365,9 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
     # ---- retrieve_data orchestration ---------------------------------
 
     async def test_retrieve_data_missing_metadata_raises(self, component_class, default_kwargs, tmp_path, active_user):
-        kb_path = tmp_path / active_user.username / default_kwargs["knowledge_base"]
-        metadata_file = kb_path / "embedding_metadata.json"
-        if metadata_file.exists():
-            metadata_file.unlink()
+        """A KB with a directory but no row cannot be retrieved from."""
+        (tmp_path / active_user.username / "rowless_kb").mkdir(parents=True, exist_ok=True)
+        default_kwargs["knowledge_base"] = "rowless_kb"
 
         component = component_class(**default_kwargs)
         with pytest.raises(ValueError, match="Metadata not found"):
@@ -372,6 +399,37 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
             mock_session_scope.return_value.__aexit__ = AsyncMock(return_value=False)
             with pytest.raises(ValueError, match=r"User with ID .* not found"):
                 await component.retrieve_data()
+
+    @pytest.mark.parametrize("knowledge_base", ["../../outside", "../victim/secret_kb"])
+    async def test_retrieve_data_uses_uuid_storage_for_path_like_names(
+        self, component_class, default_kwargs, active_user, knowledge_base
+    ):
+        """An existing display name never controls a SQLite storage path."""
+        from primeagent.api.utils import knowledge_base_service
+        from primeagent.services.deps import session_scope
+
+        record = await knowledge_base_service.create_record(
+            user_id=active_user.id,
+            name="historical_path_like_name",
+            model_selection={"name": "m", "provider": "HuggingFace"},
+        )
+        # Represent an existing malformed name without bypassing validation
+        # in the production create path. Its UUID-routed store stays fixed.
+        record.name = knowledge_base
+        async with session_scope() as session:
+            session.add(record)
+            await session.commit()
+        default_kwargs["knowledge_base"] = knowledge_base
+        component = component_class(**default_kwargs)
+
+        with patch(
+            "wfx.components.files_and_knowledge.knowledge.get_embeddings",
+            return_value=_DeterministicEmbeddings(),
+        ):
+            result = await component.retrieve_data()
+        assert result.empty
+        root = Path(default_kwargs["kb_root_path"])
+        assert (root / "sqlite" / str(active_user.id) / str(record.id) / "1" / "vectors.sqlite3").is_file()
 
     async def test_retrieve_data_routes_query_with_scores(
         self,
@@ -406,15 +464,11 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
                 return_value=user_record,
             ),
             patch(
-                "wfx.components.files_and_knowledge.knowledge._get_knowledge_bases_root_path",
-                return_value=Path(default_kwargs["kb_root_path"]),
-            ),
-            patch(
                 "wfx.components.files_and_knowledge.knowledge.get_embeddings",
                 return_value=MagicMock(),
             ),
             patch(
-                "wfx.components.files_and_knowledge.knowledge.create_backend",
+                "primeagent.api.utils.kb_helpers.backend_for_name",
                 return_value=backend_instance,
             ),
         ):
@@ -460,15 +514,11 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
                 return_value=user_record,
             ),
             patch(
-                "wfx.components.files_and_knowledge.knowledge._get_knowledge_bases_root_path",
-                return_value=Path(default_kwargs["kb_root_path"]),
-            ),
-            patch(
                 "wfx.components.files_and_knowledge.knowledge.get_embeddings",
                 return_value=MagicMock(),
             ),
             patch(
-                "wfx.components.files_and_knowledge.knowledge.create_backend",
+                "primeagent.api.utils.kb_helpers.backend_for_name",
                 return_value=backend_instance,
             ),
         ):
@@ -486,8 +536,7 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
         """Teardown on error.
 
         The backend's ``teardown`` must run even when
-        ``similarity_search`` blows up — otherwise Chroma's SQLite
-        handle leaks between tests.
+        ``similarity_search`` blows up, so backend resources are released.
         """
         component = component_class(**default_kwargs)
 
@@ -505,15 +554,11 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
                 return_value=user_record,
             ),
             patch(
-                "wfx.components.files_and_knowledge.knowledge._get_knowledge_bases_root_path",
-                return_value=Path(default_kwargs["kb_root_path"]),
-            ),
-            patch(
                 "wfx.components.files_and_knowledge.knowledge.get_embeddings",
                 return_value=MagicMock(),
             ),
             patch(
-                "wfx.components.files_and_knowledge.knowledge.create_backend",
+                "primeagent.api.utils.kb_helpers.backend_for_name",
                 return_value=backend_instance,
             ),
         ):
@@ -550,15 +595,11 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
                 return_value=user_record,
             ),
             patch(
-                "wfx.components.files_and_knowledge.knowledge._get_knowledge_bases_root_path",
-                return_value=Path(default_kwargs["kb_root_path"]),
-            ),
-            patch(
                 "wfx.components.files_and_knowledge.knowledge.get_embeddings",
                 return_value=MagicMock(),
             ) as mock_get_embeddings,
             patch(
-                "wfx.components.files_and_knowledge.knowledge.create_backend",
+                "primeagent.api.utils.kb_helpers.backend_for_name",
                 return_value=backend_instance,
             ),
         ):
@@ -575,25 +616,49 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
         assert call_kwargs["chunk_size"] == 1000
         assert call_kwargs["user_id"] == default_kwargs["_user_id"]
 
-    # ---- include_embeddings against a real Chroma backend ------------
+    # ---- include_embeddings against a real SQLite backend ------------
+
+    async def test_embedding_join_stops_and_closes_after_all_hits(self, component_class, default_kwargs):
+        """Close the iterator as soon as all search hits have their stored vectors."""
+        from wfx.base.knowledge_bases.backends.base import IngestedDocument
+
+        default_kwargs["search_query"] = "selected"
+        default_kwargs["include_embeddings"] = True
+        backend = MagicMock()
+        backend.similarity_search = AsyncMock(return_value=[(Document(page_content="selected", metadata={}), 0.0)])
+        backend.teardown = AsyncMock()
+        closed = []
+
+        async def batches(**_kwargs):
+            try:
+                yield [IngestedDocument(id="selected", content="selected", metadata={}, embedding=[1.0, 0.0])]
+                pytest.fail("Embedding lookup scanned past all requested hits")
+            finally:
+                closed.append(True)
+
+        backend.iter_documents = batches
+        component = component_class(**default_kwargs)
+        with (
+            patch(
+                "wfx.components.files_and_knowledge.knowledge.get_embeddings", return_value=_DeterministicEmbeddings()
+            ),
+            patch("primeagent.api.utils.kb_helpers.backend_for_name", AsyncMock(return_value=backend)),
+        ):
+            result = await component.retrieve_data()
+        assert result.to_dict("records")[0]["_embeddings"] == [1.0, 0.0]
+        assert closed == [True]
 
     async def _retrieve_against_real_kb(self, component_class, default_kwargs, active_user, docs):
-        """Populate a real Chroma KB with ``docs`` then run ``retrieve_data``.
+        """Exercise guarded SQLite ingestion, reopen, search and embedding join."""
+        from primeagent.api.utils.kb_helpers import backend_for_name
 
-        Uses an in-process Chroma backend (no mocks for the vector store) so the
-        embedding-join path — ``similarity_search`` + ``iter_documents`` — is
-        exercised end to end. Only the user/session/path/embedding-config plumbing
-        is patched, mirroring the other ``retrieve_data`` tests in this module.
-        """
-        kb_path = Path(default_kwargs["kb_root_path"]) / active_user.username / default_kwargs["knowledge_base"]
-        kb_path.mkdir(parents=True, exist_ok=True)
         embeddings = _DeterministicEmbeddings()
 
         # Pre-populate the KB through the real backend, then tear it down so the
         # retrieval pass opens its own client (matches production lifecycle).
-        seed_backend = ChromaLocalBackend(
-            kb_name=default_kwargs["knowledge_base"],
-            kb_path=kb_path,
+        seed_backend = await backend_for_name(
+            active_user.id,
+            default_kwargs["knowledge_base"],
             embedding_function=embeddings,
         )
         try:
@@ -601,38 +666,11 @@ class TestKnowledgeBaseComponent(ComponentTestBaseWithClient):
         finally:
             await seed_backend.teardown()
 
-        def _make_backend(*_args, **kwargs):
-            return ChromaLocalBackend(
-                kb_name=kwargs.get("kb_name", default_kwargs["knowledge_base"]),
-                kb_path=kwargs.get("kb_path", kb_path),
-                embedding_function=embeddings,
-            )
-
-        user_record = MagicMock()
-        user_record.username = active_user.username
-
         component = component_class(**default_kwargs)
-        with (
-            patch("wfx.components.files_and_knowledge.knowledge.session_scope") as mock_session_scope,
-            patch(
-                "primeagent.services.database.models.user.crud.get_user_by_id",
-                return_value=user_record,
-            ),
-            patch(
-                "wfx.components.files_and_knowledge.knowledge._get_knowledge_bases_root_path",
-                return_value=Path(default_kwargs["kb_root_path"]),
-            ),
-            patch(
-                "wfx.components.files_and_knowledge.knowledge.get_embeddings",
-                return_value=embeddings,
-            ),
-            patch(
-                "wfx.components.files_and_knowledge.knowledge.create_backend",
-                side_effect=_make_backend,
-            ),
+        with patch(
+            "wfx.components.files_and_knowledge.knowledge.get_embeddings",
+            return_value=embeddings,
         ):
-            mock_session_scope.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
-            mock_session_scope.return_value.__aexit__ = AsyncMock(return_value=False)
             return await component.retrieve_data()
 
     async def test_include_embeddings_populates_for_upload_style_kb(self, component_class, default_kwargs, active_user):

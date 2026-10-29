@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-serply",
+  "version": "0.1.0",
+  "name": "Serply",
+  "description": "Serply SERP API web-search component as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "serply",
+      "path": "components/serply"
+    }
+  ]
+}

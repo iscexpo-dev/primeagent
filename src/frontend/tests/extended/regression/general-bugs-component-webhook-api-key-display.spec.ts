@@ -3,24 +3,28 @@ import { adjustScreenView } from "../../utils/adjust-screen-view";
 import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
 import { TEXTS } from "../../utils/constants/texts";
 import { openBlankFlow } from "../../utils/flow/open-blank-flow";
+import { waitForFlowEditorReady } from "../../utils/flow/wait-for-flow-editor-ready";
 import { loginPrimeagent } from "../../utils/login-primeagent";
 import {
-  closeAdvancedOptions,
-  disableInspectPanel,
-  enableInspectPanel,
-  openAdvancedOptions,
+  addParameterToNode,
+  closeParametersPanel,
 } from "../../utils/open-advanced-options";
 
 test(
   "user must be able to see api key in webhook component when auto login is disabled",
-  { tag: ["@release"] },
+  {
+    tag: ["@release"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/auto_login", (route) => {
       route.fulfill({
-        status: 500,
+        status: 403,
         contentType: "application/json",
         body: JSON.stringify({
-          detail: { auto_login: false },
+          detail: {
+            message: "Auto login is disabled.",
+            auto_login: false,
+          },
         }),
       });
     });
@@ -48,6 +52,7 @@ test(
       timeout: 30000,
     });
     await page.getByTestId("blank-flow").click();
+    await waitForFlowEditorReady(page);
     await page.getByTestId("sidebar-search-input").click();
 
     await page.getByTestId("sidebar-search-input").fill("webhook");
@@ -67,29 +72,27 @@ test(
 
     await page.getByTestId("title-Webhook").click();
 
-    await disableInspectPanel(page);
+    // LE-1810: curl is an advanced field — surface it on the node and read
+    // it there.
+    await addParameterToNode(page, "curl");
+    await closeParametersPanel(page);
+    await adjustScreenView(page);
 
-    await openAdvancedOptions(page);
-
-    await page
-      .getByTestId("button_open_text_area_modal_str_edit_curl_advanced")
-      .click();
+    await page.getByTestId("button_open_text_area_modal_str_curl").click();
 
     const curl = await page.getByTestId("text-area-modal").inputValue();
 
     expect(curl).toContain("x-api-key");
 
     await page.getByText(TEXTS.close, { exact: true }).last().click();
-
-    await closeAdvancedOptions(page);
-
-    await enableInspectPanel(page);
   },
 );
 
 test(
   "user must be able to not see api key in webhook component when auto login is enabled",
-  { tag: ["@release"] },
+  {
+    tag: ["@release"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/config", (route) => {
       route.fulfill({
@@ -125,22 +128,18 @@ test(
 
     await page.getByTestId("title-Webhook").click();
 
-    await disableInspectPanel(page);
+    // LE-1810: curl is an advanced field — surface it on the node and read
+    // it there.
+    await addParameterToNode(page, "curl");
+    await closeParametersPanel(page);
+    await adjustScreenView(page);
 
-    await openAdvancedOptions(page);
-
-    await page
-      .getByTestId("button_open_text_area_modal_str_edit_curl_advanced")
-      .click();
+    await page.getByTestId("button_open_text_area_modal_str_curl").click();
 
     const curl = await page.getByTestId("text-area-modal").inputValue();
 
     expect(curl).not.toContain("x-api-key");
 
     await page.getByText(TEXTS.close, { exact: true }).last().click();
-
-    await closeAdvancedOptions(page);
-
-    await enableInspectPanel(page);
   },
 );

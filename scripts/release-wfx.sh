@@ -105,6 +105,16 @@ fi
 
 print_info "Preparing to release WFX version $NEW_VERSION"
 
+# Soft check: warn if WFX minor doesn't match Primeagent minor
+PRIMEAGENT_VERSION=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
+WFX_MINOR=$(echo "$NEW_VERSION" | cut -d. -f1-2)
+PRIMEAGENT_MINOR=$(echo "$PRIMEAGENT_VERSION" | cut -d. -f1-2)
+if [ "$WFX_MINOR" != "$PRIMEAGENT_MINOR" ]; then
+    print_warning "WFX minor version ($WFX_MINOR) does not match Primeagent minor version ($PRIMEAGENT_MINOR)."
+    print_warning "Per the compatibility policy, WFX X.Y.N must align with Primeagent X.Y.M."
+    print_warning "Proceed only if this is intentional (e.g., a patch-only WFX release)."
+fi
+
 # Update version in pyproject.toml
 if [ "$DRY_RUN" = true ]; then
     print_dry_run "Would update version in pyproject.toml to $NEW_VERSION"
@@ -176,7 +186,7 @@ if [ "$DRY_RUN" = true ]; then
     print_dry_run "Would create git tag: $TAG_NAME"
 else
     print_info "Creating git tag: $TAG_NAME"
-    git tag -a "$TAG_NAME" -m "WFX Release $NEW_VERSION"
+    uv run --no-sync python scripts/ci/release_auth_defaults.py tag "$TAG_NAME"
 fi
 
 if [ "$DRY_RUN" = true ]; then

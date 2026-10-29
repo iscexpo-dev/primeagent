@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -12,7 +13,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
-  type AvailableDBProviderId,
   DB_PROVIDER_OPTIONS,
   type DBProviderConfigValue,
   type DBProviderId,
@@ -22,24 +22,47 @@ import {
   getDefaultDBProviderConfig,
   isDBProviderConfigured,
   resolveUIBackendType,
+  type StoredDBProviderId,
 } from "@/constants/dbProviderConstants";
-import { useGetGlobalVariables } from "@/controllers/API/queries/variables";
+import { isSettledSuccessfulQuery } from "@/controllers/API/helpers/query-cache";
+import {
+  getGlobalVariablesQueryKey,
+  useGetGlobalVariables,
+} from "@/controllers/API/queries/variables";
+import useFlowsManagerStore from "@/stores/flowsManagerStore";
+import { useUtilityStore } from "@/stores/utilityStore";
 import type { GlobalVariable } from "@/types/global_variables";
 import { cn } from "@/utils/utils";
+import {
+  focusCommandListOnOpen,
+  refocusSelectedCommandItemOnNavigate,
+} from "../../utils/focus-command-list-on-open";
 
 export type DBProviderSelection = {
   // Wire keys stay snake_case to match the backend payload format.
-  backend_type: AvailableDBProviderId;
+  backend_type: StoredDBProviderId;
   backend_config: Record<string, DBProviderConfigValue>;
 };
 
 interface DBProviderInputProps {
   id: string;
-  value: AvailableDBProviderId;
+  value: StoredDBProviderId;
   globalVariables: GlobalVariable[];
   disabled?: boolean;
+  /** Accessible name for the combobox trigger (WCAG 4.1.2). */
+  "aria-label"?: string;
+  /**
+   * Id of the canvas field's label element. Takes precedence over
+   * `aria-label` when set, so the trigger is named by the field's own
+   * visible label rather than a generic string.
+   */
+  ariaLabelledBy?: string;
+  /** Id of the error text describing this field (aria-describedby, WCAG 3.3.1). */
+  ariaDescribedBy?: string;
+  /** Marks the combobox trigger invalid when the field failed validation. */
+  ariaInvalid?: boolean;
   onValueChange: (
-    backendType: AvailableDBProviderId,
+    backendType: StoredDBProviderId,
     backendConfig: Record<string, DBProviderConfigValue>,
   ) => void;
 }
@@ -49,17 +72,56 @@ export default function DBProviderInputComponent({
   value,
   disabled,
   handleOnNewValue,
-}: BaseInputProps<DBProviderSelection | AvailableDBProviderId>) {
+  ariaLabelledBy,
+}: BaseInputProps<
+  DBProviderSelection | StoredDBProviderId | null | undefined
+>) {
+  const queryClient = useQueryClient();
+  const currentFlowId = useFlowsManagerStore((state) => state.currentFlowId);
+  const globalVariablesQueryKey = useMemo(
+    () => getGlobalVariablesQueryKey({ flowId: currentFlowId || undefined }),
+    [currentFlowId],
+  );
   const {
     data: globalVariables = [],
-    isFetched,
+    isSuccess,
     isFetching,
-  } = useGetGlobalVariables();
+    isError,
+    fetchStatus,
+  } = useGetGlobalVariables({
+    flowId: currentFlowId || undefined,
+    enabled: Boolean(currentFlowId),
+  });
+  const localVectorStoreAvailable = useUtilityStore(
+    (state) => state.localVectorStoreAvailable,
+  );
+  const defaultVectorStoreBackend = useUtilityStore(
+    (state) => state.defaultVectorStoreBackend,
+  );
+  const configuredVectorStoreBackends = useUtilityStore(
+    (state) => state.configuredVectorStoreBackends,
+  );
+  const vectorStoreConfigLoaded = useUtilityStore(
+    (state) => state.vectorStoreConfigLoaded,
+  );
   const hasInitializedDefaultRef = useRef(false);
 
   const currentValue = useMemo(
-    () => normalizeDBProviderValue(value, globalVariables),
-    [value, globalVariables],
+    () =>
+      normalizeDBProviderValue(
+        value,
+        globalVariables,
+        localVectorStoreAvailable,
+        defaultVectorStoreBackend,
+        configuredVectorStoreBackends,
+      ),
+    [
+      value,
+      globalVariables,
+      localVectorStoreAvailable,
+      defaultVectorStoreBackend,
+      configuredVectorStoreBackends,
+    ],
   );
   const hasProviderValue =
     typeof value === "string" ||
@@ -67,10 +129,31 @@ export default function DBProviderInputComponent({
 
   useEffect(() => {
     if (hasProviderValue || hasInitializedDefaultRef.current) return;
-    if (!isFetched && isFetching) return;
+    if (
+      !vectorStoreConfigLoaded ||
+      !currentFlowId ||
+      !isSuccess ||
+      isFetching ||
+      isError ||
+      fetchStatus !== "idle" ||
+      !isSettledSuccessfulQuery(queryClient, globalVariablesQueryKey)
+    )
+      return;
     hasInitializedDefaultRef.current = true;
     handleOnNewValue({ value: currentValue });
-  }, [currentValue, handleOnNewValue, hasProviderValue, isFetched, isFetching]);
+  }, [
+    currentFlowId,
+    currentValue,
+    fetchStatus,
+    globalVariablesQueryKey,
+    handleOnNewValue,
+    hasProviderValue,
+    isError,
+    isFetching,
+    isSuccess,
+    queryClient,
+    vectorStoreConfigLoaded,
+  ]);
 
   return (
     <DBProviderInput
@@ -78,6 +161,7 @@ export default function DBProviderInputComponent({
       value={currentValue.backend_type}
       globalVariables={globalVariables}
       disabled={disabled}
+      ariaLabelledBy={ariaLabelledBy}
       onValueChange={(backendType, backendConfig) => {
         handleOnNewValue({
           value: {
@@ -95,6 +179,10 @@ export function DBProviderInput({
   value,
   globalVariables,
   disabled,
+  "aria-label": ariaLabel,
+  ariaLabelledBy,
+  ariaDescribedBy,
+  ariaInvalid,
   onValueChange,
 }: DBProviderInputProps) {
   const { t } = useTranslation();
@@ -102,29 +190,67 @@ export function DBProviderInput({
   const refButton = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
 
+  const localVectorStoreAvailable = useUtilityStore(
+    (state) => state.localVectorStoreAvailable,
+  );
+  const defaultVectorStoreBackend = useUtilityStore(
+    (state) => state.defaultVectorStoreBackend,
+  );
+  const configuredVectorStoreBackends = useUtilityStore(
+    (state) => state.configuredVectorStoreBackends,
+  );
+
   const selectedProvider = getDBProviderOption(value);
-  const selectedIsConfigured = isDBProviderConfigured(value, globalVariables);
+  const selectedIsConfigured = isDBProviderConfigured(
+    value,
+    globalVariables,
+    localVectorStoreAvailable,
+    defaultVectorStoreBackend,
+    configuredVectorStoreBackends,
+  );
 
   const selectableOptions = useMemo(
     () =>
-      DB_PROVIDER_OPTIONS.map((provider) => ({
+      DB_PROVIDER_OPTIONS.filter(
+        // Local SQLite stores vectors on the serving box's own disk, which the
+        // production profile refuses. Hide it there rather than offering a
+        // choice the create endpoint always rejects with 422.
+        (provider) => localVectorStoreAvailable || provider.id !== "sqlite",
+      ).map((provider) => ({
         provider,
         configured:
           provider.status === "available"
             ? isDBProviderConfigured(
-                provider.id as AvailableDBProviderId,
+                provider.id as StoredDBProviderId,
                 globalVariables,
+                localVectorStoreAvailable,
+                defaultVectorStoreBackend,
+                configuredVectorStoreBackends,
               )
             : false,
       })),
-    [globalVariables],
+    [
+      globalVariables,
+      localVectorStoreAvailable,
+      defaultVectorStoreBackend,
+      configuredVectorStoreBackends,
+    ],
   );
 
   const handleSelect = (provider: DBProviderOption) => {
     if (provider.status !== "available") return;
 
-    const backendType = provider.id as AvailableDBProviderId;
-    if (!isDBProviderConfigured(backendType, globalVariables)) return;
+    const backendType = provider.id as StoredDBProviderId;
+    if (
+      !isDBProviderConfigured(
+        backendType,
+        globalVariables,
+        localVectorStoreAvailable,
+        defaultVectorStoreBackend,
+        configuredVectorStoreBackends,
+      )
+    )
+      return;
 
     onValueChange(
       backendType,
@@ -142,16 +268,23 @@ export function DBProviderInput({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
+          id={id}
           disabled={disabled}
           variant="primary"
           size="xs"
           role="combobox"
           ref={refButton}
           aria-expanded={open}
+          // aria-labelledby wins over aria-label when both are set, so only
+          // one is ever emitted — otherwise the aria-label is dead weight.
+          aria-label={!ariaLabelledBy ? ariaLabel : undefined}
+          aria-labelledby={ariaLabelledBy}
+          aria-describedby={ariaDescribedBy}
+          aria-invalid={ariaInvalid || undefined}
           data-testid={id}
           className={cn(
             "dropdown-component-false-outline py-2",
-            "no-focus-visible w-full justify-between font-normal disabled:bg-muted disabled:text-muted-foreground",
+            "focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 w-full justify-between font-normal disabled:bg-muted disabled:text-muted-foreground",
           )}
         >
           <span
@@ -191,10 +324,16 @@ export function DBProviderInput({
       <PopoverContentWithoutPortal
         side="bottom"
         avoidCollisions={true}
+        onOpenAutoFocus={focusCommandListOnOpen}
         className="noflow nowheel nopan nodelete nodrag p-0"
         style={{ minWidth: refButton?.current?.clientWidth ?? "240px" }}
       >
-        <Command className="flex flex-col">
+        <Command
+          label={t("knowledge.dbProviderLabel")}
+          className="flex flex-col"
+          defaultValue={selectedProvider.label}
+          onKeyDown={refocusSelectedCommandItemOnNavigate}
+        >
           <CommandList className="max-h-[300px] overflow-y-auto">
             {selectableOptions.map(({ provider, configured }) => (
               <DBProviderOptionItem
@@ -206,8 +345,10 @@ export function DBProviderInput({
               />
             ))}
           </CommandList>
+        </Command>
+        <div className="flex flex-col border-t border-border bg-background">
           <Button
-            className="w-full flex cursor-pointer items-center justify-start gap-2 truncate py-2 text-xs text-muted-foreground px-3 hover:bg-accent group"
+            className="w-full flex cursor-pointer items-center justify-start gap-2 truncate py-2 text-xs text-muted-foreground px-3 hover:bg-accent group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
             unstyled
             data-testid="manage-db-providers"
             onClick={handleManageProviders}
@@ -220,7 +361,7 @@ export function DBProviderInput({
               />
             </div>
           </Button>
-        </Command>
+        </div>
       </PopoverContentWithoutPortal>
     </Popover>
   );
@@ -288,16 +429,14 @@ function DBProviderOptionItem({
 }
 
 function normalizeDBProviderValue(
-  value: DBProviderSelection | AvailableDBProviderId | null | undefined,
+  value: DBProviderSelection | StoredDBProviderId | null | undefined,
   globalVariables: GlobalVariable[],
+  localVectorStoreAvailable = true,
+  defaultVectorStoreBackend?: string,
+  configuredVectorStoreBackends: readonly string[] = [],
 ): DBProviderSelection {
   if (typeof value === "string") {
-    const backendType: AvailableDBProviderId =
-      value === "opensearch"
-        ? "opensearch"
-        : value === "chroma_cloud"
-          ? "chroma_cloud"
-          : "chroma";
+    const backendType = resolveUIBackendType(value, undefined);
     return {
       backend_type: backendType,
       backend_config: getDBProviderConfig(backendType, globalVariables),
@@ -317,12 +456,17 @@ function normalizeDBProviderValue(
     };
   }
 
-  const defaults = getDefaultDBProviderConfig(globalVariables);
+  const defaults = getDefaultDBProviderConfig(
+    globalVariables,
+    localVectorStoreAvailable,
+    defaultVectorStoreBackend,
+    configuredVectorStoreBackends,
+  );
   return {
     backend_type: defaults.backendType,
     backend_config: defaults.backendConfig,
   };
 }
 
-export type ProviderValue = AvailableDBProviderId;
+export type ProviderValue = StoredDBProviderId;
 export type DBProviderValue = DBProviderId;

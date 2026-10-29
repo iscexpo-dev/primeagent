@@ -5,8 +5,8 @@ from pathlib import Path
 
 import boto3
 import pytest
-from wfx.components.amazon.s3_bucket_uploader import S3BucketUploaderComponent
 from wfx.schema.data import Data
+from wfx_amazon.components.amazon.s3_bucket_uploader import S3BucketUploaderComponent
 
 from tests.base import ComponentTestBaseWithoutClient
 

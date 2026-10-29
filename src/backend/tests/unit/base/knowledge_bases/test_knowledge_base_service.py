@@ -18,6 +18,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+@pytest.fixture(autouse=True)
+def local_store_root(active_user, tmp_path, monkeypatch):  # noqa: ARG001 - initialize the app first
+    from primeagent.services.deps import get_settings_service
+
+    monkeypatch.setattr(get_settings_service().settings, "knowledge_bases_dir", str(tmp_path / "knowledge"))
+
+
 class TestCreateAndRead:
     async def test_create_and_get_by_user_and_name(self, active_user):
         record = await knowledge_base_service.create_record(
@@ -257,7 +264,14 @@ class TestBackfillFromDisk:
         assert a.size_bytes > 0
         assert a.source_types == ["pdf", "txt"]
 
-    async def test_backfill_uses_recounted_disk_stats(self, active_user, tmp_path: Path, monkeypatch):
+    async def test_backfill_adopts_recorded_stats_without_opening_the_vector_store(self, active_user, tmp_path: Path):
+        """Adoption reads the sidecar as-written; it never boots a Chroma client to recount.
+
+        This is a legacy-recovery path, so it stays cheap and non-mutating: opening a
+        persistent Chroma client per directory would be slow and would take a SQLite
+        lock on data the operator is trying to rescue. The counters are refreshed by
+        the next ingestion anyway.
+        """
         kb_root = tmp_path / active_user.username
         kb_root.mkdir()
         kb_dir = kb_root / "legacy_with_chunks"
@@ -270,31 +284,14 @@ class TestBackfillFromDisk:
                     "embedding_model": "m",
                     "chunk_size": 512,
                     "chunk_overlap": 50,
-                    "chunks": 0,
-                    "words": 0,
-                    "characters": 0,
-                    "size": 0,
-                    "source_types": [],
+                    "chunks": 161,
+                    "words": 3200,
+                    "characters": 18000,
+                    "size": 4096,
+                    "source_types": ["file_upload"],
                 }
             )
         )
-
-        def fake_get_metadata(kb_path: Path, *, fast: bool = False) -> dict:
-            assert kb_path == kb_dir
-            assert fast is False
-            return {
-                "embedding_provider": "OpenAI",
-                "embedding_model": "m",
-                "chunk_size": 512,
-                "chunk_overlap": 50,
-                "chunks": 161,
-                "words": 3200,
-                "characters": 18000,
-                "size": 4096,
-                "source_types": ["file_upload"],
-            }
-
-        monkeypatch.setattr("primeagent.api.utils.kb_helpers.KBAnalysisHelper.get_metadata", fake_get_metadata)
 
         inserted = await knowledge_base_service.backfill_from_disk(user_id=active_user.id, kb_user_root=kb_root)
         assert inserted == 1
@@ -307,6 +304,26 @@ class TestBackfillFromDisk:
         assert record.size_bytes == 4096
         assert record.source_types == ["file_upload"]
         assert knowledge_base_service.record_to_metadata_dict(record)["status"] == KnowledgeBaseStatus.READY.value
+
+    async def test_backfill_dry_run_reports_without_writing(self, active_user, tmp_path: Path):
+        """``--dry-run`` must count adoptable KBs and leave the database untouched."""
+        kb_root = tmp_path / active_user.username
+        kb_root.mkdir()
+        kb_dir = kb_root / "diskonly_dryrun"
+        kb_dir.mkdir()
+        (kb_dir / "embedding_metadata.json").write_text(
+            json.dumps({"embedding_provider": "OpenAI", "embedding_model": "m"})
+        )
+
+        would_insert = await knowledge_base_service.backfill_from_disk(
+            user_id=active_user.id, kb_user_root=kb_root, dry_run=True
+        )
+        assert would_insert == 1
+        assert await knowledge_base_service.get_by_user_and_name(active_user.id, "diskonly_dryrun") is None
+
+        # And the same call without dry_run actually adopts it.
+        assert await knowledge_base_service.backfill_from_disk(user_id=active_user.id, kb_user_root=kb_root) == 1
+        assert await knowledge_base_service.get_by_user_and_name(active_user.id, "diskonly_dryrun") is not None
 
     async def test_backfill_is_idempotent(self, active_user, tmp_path: Path):
         kb_root = tmp_path / active_user.username
@@ -461,3 +478,31 @@ class TestUniqueConstraint:
                 name="phase_15_kb_dup",
                 model_selection={"name": "m", "provider": "OpenAI"},
             )
+
+
+@pytest.mark.parametrize("binding_state", ["retired", "invalid_json", "changed_source"])
+async def test_explicit_recovery_root_does_not_re_adopt_bound_sources(active_user, tmp_path, binding_state):
+    from primeagent.services.knowledge_base_storage import coordinator, maintenance
+
+    recovery_root = tmp_path / "explicit_recovery"
+    source = recovery_root / active_user.username / "retired_source"
+    source.mkdir(parents=True)
+    (source / "embedding_metadata.json").write_text(
+        json.dumps({"embedding_provider": "OpenAI", "embedding_model": "m"})
+    )
+    relative = source.relative_to(recovery_root).as_posix()
+    binding = coordinator._binding_path(relative, root=recovery_root)
+    binding.parent.mkdir(parents=True)
+    binding.write_text(json.dumps({"source": relative, "fingerprint": maintenance.tree_fingerprint(source)}))
+    if binding_state == "invalid_json":
+        binding.write_text("incomplete")
+    elif binding_state == "changed_source":
+        (source / "unexpected_native_write").write_text("must require explicit recovery")
+    for dry_run in (True, False):
+        assert (
+            await knowledge_base_service.backfill_from_disk(
+                user_id=active_user.id, kb_user_root=source.parent, dry_run=dry_run
+            )
+            == 0
+        )
+    assert await knowledge_base_service.get_by_user_and_name(active_user.id, source.name) is None

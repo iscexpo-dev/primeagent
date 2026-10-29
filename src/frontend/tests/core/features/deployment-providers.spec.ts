@@ -22,7 +22,9 @@ async function navigateToProvidersTab(
 
 test(
   "Empty state shows Add Environment button",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/deployments/providers*", (route) => {
       route.fulfill({
@@ -48,7 +50,9 @@ test(
 
 test(
   "New Environment button opens modal with save disabled on empty form",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/deployments/providers*", (route) => {
       route.fulfill({
@@ -77,7 +81,9 @@ test(
 
 test(
   "Save button becomes enabled after filling all required fields",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/deployments/providers*", (route) => {
       route.fulfill({
@@ -101,13 +107,9 @@ test(
 
     await expect(page.getByTestId("add-provider-save")).toBeDisabled();
 
-    await page.getByPlaceholder("e.g. Production").fill("My Env");
-    await page
-      .getByPlaceholder("Enter your API key")
-      .fill("test-api-key-12345");
-    await page
-      .getByPlaceholder("https://api.example.com")
-      .fill("https://example.com");
+    await page.getByLabel(/^Name/).fill("My Env");
+    await page.getByLabel(/^API Key/).fill("test-api-key-12345");
+    await page.getByLabel(/^Service Instance URL/).fill("https://example.com");
 
     await expect(page.getByTestId("add-provider-save")).toBeEnabled();
   },
@@ -115,7 +117,9 @@ test(
 
 test(
   "Save calls POST and modal closes",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     let postCalled = false;
 
@@ -153,13 +157,9 @@ test(
 
     await page.getByTestId("add-provider-empty-btn").click();
 
-    await page.getByPlaceholder("e.g. Production").fill("My Env");
-    await page
-      .getByPlaceholder("Enter your API key")
-      .fill("test-api-key-12345");
-    await page
-      .getByPlaceholder("https://api.example.com")
-      .fill("https://example.com");
+    await page.getByLabel(/^Name/).fill("My Env");
+    await page.getByLabel(/^API Key/).fill("test-api-key-12345");
+    await page.getByLabel(/^Service Instance URL/).fill("https://example.com");
 
     const postRequest = page.waitForRequest(
       (req) =>
@@ -179,7 +179,9 @@ test(
 
 test(
   "Delete triggers confirmation dialog then calls DELETE",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/deployments*", (route) => {
       route.fulfill({
@@ -234,7 +236,9 @@ test(
 
 test(
   "Cancel delete dismisses confirmation without calling DELETE",
-  { tag: ["@release", "@workspace", "@api"] },
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
     let deleteRequestCount = 0;
 

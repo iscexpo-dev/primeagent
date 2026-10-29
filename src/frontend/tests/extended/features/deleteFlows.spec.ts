@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { expect, test } from "../../fixtures";
 import { TEXTS } from "../../utils/constants/texts";
 import { loadDotenvIfLocal } from "../../utils/env/load-dotenv";
@@ -6,7 +5,9 @@ import { skipIfMissing } from "../../utils/env/skip-if-missing";
 
 test(
   "should delete a flow (requires store API key)",
-  { tag: ["@release", "@api"] },
+  {
+    tag: ["@release", "@api"],
+  },
   async ({ page }) => {
     skipIfMissing.storeApiKey();
     loadDotenvIfLocal(__dirname);

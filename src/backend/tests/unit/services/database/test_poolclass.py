@@ -4,8 +4,8 @@ These tests show:
 1. What FAILS with the OLD (buggy) code
 2. What PASSES with the NEW (fixed) code
 
-Issue: https://github.com/khulnasoft/primeagent/issues/10231
-PR: https://github.com/khulnasoft/primeagent/pull/10232
+Issue: https://github.com/khulnasoft-bot/primeagent/issues/10231
+PR: https://github.com/khulnasoft-bot/primeagent/pull/10232
 
 Run these tests to verify:
 - The bug exists (tests that show errors)

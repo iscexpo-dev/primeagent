@@ -142,11 +142,11 @@ export function IngestionHistoryPanel({ kbName }: IngestionHistoryPanelProps) {
                     className="truncate text-sm font-medium"
                     data-testid="kb-ingestion-history-source-name"
                   >
-                    {primaryLabel as string}
+                    {primaryLabel}
                   </span>
                   {showTypeSubtitle && (
                     <span className="truncate text-xs text-muted-foreground">
-                      {typeLabel as string}
+                      {typeLabel}
                     </span>
                   )}
                 </div>

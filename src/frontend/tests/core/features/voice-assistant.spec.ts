@@ -1,19 +1,16 @@
 import { expect, test } from "../../fixtures";
 import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
+import { LOOPBACK_OPENAI_API_KEY } from "../../utils/configure-loopback-openai";
 
 import { TEXTS } from "../../utils/constants/texts";
 
 // TODO: Need to review the voice assistant vs text to voice
 test.skip(
   "should able to see and interact with voice assistant",
-  { tag: ["@release", "@workspace", "@api"] },
-
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
   async ({ page }) => {
-    test.skip(
-      !process?.env?.OPENAI_API_KEY,
-      "OPENAI_API_KEY required to run this test",
-    );
-
     await page.route("**/api/v1/config", (route) => {
       route.fulfill({
         status: 200,
@@ -48,7 +45,7 @@ test.skip(
         .catch(() => false);
 
       if (isVisible) {
-        await apiKeyInput.fill(process.env.OPENAI_API_KEY || "");
+        await apiKeyInput.fill(LOOPBACK_OPENAI_API_KEY);
         await page
           .getByTestId("voice-assistant-settings-modal-save-button")
           .click();
@@ -80,8 +77,10 @@ test.skip(
 
 test.skip(
   "user should not be able to see voice button if voice mode is not available",
-  { tag: ["@release", "@workspace", "@api"] },
-  async ({ page, request }) => {
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
+  async ({ page }) => {
     await page.route("**/api/v1/config", (route) => {
       route.fulfill({
         status: 200,
@@ -110,8 +109,10 @@ test.skip(
 
 test.skip(
   "user should be able to see voice button if voice mode is available",
-  { tag: ["@release", "@workspace", "@api"] },
-  async ({ page, request }) => {
+  {
+    tag: ["@release", "@workspace", "@api"],
+  },
+  async ({ page }) => {
     await page.route("**/api/v1/config", (route) => {
       route.fulfill({
         status: 200,

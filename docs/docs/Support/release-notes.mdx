@@ -17,7 +17,6 @@ Due to strict SemVer requirements, Primeagent Desktop can have different patch v
 Whenever possible, the Primeagent team recommends installing new Primeagent versions in a new virtual environment or VM before upgrading your primary installation.
 This allows you to [import flows](/concepts-flows-import#import-a-flow) from your existing installation and test them in the new version without disrupting your existing installation.
 In the event of breaking changes or bugs, your existing installation is preserved in a stable state.
-If you are upgrading Windows Desktop to 1.6.0, don't auto-upgrade with the in-app **Update** button. Instead, follow the instructions in [Known issue: Don't auto-upgrade Windows Desktop](#windows-desktop-update-issue).
 :::
 
 To avoid the impact of potential breaking changes and test new versions, the Primeagent team recommends the following upgrade process:
@@ -36,7 +35,7 @@ To avoid the impact of potential breaking changes and test new versions, the Pri
 2. Install the new version:
 
    * **Primeagent OSS Python package**: Install the new version in a new virtual environment. For instructions, see [Install and run the Primeagent OSS Python package](/get-started-installation#install-and-run-the-primeagent-oss-python-package).
-   * **Primeagent Docker image**: Run the new image in a separate container.
+   * **Primeagent Docker image**: Run the new image in a separate container, or upgrade your existing image. For more information, see [Upgrade the Primeagent Docker image](/deployment-docker#upgrade-the-primeagent-docker-image).
    * **Primeagent Desktop**: To upgrade in place, open Primeagent Desktop, and then click **Upgrade Available** in the Primeagent header. If you want to isolate the new version, you must install Primeagent Desktop on a separate physical or virtual machine, and then [import your flows](/concepts-flows-import) to the new installation.
 
 3. [Import your flows](/concepts-flows-import) to test them in the new version, [upgrading components](/concepts-components#component-versions) as needed.
@@ -47,306 +46,94 @@ To avoid the impact of potential breaking changes and test new versions, the Pri
 
     If you made changes to your flows in the isolated installation, you might want to export and import those flows back to your upgraded primary installation so you don't have to repeat the component upgrade process.
 
-## 1.7.x
+## 1.13.x
 
-:::warning Version yanked
-Version 1.7.0 was yanked due to a critical bug. Version 1.7.0 has been replaced with version 1.7.1, which includes a fix for this issue.
-:::
-
-Highlights of this release include the following changes.
-For all changes, see the [Changelog](https://github.com/khulnasoft-bot/primeagent/releases).
-
-### Known issue: Data not accessible when upgrading to version 1.7.0 {#v170-data-path}
-
-A critical issue was identified during the upgrade process to version 1.7.0.
-
-Flows, projects, and global variables are **not** deleted or corrupted. The data still exists, but version 1.7.0 cannot find it due to a path change in how flows are located.
-All Primeagent versions upgrading to 1.7.0 are affected.
-
-Don't upgrade to Primeagent version 1.7.0.
-Instead, upgrade directly to version 1.7.1, which includes a fix for this bug.
-
-If you installed version 1.7.0 before the fix was released, follow these steps to recover your flows:
-
-1. Revert Primeagent to version 1.6.9:
-
-   ```bash
-   uv pip install primeagent==1.6.9
-   ```
-
-2. Verify that your flows, projects, and global variables are accessible.
-
-3. Upgrade directly to version 1.7.1, which includes the fix for this issue:
-
-   ```bash
-   uv pip install primeagent==1.7.1
-   ```
-
-### New features and enhancements
-
-- Support for streamable HTTP transport for MCP clients and servers
-
-    Primeagent now supports [streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) for both MCP clients and servers.
-    When using Primeagent as an [MCP client](/mcp-client), you can connect to MCP servers with streamable HTTP transport.
-    When using Primeagent as an [MCP server](/mcp-server), clients can connect using streamable HTTP transport.
-    SSE transport is still supported as a fallback for backwards compatibility.
-
-- Webhook authentication
-
-    Added the `PRIMEAGENT_WEBHOOK_AUTH_ENABLE` environment variable for authenticating requests to the [`/webhook` endpoint](/api-flows-run#webhook-run-flow). When `PRIMEAGENT_WEBHOOK_AUTH_ENABLE=TRUE`, webhook endpoints require API key authentication and validate that the authenticated user owns the flow being executed. When `FALSE`, no Primeagent API key is required and all requests to the webhook endpoint are treated as being sent by the flow owner. For more information, see [Trigger flows with webhooks](/webhook).
-
-- Configurable API key validation
-
-    Added the `PRIMEAGENT_API_KEY_SOURCE` environment variable to control how Primeagent validates API keys. When set to `db`, Primeagent validates API keys against keys stored in the database. When set to `env`, Primeagent validates API keys against the `PRIMEAGENT_API_KEY` environment variable. For more information, see [API keys and authentication](/api-keys-and-authentication#primeagent-api-key-source).
-
-- SSRF protection
-
-    Added SSRF (Server-Side Request Forgery) protection to the [**API Request** component](/api-request). HTTP redirects are disabled by default to prevent SSRF bypass attacks. To enable SSRF protection, set `PRIMEAGENT_SSRF_PROTECTION_ENABLED=TRUE`. Configure allowed hosts with `PRIMEAGENT_SSRF_ALLOWED_HOSTS`. Flows that relied on automatic redirects will need to enable it manually.
-
-- Email registration in Primeagent Desktop
-
-    Primeagent Desktop now includes an email registration screen at startup. The registered email address helps track user registrations and understand the user base. For more information, see [Telemetry](/contributing-telemetry#email).
-
-- Changes to read/write file components
-
-    The **Save File** component was renamed to **Write File**, and it can now save to S3 and Google Drive.
-    The **File** component was renamed to **Read File**, and it can now read from AWS S3 and Google Drive.
-    Both components support **Tool Mode**.
-
-- New integrations, bundles, and components:
-
-  New filter operator for **DataFrame Operations** component
-
-    The [**DataFrame Operations** component](/dataframe-operations) now includes a `not contains` filter operator.
-    Use it to clean data by extracting only records that _don't_ contain specific values.
-    For example, you can filter out invalid email addresses that don't contain `@`.
-
-  New JSON operations for **Data Operations** component
-
-    The [**Data Operations** component](/data-operations) now includes two operations for advanced JSON data manipulation.
-    The **Path Selection** operation extracts values from nested JSON structures, and the **JQ Expression** operation uses the [`jq`](https://jqlang.org/) query language to perform advanced JSON filtering, projections, and transformations.
-
-  New [**Smart Router** component](/smart-router)
-
-  New [**Mock Data** component](/mock-data)
-
-  New [**Dynamic Create Data** component](/dynamic-create-data)
-
-  New [**ALTK** bundle](/bundles-altk)
-
-  New [**CometAPI** bundle](/bundles-cometapi)
-
-  New [**CUGA** bundle](/bundles-cuga)
-
-  The **LLM Router** component is now called the [**LLM Selector** component](/llm-selector).
-
-  The [**Web Search** component](/web-search) now consolidates Web Search, News Search, and RSS Reader into a single component with tabs for different search modes. You can search the web using DuckDuckGo, search Google News, or read RSS feeds—all from one component. The separate **News Search** and **RSS Reader** components have been removed.
-
-## 1.6.0
-
-Highlights of this release include the following changes.
-For all changes, see the [Changelog](https://github.com/khulnasoft-bot/primeagent/releases).
-
-### Known issue, potential security vulnerability: .env file not loaded in versions 1.6.0 through 1.6.3 {#env-file-bug}
-
-Primeagent versions 1.6.0 through 1.6.3 have a critical bug where environment variables from `.env` files aren't read.
-This affects all deployments using environment variables for configuration, including security settings.
-
-:::warning Potential security vulnerability
-If your `.env` file includes `AUTO_LOGIN=false`, upgrading to the impacted versions causes Primeagent to fall back to default settings, potentially giving all users superuser access immediately upon upgrade.
-Additionally, database credentials, API keys, and other sensitive configurations can't be loaded from `.env` files.
-
-_Don't_ upgrade to any Primeagent version from 1.6.0 through 1.6.3 if you use `.env` files for configuration.
-Instead, upgrade to 1.6.4, which includes a fix for this bug.
-:::
-
-### Known issue: Don't auto-upgrade Windows Desktop {#windows-desktop-update-issue}
-
-:::warning
-Windows users of Primeagent Desktop should **not** use the in-app update feature to upgrade to Primeagent version 1.6.0.
-Only Windows Desktop users upgrading to Primeagent version 1.6.0 are affected.
-:::
-
-The **Update** button in Primeagent Desktop will not work for Windows users, and may result in data loss.
-
-Instead, download a fresh installation from the [Primeagent website](https://prime.khulnasoft.com) when a new version is available.
-
-Follow the instructions below to minimize the risk of losing flows.
-
-These instructions assume the default path for the Primeagent database of `C:\Users\YOUR_USERNAME\AppData\Roaming\com.primeagent\data\database.db` or `C:\Users\%YOUR_USERNAME%\AppData\Roaming\com.primeagent\data\database.db`. Replace `YOUR_USERNAME` with your Windows username.
-
-1. Ensure you have Administrator privileges.
-2. Ensure you have enough disk space for a second installation of Primeagent.
-3. Close Primeagent, and ensure no Primeagent process is running in Task Manager.
-4. The Primeagent 1.6.0 installer automatically performs a database backup in a later step, but an additional manual backup provides additional redundancy and is recommended.
-To manually back up your Primeagent database file, do the following:
-   1. In Windows Explorer, navigate to `C:\Users\YOUR_USERNAME\AppData\Roaming\com.primeagent\data\`. Replace `YOUR_USERNAME` with your Windows username.
-   2. Copy the `database.db` at this location, and paste it to a safe location.
-5. Download the Windows installer from the [Primeagent website](https://prime.khulnasoft.com).
-6. Run the Windows installer as an Administrator. To run the installer as an Administrator, right-click the executable and select **Run as administrator**.
-7. Follow the Windows installer's guided steps.
-The Primeagent 1.6.0 installer automatically performs a database backup.
-These steps install Primeagent from scratch, and result in two Primeagent installations: the previously installed version, and version 1.6.0.
-This is expected behavior.
-8. Start version 1.6.0 of Primeagent, and confirm your flows behave as expected.
-9. **If flows are missing**, restore your flows from your manual backup by doing the following:
-    1. Close Primeagent.
-    2. Navigate to your backup location, and copy the `database.db` file.
-    3. Replace the database file in the new installation's `data` directory.
-    4. Start Primeagent, and confirm your flows behave as expected.
-    5. After confirmation, uninstall the previous version of Primeagent, and keep version 1.6.0.
+Highlights of this release include the following changes. For all changes, see the [Changelog](https://github.com/khulnasoft-bot/primeagent/releases/latest).
 
 ### Breaking changes
 
-- Authentication enforced for Primeagent API requests by default
+- Official packages require authentication by default
 
-    In Primeagent version 1.6, `PRIMEAGENT_AUTO_LOGIN=True` and `PRIMEAGENT_SKIP_AUTH_AUTO_LOGIN=False` by default.
-    This enforces authentication for Primeagent API requests while still automatically authenticating all users as superusers in the visual editor.
+    Official Python packages, tagged source archives, and Docker images now set `PRIMEAGENT_AUTO_LOGIN=false`.
+    Set `PRIMEAGENT_SUPERUSER_PASSWORD`, then sign in as `primeagent` or the username in `PRIMEAGENT_SUPERUSER`.
 
-    **This is a breaking change from 1.5 where both of these environment variables were `true` by default, bypassing all authentication.**
+    Before upgrading an auto-login installation, [prepare that account for password sign-in](/api-keys-and-authentication#upgrade-from-auto-login).
 
-    For temporary backwards compatibility, you can revert to the earlier unauthenticated behavior by setting both variables to `true`.
-    However, a future release will set `PRIMEAGENT_AUTO_LOGIN=False` and remove `PRIMEAGENT_SKIP_AUTH_AUTO_LOGIN`.
-    At that point, Primeagent will strictly enforce API key authentication for API requests, and you can manually disable authentication for some features, like the visual editor, by setting `PRIMEAGENT_AUTO_LOGIN=True`.
+    If you already upgraded and can't sign in, see [recover access](/troubleshoot#recover-access-after-upgrading).
 
-    For more information, see the documentation for [`PRIMEAGENT_AUTO_LOGIN`](/api-keys-and-authentication#primeagent-auto-login).
+    For more information, see [API keys and authentication](/api-keys-and-authentication#primeagent-auto-login).
 
-### New features and enhancements
+- Chroma and Local DB components are removed
 
-- OpenAI Responses API compatibility
+    Primeagent 1.13 stores local Knowledge and Memory in SQLite, instead of a local Chroma database.
+    The [**Chroma DB**](/components-bundle-components#legacy-bundles) and [**Local DB**](/components-bundle-components#legacy-bundles) components are legacy.
 
-  Primeagent now includes an endpoint that is compatible with the [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses) at `POST /api/v1/responses`.
-  This allows you to use existing OpenAI client libraries with minimal code changes by replacing the `model` name with your `flow_id`.
-  The endpoint supports streaming responses, conversation continuity, tool call results, and global variable passing through headers.
-  For more information, see [OpenAI Responses API](/api-openai-responses).
+    Replace **Chroma** and **Local DB** with a [knowledge base](/knowledge#knowledge-bases), or with a supported remote vector store.
 
-- Advanced document parsing with built-in Docling support
+    For more information, see [Upgrade Knowledge and Memory storage](/knowledge-storage-upgrade).
 
-  The **Read File** component supports advanced parsing with the Docling library.
+### New features
 
-  To make it easier to use the [**Docling** components](/bundles-docling) and the **Read File** component's new advanced parsing feature, the Docling dependency is now included with Primeagent for all operating systems except macOS Intel (x86_64).
+- Audit logging
 
-  For more information, see [Advanced parsing](/read-file#advanced-parsing).
+    Set `PRIMEAGENT_AUDIT_ENABLED=true` to record an append-only history of flow and project operations, including who attempted a change, on which resource, when, how it completed, and a description of what was written.
+    Query events with `GET /api/v1/flows/audits` and `GET /api/v1/projects/audits`.
 
-- Reorganized component menus and visual editor controls
+    For more information, see [Audit logging](./audit-logging).
 
-  - The [workspace](/concepts-overview#workspace) sidebar is divided into separate sections for <Icon name="Search" aria-hidden="true" /> **Search**, <Icon name="Component" aria-hidden="true" /> **Core components**, <McpIcon /> [**MCP servers**](/mcp-server), <Icon name="Blocks" aria-hidden="true" /> [**Bundles**](/components-bundle-components), and <Icon name="StickyNote" aria-hidden="true"/> **Add Note**.
-  - Lock/unlock controls moved to flow details in [**Projects**](/concepts-flows#projects).
-  - Zoom and help controls moved to the lower-right corner of the workspace.
-  - Vector store components moved to provider-specific <Icon name="Blocks" aria-hidden="true" /> [**Bundles**](/components-bundle-components)
-  - **Serper Google Search API** component moved to the **Serper** bundle
+- Connections
 
-- Increased the default maximum file upload size from `100 MB` to `1024 MB`.
+    Primeagent stores Google Workspace, Microsoft 365, and Slack accounts as persistent connections.
+    For more information, see [Connections](./connections).
 
-- New integrations and bundles:
+- Concurrent editing
 
-  - [Traceloop](/integrations-instana-traceloop)
-  - [Cohere Rerank](/bundles-cohere)
-  - [S3 Bucket Uploader](/bundles-amazon)
-  - [Composio single-service components](/bundles-composio)
+    Primeagent now protects a flow that is open by more than one user.
+    For more information, see [Concurrent editing](./concurrent-editing).
 
-### Deprecations
+- Instance migration
 
-- The **Local DB** component is now in legacy status.
-Replace this component with the [**Chroma DB** component](/bundles-chroma).
+    Primeagent provides a guided workflow to migrate users, projects, flows, settings, local files, and local knowledge bases to a new instance.
+    The workflow checks the source instance, pauses writes, creates a backup, copies applicable data to the target instance's storage, verifies the copy, and provides recovery steps.
 
-## 1.5.0
+    For more information, see [Migrate a Primeagent instance](/instance-migration).
 
-Highlights of this release include the following changes.
-For all changes, see the [Changelog](https://github.com/khulnasoft-bot/primeagent/releases).
+- Administration API and CLI
 
-### New features and enhancements
+    Superusers can manage users, teams, and roles with the API or the `primeagent admin` command.
+    For more information, see [Administer users and teams with the API and CLI](./admin-api-cli).
 
-- Primeagent API requests can require authentication
+## Component changes
 
-    To enhance security and ensure proper authentication for automatic login features, Primeagent API endpoints now require authentication with a Primeagent API key, even when `PRIMEAGENT_AUTO_LOGIN=True`.
-    This change will be enforced in a future release.
-    For temporary backwards compatibility, this release adds the `PRIMEAGENT_SKIP_AUTH_AUTO_LOGIN` environment variable.
-    The default value is `true`, which disables API authentication enforcement.
-    To enforce API authentication, set `PRIMEAGENT_SKIP_AUTH_AUTO_LOGIN=False`.
-    For more information, see the documentation for [`PRIMEAGENT_AUTO_LOGIN`](/api-keys-and-authentication#primeagent-auto-login).
+- The ALTK component is removed
 
-- Centralized **Language Model** and **Embedding Model** components
+    The [**ALTK**](/components-bundle-components) component is removed.
 
-    The [**Language Model** component](/components-models) and [**Embedding Model** component](/components-embedding-models) are now core components for your LLM and embeddings flows. They support multiple models and model providers, and allow you to experiment with different models without swapping out single-provider components.
-    Find them in the visual editor in the **Models** category.
+    Replace **ALTK** with the [**Agent**](/components-agents) component.
 
-    The single-provider components moved to the [**Bundles**](/components-bundle-components) section.
-    You can use them to replace the **Language Model** and **Embedding Model** core components, or connect them to the **Agent** component with the **Connect other models** provider option.
+- MrScraper components are removed
 
-- MCP server one-click installation
+    The [**MrScraper**](/bundles-mrscraper) bundle now provides three components.
 
-    On your Primeagent project's **MCP server** page, click **Auto install** to install your Primeagent MCP server to MCP clients with just one click.
-    The option to install with a JSON configuration file is available for macOS, Windows, and WSL.
-    For more information, see [Use Primeagent as an MCP server](/mcp-server).
+    Instead, use the **Scraper API** or **Web Search** components.
 
-- MCP server management
+    For more information, see [Update existing flows](/bundles-mrscraper).
 
-    You can now add, remove, and edit your MCP servers in the **MCP Tools** components and through your Primeagent **Settings** page.
-    For more information, see [Use Primeagent as an MCP client](/mcp-client).
+## 1.12.x
 
-- Input schema replaces temporary overrides
+For 1.12.x release notes, see the [1.12.x documentation](@site/versioned_docs/version-1.12.0/Support/release-notes.mdx).
 
-    The **Input schema** pane replaces the need to manage tweak values in the **API access** pane. When you enable a parameter in the **Input schema** pane, the parameter is automatically added to your flow's code snippets, providing ready-to-use templates for making requests in your preferred programming language.
+## 1.11.x
 
-- Tools components are redistributed
+For 1.11.x release notes, see the [1.11.x documentation](https://docs.prime.khulnasoft.com/1.11.0/release-notes).
 
-    All components in the **Tools** category were moved to other component categories, such as **Helpers** and [**Bundles**](/components-bundle-components), or marked as legacy.
+## 1.10.x
 
-    The [**MCP Tools** component](/mcp-client) is now under the **Agents** category.
+For 1.10.x release notes, see the [1.10.x documentation](https://docs.prime.khulnasoft.com/1.10.0/release-notes).
 
-    Tools that performed the same function were combined into single components that support multiple providers, such as the [**Web Search** component](/web-search) and the **News Search** component.
+## 1.9.x
 
-
-- Stability improvements
-
-    General stability improvements and bug fixes for enhanced reliability.
-    See an issue? [Raise it on GitHub](https://github.com/khulnasoft-bot/primeagent/issues).
-
-- New integrations and bundles
-
-   - [**Cleanlab** bundle](/bundles-cleanlab)
-
-## 1.4.2
-
-Highlights of this release include the following changes.
-For all changes, see the [Changelog](https://github.com/khulnasoft-bot/primeagent/releases).
-
-### New features and enhancements
-
-- Enhanced file and flow management system with improved bulk capabilities.
-- Added the **BigQuery** component
-- Added the **Twelve Labs** bundle
-- Added the **NVIDIA System-Assist** component
-
-### Deprecations
-
-- Deprecated the **Combine Text** component.
-
-## 1.4.1
-
-Highlights of this release include the following changes.
-For all changes, see the [Changelog](https://github.com/khulnasoft-bot/primeagent/releases).
-
-### New features and enhancements
-
-- Added an enhanced **Breaking Changes** feature to help update components without breaking flows after updating Primeagent.
-
-## 1.4.0
-
-Highlights of this release include the following changes.
-For all changes, see the [Changelog](https://github.com/khulnasoft-bot/primeagent/releases).
-
-### New features and enhancements
-
-- Introduced MCP server functionality to serve Primeagent tools to MCP-compatible clients.
-- Renamed **Folders** to **Projects** in the visual editor.
-- The `/folders` endpoints now redirect to `/projects`.
-
-### Deprecations
-
-- Deprecated the **Gmail**, **Google Drive**, and **Google Search** components.
-For alternatives, see the [**Google** bundle](/bundles-google).
+For 1.9.x release notes, see the [1.9.x documentation](https://docs.prime.khulnasoft.com/1.9.0/release-notes).
 
 ## Earlier releases
 

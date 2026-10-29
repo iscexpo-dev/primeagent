@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from pydantic import BeforeValidator
+from wfx.schema.validators import ensure_utc
 
 TF_WITH_TZ_AND_MICROSECONDS = "%Y-%m-%d %H:%M:%S.%f %Z"
 TF_WITH_TZ_AND_MICROSECONDS_ISO = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -51,9 +52,7 @@ def timestamp_to_str(timestamp: datetime | str) -> str:
         raise ValueError(msg)
 
     # Handle datetime object
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
-    return timestamp.strftime(TF_WITH_TZ_AND_MICROSECONDS)
+    return ensure_utc(timestamp).strftime(TF_WITH_TZ_AND_MICROSECONDS)
 
 
 def str_to_timestamp(timestamp: str | datetime) -> datetime:
@@ -82,6 +81,9 @@ def str_to_timestamp(timestamp: str | datetime) -> datetime:
 
         msg = f"Invalid timestamp format: {timestamp}. Expected format: YYYY-MM-DD HH:MM:SS.ffffff UTC"
         raise ValueError(msg)
+    if isinstance(timestamp, datetime):
+        return ensure_utc(timestamp)
+    # Leave other values, such as epoch numbers, to pydantic's datetime validation.
     return timestamp
 
 

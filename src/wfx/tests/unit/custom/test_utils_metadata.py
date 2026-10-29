@@ -1,9 +1,31 @@
 """Test metadata functionality in custom utils."""
 
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 from wfx.custom.utils import _generate_code_hash, build_component_metadata, build_custom_component_template_from_inputs
+
+
+def test_registry_error_clears_integration_stamps_on_reused_templates(monkeypatch):
+    from wfx.custom.utils import _stamp_integration_policy_identity
+
+    node = SimpleNamespace(
+        metadata={
+            "integration_provider_id": "old-provider",
+            "integration_capability_ids": ["old-provider.action"],
+            "module": "keep.this.module",
+        }
+    )
+
+    def unavailable_registry():
+        msg = "capability registry unavailable"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr("wfx.extension.bundle_registry.get_default_registry", unavailable_registry)
+    _stamp_integration_policy_identity(node, object())
+
+    assert node.metadata == {"module": "keep.this.module"}
 
 
 class TestCodeHashGeneration:
@@ -371,6 +393,78 @@ class TestMetadataWithDependencies:
     def test_build_component_metadata_includes_dependencies(self):
         """Test that build_component_metadata includes dependency analysis."""
 
+    @pytest.mark.parametrize(
+        ("base_class", "module_name", "display_name", "expected_provider_id"),
+        [
+            ("model", "_wfx_ext.official.openai.components.openai.chat", "OpenAI Embeddings", "openai"),
+            ("embedding", "wfx_ibm.components.ibm.watsonx_embeddings", "IBM watsonx.ai", "ibm-watsonx"),
+            ("model", "_wfx_ext.official.mistral.mistral", "Mistral AI Chat", "mistral"),
+        ],
+    )
+    def test_build_component_metadata_stamps_stable_model_provider(
+        self, base_class, module_name, display_name, expected_provider_id
+    ):
+        from wfx.base.embeddings.model import LCEmbeddingsModel
+        from wfx.base.models.model import LCModelComponent
+
+        component_base = LCModelComponent if base_class == "model" else LCEmbeddingsModel
+
+        class ProviderComponent(component_base):
+            pass
+
+        component = ProviderComponent()
+        component.display_name = display_name
+        component._code = "class ProviderComponent: pass"
+        frontend = Mock(metadata={}, display_name=display_name)
+
+        build_component_metadata(frontend, component, module_name, "ProviderComponent")
+
+        assert frontend.metadata["model_provider_policy_mode"] == "standalone"
+        assert frontend.metadata["model_provider_id"] == expected_provider_id
+        assert frontend.metadata["model_provider_display_name"]
+
+    def test_build_component_metadata_does_not_classify_unrelated_component(self):
+        from wfx.custom.custom_component.component import Component
+
+        component = Component()
+        component._code = "class UtilityComponent: pass"
+        frontend = Mock(metadata={}, display_name="Utility")
+
+        build_component_metadata(frontend, component, "wfx_bundles.mistral.utility", "UtilityComponent")
+
+        assert "model_provider_id" not in frontend.metadata
+
+    def test_build_component_metadata_stamps_inherited_annotated_delegate_mode(self):
+        from wfx.base.models.model import LCModelComponent
+
+        class DelegatingSelectorBase(LCModelComponent):
+            model_provider_policy_mode: str = "delegate"
+
+        class UnifiedSelectorComponent(DelegatingSelectorBase):
+            pass
+
+        component = UnifiedSelectorComponent()
+        component.display_name = "Language Model"
+        component._code = "class UnifiedSelectorComponent: pass"
+        frontend = Mock(
+            metadata={
+                "model_provider_id": "spoofed-provider",
+                "model_provider_display_name": "Spoofed Provider",
+            },
+            display_name=component.display_name,
+        )
+
+        build_component_metadata(
+            frontend,
+            component,
+            "wfx.components.models_and_agents.language_model",
+            "UnifiedSelectorComponent",
+        )
+
+        assert frontend.metadata["model_provider_policy_mode"] == "delegate"
+        assert "model_provider_id" not in frontend.metadata
+        assert "model_provider_display_name" not in frontend.metadata
+
     def test_build_from_inputs_without_module_generates_default(self):
         """Test that build_component_metadata includes dependency analysis results."""
         from wfx.custom.custom_component.component import Component
@@ -583,3 +677,18 @@ class LMStudioModelComponent(LCModelComponent):
         # assert mock_frontend.metadata["module"] == "custom_components.my_test_component"
         # assert "code_hash" in mock_frontend.metadata
         # assert len(mock_frontend.metadata["code_hash"]) == 12
+
+
+def test_trigger_components_are_marked_with_their_kind_and_other_components_are_not():
+    """The palette hides every trigger behind one flag by this marker, wherever it is listed."""
+    from wfx.components.triggers.schedule_trigger import ScheduleTriggerComponent
+    from wfx.custom.utils import _stamp_trigger_kind
+
+    trigger_node = SimpleNamespace(metadata={})
+    _stamp_trigger_kind(trigger_node, ScheduleTriggerComponent())
+    assert trigger_node.metadata == {"trigger_kind": "schedule"}
+
+    # A reused template never keeps a stale marker.
+    reused = SimpleNamespace(metadata={"trigger_kind": "schedule", "module": "keep.this.module"})
+    _stamp_trigger_kind(reused, object())
+    assert reused.metadata == {"module": "keep.this.module"}

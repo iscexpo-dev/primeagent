@@ -1,0 +1,242 @@
+---
+title: Flow DevOps Toolkit SDK
+slug: /flow-devops-sdk
+---
+
+Use the Flow DevOps Toolkit SDK to version, test, and deploy your flows.
+
+Instead of manually exporting, sharing, and importing flow JSON files from the Primeagent UI, the Flow DevOps toolkit offers terminal-based workflows for versioning, environment variables, testing, and deployment.
+
+## Prerequisites
+
+- [Install and start Primeagent](/get-started-installation)
+- Create a [Primeagent API key](/api-keys-and-authentication)
+- Install the Primeagent `wfx` package
+
+   To install the `wfx` package from PyPI, do the following:
+
+   1. Create a virtual environment:
+      ```bash
+      uv venv VENV_NAME
+      ```
+
+   2. Activate the virtual environment.
+      ```bash
+      source VENV_NAME/bin/activate
+      ```
+   3. Install the Primeagent WFX package in the virtual environment:
+      ```bash
+      uv pip install wfx
+      ```
+   4. Run Flow DevOps Toolkit commands in the virtual environment that has WFX installed.
+
+      Alternatively, you can run `uvx wfx` commands, or run WFX from the `src/wfx` directory in a cloned Primeagent repo.
+      For more information, see the [Primeagent WFX README](https://github.com/khulnasoft-bot/primeagent/blob/main/src/wfx/README.md).
+
+   :::tip
+   `uv pip install wfx` installs the core WFX executor but does not include components that ship as separate bundle packages.
+   If your flows use those components, install the required bundles in the same virtual environment.
+   For more information, see [About bundles](/components-bundle-components).
+   :::
+
+## Create a project and version a flow
+
+1. Create a flow in the Primeagent UI, such as the Simple Agent starter flow in the [Quickstart](/get-started-quickstart).
+2. Open a terminal session within the virtual environment that has `wfx` installed.
+3. To initialize a project, run:
+    ```bash
+    wfx init PROJECT_NAME
+    ```
+
+    Replace `PROJECT_NAME` with a name for your project folder.
+    `wfx init` creates a scaffold for your project.
+    The output is similar to the following:
+
+    ```text
+    demo-project/
+    ├── .github/
+    │   └── workflows/
+    │       ├── primeagent-push.yml       # CI workflow
+    │       ├── primeagent-test.yml       # CI workflow
+    │       └── primeagent-validate.yml   # CI workflow
+    ├── .gitignore                      # ignores legacy credentials file
+    ├── .wfx/
+    │   └── environments.yaml           # edit with your instance URLs + API key env var names (safe to commit)
+    ├── ci/
+    │   ├── ci-push.sh                  # generic CI script
+    │   ├── ci-test.sh                  # generic CI script
+    │   └── ci-validate.sh              # generic CI script
+    ├── flows/
+    │   └── .gitkeep                    # versioned empty directory
+    └── tests/
+        ├── __init__.py
+        └── test_flows.py               # flow_runner example tests
+
+    ✔ Project scaffolded. Next steps:
+      1. Edit `.wfx/environments.yaml` with your instance URL
+      2. export PRIMEAGENT_LOCAL_API_KEY=<key>   (Settings -> API Keys)
+      3. wfx pull --env local --output-dir flows/
+    ```
+
+    The project scaffold includes the following tools for building flows:
+
+    * `.github/workflows`: GitHub CI tooling.
+    * `.wfx/environments.yaml`: Control your project's URL and API keys as environment variables for local, staging, and production environments.
+    * `ci/` Shell scripts for pushing, testing, and validating flows.
+    * `flows/`: An empty directory to store flows that includes a `.gitkeep` file for flow versioning.
+    * `tests/test_flows.py`: Example tests that you can modify to test flows.
+
+4. Add your Primeagent API key to your `.env` file, or export it within the terminal session.
+    The Flow DevOps SDK includes `url` and `api_key_env` environment variables for `local`, `staging`, and `production` environments.
+    The variable name for the API key differs between environments, so ensure you're adding the correct variable.
+    For example, to add a Primeagent API key to a local Primeagent server, set:
+
+    ```text
+    export PRIMEAGENT_LOCAL_API_KEY=PRIMEAGENT_API_KEY
+    ```
+
+5. To test server authentication with your API key, run:
+
+    ```bash
+    wfx login
+    ```
+
+    The Flow DevOps SDK tests your key against the URL and confirms the connection is working.
+    If the test reports `Authentication failed`, create and export a new key and try again.
+
+6. To check the connected server for existing flows, run:
+
+    ```bash
+    wfx pull
+    ```
+
+    The Flow DevOps SDK lists your server's flows. Output is similar to the following (from a project directory such as `demo-project/`):
+
+    ```text
+    Pulling all flows from http://localhost:7860
+    Pulled 'Simple Agent' -> flows/Simple_Agent.json
+
+    ┌────────────────┬──────────────────────────────────────┬───────────────────────────┬──────────┐
+    │ Name           │ ID                                   │ File                      │ Status   │
+    ├────────────────┼──────────────────────────────────────┼───────────────────────────┼──────────┤
+    │ Simple Agent   │ c2f91b01-9a73-4c62-b7f0-e15bc3bd6802 │ flows/Simple_Agent.json   │ CREATED  │
+    └────────────────┴──────────────────────────────────────┴───────────────────────────┴──────────┘
+
+    1 updated.
+    ```
+
+    `wfx pull` pulls flow changes on the server to JSON files under `flows/` in your project (for example `demo-project/flows`).
+    If you run `wfx pull` again, the Flow DevOps SDK reports a Status of `Unchanged`.
+    You will pull changes in the next steps.
+7. In the Primeagent UI, open the Simple Agent flow and change the flow.
+    For example, change the **Chat Input** to a different input string.
+    Save the flow.
+8. Return to your terminal, and run `wfx status`.
+   The Flow DevOps SDK reports the flow's Status as `UPDATED`, because the hash of the flow JSON has changed with your update.
+9. To pull the reported changes from the Primeagent server to your local project folder, run `wfx pull`.
+10. To _push_ flow changes from flows stored locally in `demo-project/flows` to the Primeagent server, run `wfx push`.
+
+## Validate flows
+
+The Flow DevOps SDK can validate that local flows are correctly formed before pushing to the Primeagent with `wfx validate`.
+
+1. To test the Simple Agent starter flow, pass the flow JSON path to the `wfx validate` command:
+    ```bash
+    wfx validate flows/Simple_Agent.json
+    ```
+2. Once validated, push flow changes to the server with `wfx push`.
+
+## Generate requirements.txt for flows {#generate-requirementstxt-for-flows}
+
+The Flow DevOps SDK can generate a `requirements.txt` file for a flow.
+
+A flow JSON describes nodes and wiring, and does not list the PyPI packages components import at runtime.
+Generate a `requirements.txt` file to capture the minimal Python dependencies, so you can install a matching environment for the flow.
+
+1. From your project directory, point `wfx requirements` at a flow JSON file.
+   To print the requirements to the terminal:
+
+   ```bash
+   wfx requirements flows/Simple_Agent.json
+   ```
+
+   To write a `requirements.txt` file instead of printing, use `-o` or `--output`:
+
+   ```bash
+   wfx requirements flows/Simple_Agent.json -o requirements.txt
+   ```
+
+2. Optionally, you can now share and serve the flow by keeping the flow JSON and `requirements.txt` in the same environment.
+   To serve the flow without the Primeagent UI, do the following:
+
+   1. Create a virtual environment:
+   ```bash
+   uv venv VENV_NAME
+   ```
+
+   2. Activate the virtual environment.
+   ```bash
+   source VENV_NAME/bin/activate
+   ```
+
+   3. Install the dependencies from `requirements.txt` in the virtual environment:
+   ```bash
+   uv pip install -r requirements.txt
+   ```
+
+   4. To set a Primeagent API key, run:
+   ```bash
+   export PRIMEAGENT_API_KEY=PRIMEAGENT_API_KEY
+   ```
+
+   5. To serve the flow without the Primeagent UI, pass the flow JSON path to the `wfx serve` command:
+   ```bash
+   wfx serve flows/Simple_Agent.json
+   ```
+
+   `wfx serve` starts a FastAPI app that exposes your flow as an HTTP API endpoint.
+   For more information, see the [Primeagent WFX README](https://github.com/khulnasoft-bot/primeagent/blob/main/src/wfx/README.md).
+
+## Manage multiple environments with `environments.yaml`
+
+The `environments.yaml` file created at initialization contains three example entries for deployment environments:
+
+```yaml
+local:
+  url: http://127.0.0.1:7860
+  api_key_env: PRIMEAGENT_LOCAL_API_KEY
+staging:
+  url: https://staging.example.com
+  api_key_env: PRIMEAGENT_STAGING_API_KEY
+production:
+  url: https://primeagent.example.com
+  api_key_env: PRIMEAGENT_PRODUCTION_API_KEY
+```
+
+Each entry contains a `url` for the Primeagent base URL, and an `api_key_env` field.
+The `api_key_env` field names an environment variable that you either `export` or store in a `.env` file, and does not store the secret string itself, which makes `environments.yaml` safe to commit to version control.
+
+The names `local`, `staging`, and `production` in `environments.yaml` are conventions, and can be named whatever your project requires. You can add more than three entries.
+
+`environments.yaml` is distinct from the Primeagent or WFX `.env` file.
+`environments.yaml` controls which remote Primeagent instance you're deploying flows to, flow versioning, and environment variable _names_ for API keys.
+The `.env` contains runtime values for the Primeagent server, and might also contain _actual secret values_, so the `.env` should not be committed to version control.
+
+Commands that call a Primeagent server over HTTP, such as `wfx pull` or `wfx push`, use `--env ENVIRONMENT_NAME` to determine which Primeagent instance to send the request to.
+
+For example, to send a `push` request to a server named `local` in `environments.yaml`, run:
+
+```bash
+wfx push --env local
+```
+
+This command will send the request to the Primeagent base URL at `http://127.0.0.1:7860` using a Primeagent API key named `PRIMEAGENT_LOCAL_API_KEY`.
+
+## See also
+
+- [About WFX](./wfx-overview)
+- [Install WFX](./wfx-install)
+- [Run flows with WFX](./wfx-run)
+- [Serve flows with WFX](./wfx-serve)
+- [Resolve connections in headless WFX](./wfx-connections), including the `required_variables` and `required_connections` a project deployment artifact declares
+- [Extensions overview](./extensions-overview)

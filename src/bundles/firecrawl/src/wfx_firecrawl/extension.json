@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-firecrawl",
+  "version": "0.2.0",
+  "name": "Firecrawl",
+  "description": "Firecrawl components (Scrape, Crawl, Map, and Search APIs) as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "firecrawl",
+      "path": "components/firecrawl"
+    }
+  ]
+}

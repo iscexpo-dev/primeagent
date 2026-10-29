@@ -15,7 +15,11 @@ services:
       - primeagent-data:/app/primeagent
 
   postgres:
-    image: postgres:16
+    # Pinned to a specific Debian base (trixie) so the postgres:16 tag does not
+    # silently roll its OS underneath us — that roll causes a glibc collation
+    # version mismatch warning on existing volumes. Matches the primeagent image
+    # base. See https://github.com/khulnasoft-bot/primeagent/issues/9608
+    image: postgres:16-trixie
     environment:
       POSTGRES_USER: primeagent
       POSTGRES_PASSWORD: primeagent

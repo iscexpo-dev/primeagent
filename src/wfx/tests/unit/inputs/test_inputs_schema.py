@@ -4,13 +4,34 @@ from typing import Union
 
 import pytest
 from pydantic import BaseModel, Field, ValidationError
-from wfx.inputs.inputs import BoolInput, DictInput, FloatInput, InputTypes, IntInput, MessageTextInput, NestedDictInput
+from wfx.inputs.inputs import (
+    BoolInput,
+    DictInput,
+    FloatInput,
+    InputTypes,
+    IntInput,
+    MessageTextInput,
+    MultiselectInput,
+    NestedDictInput,
+    instantiate_input,
+)
 from wfx.io.schema import schema_to_primeagent_inputs
 from wfx.schema.data import Data
 from wfx.schema.json_schema import create_input_schema_from_json_schema
 from wfx.template import Input, Output
 from wfx.template.field.base import UNDEFINED
 from wfx.type_extraction.type_extraction import post_process_type
+
+
+@pytest.mark.parametrize("by_alias", [True, False])
+@pytest.mark.parametrize("is_list", [True, False])
+def test_multiselect_serialized_field_names_round_trip(by_alias, is_list):
+    original = MultiselectInput(name="checks", options=["PII"], value=["PII"], is_list=is_list)
+    payload = original.model_dump(by_alias=by_alias)
+    payload.pop("_input_type", None)
+    restored = instantiate_input("MultiselectInput", payload)
+    assert restored.is_list is is_list
+    assert restored.value == ["PII"]
 
 
 class TestInput:
@@ -108,12 +129,25 @@ class TestInput:
             "fileTypes": [],
             "file_path": "",
             "advanced": False,
+            "api_editable": False,
             "title_case": False,
             "dynamic": False,
             "info": "",
             "input_types": ["Text"],
             "load_from_db": False,
         }
+
+    def test_input_api_editable_flag(self):
+        input_obj = Input(field_type="str")
+        assert input_obj.to_dict()["api_editable"] is False
+        input_obj.api_editable = True
+        assert input_obj.to_dict()["api_editable"] is True
+
+    def test_mixin_input_api_editable_flag(self):
+        default_input = MessageTextInput(name="prompt")
+        assert default_input.to_dict()["api_editable"] is False
+        exposed_input = MessageTextInput(name="prompt", api_editable=True)
+        assert exposed_input.to_dict()["api_editable"] is True
 
 
 class TestOutput:
@@ -231,7 +265,7 @@ def test_schema_to_primeagent_inputs():
 def test_schema_to_primeagent_inputs_sets_input_types_for_connectable_handles():
     """Non-string schema fields must carry input_types so the frontend renders connection handles.
 
-    Regression test for https://github.com/khulnasoft/primeagent/issues/9424:
+    Regression test for https://github.com/khulnasoft-bot/primeagent/issues/9424:
     MCP Tool components did not expose input ports for number, bool, or dict/JSON fields
     because schema_to_primeagent_inputs left input_types unset, and the frontend's
     computeDisplayHandle hides handles for PRIMEAGENT_SUPPORTED_TYPES with no input_types.

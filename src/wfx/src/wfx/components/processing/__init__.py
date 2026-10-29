@@ -1,4 +1,4 @@
-"""Processing components for PrimeAgent."""
+"""Processing components for primeagent."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from wfx.components.processing.data_operations import DataOperationsComponent
     from wfx.components.processing.dataframe_operations import DataFrameOperationsComponent
     from wfx.components.processing.json_cleaner import JSONCleaner
+    from wfx.components.processing.operations import OperationsComponent
     from wfx.components.processing.output_parser import OutputParserComponent
     from wfx.components.processing.parse_data import ParseDataComponent
     from wfx.components.processing.parser import ParserComponent
@@ -27,6 +28,7 @@ _dynamic_imports = {
     "DataOperationsComponent": "data_operations",
     "DataFrameOperationsComponent": "dataframe_operations",
     "JSONCleaner": "json_cleaner",
+    "OperationsComponent": "operations",
     "OutputParserComponent": "output_parser",
     "ParseDataComponent": "parse_data",
     "ParserComponent": "parser",
@@ -42,6 +44,7 @@ __all__ = [
     "DataOperationsComponent",
     "JSONCleaner",
     "MessageStoreComponent",
+    "OperationsComponent",
     "OutputParserComponent",
     "ParseDataComponent",
     "ParserComponent",

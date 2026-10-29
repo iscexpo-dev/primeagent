@@ -6,6 +6,8 @@ import typer
 
 from wfx.cli._authoring_commands import register as _register_authoring
 from wfx.cli._extension_commands import register as _register_extension
+from wfx.cli._observability_commands import register as _register_observability
+from wfx.cli._prewarm_commands import register as _register_prewarm
 from wfx.cli._remote_commands import register as _register_remote
 from wfx.cli._running_commands import register as _register_running
 from wfx.cli._setup_commands import register as _register_setup
@@ -41,6 +43,8 @@ def _app_callback(
 
 # Register command groups (order determines help-panel ordering)
 _register_setup(app)
+_register_observability(app)
+_register_prewarm(app)
 _register_authoring(app)
 _register_upgrade(app)
 _register_extension(app)

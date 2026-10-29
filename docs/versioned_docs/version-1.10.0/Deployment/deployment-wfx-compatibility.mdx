@@ -1,0 +1,105 @@
+---
+title: WFX and Primeagent version compatibility
+slug: /wfx-compatibility
+---
+
+Primeagent and WFX are versioned together on the same `major.minor` line, so you can always tell which WFX release runs which flows.
+
+## Compatibility contract
+
+**WFX `X.Y.N` is guaranteed compatible with any flow exported from Primeagent `X.Y.M`.**
+
+The major and minor numbers must match.
+The patches `.N` for WFX and `.M` for Primeagent are released independently. An WFX patch fix does not require a Primeagent patch release, and vice versa.
+
+When WFX and a flow share the same `major` version but differ on `minor`, such as a flow exported from Primeagent 1.9.x run with WFX 1.10.x,  individual components may have been updated since the flow was saved.
+Use `wfx upgrade` to check compatibility and apply safe automatic fixes before running or serving such a flow.
+For more information, see [Check and upgrade flows with wfx upgrade](#check-and-upgrade-flows-with-wfx-upgrade).
+
+## Compatibility matrix
+
+| Primeagent version | Compatible WFX version | Notes |
+|---|---|---|
+| 1.10.x | 1.10.x | Fully compatible. Same `major.minor` line. |
+| 1.11.x | 1.11.x | Fully compatible. Same `major.minor` line. |
+| 1.9.x or earlier | 1.10.x | Use `wfx upgrade --upgrade-flow=safe` to apply safe component schema upgrades before running. |
+| Any 1.x.x | 0.5.x | WFX 0.5.x was a standalone release before version alignment. It is no longer compatible with Primeagent 1.10+ flows. |
+
+## Check and upgrade flows with `wfx upgrade`
+
+The `wfx upgrade` command inspects a flow against the built-in component registry and reports any components that have become incompatible or that have safe automatic upgrades available.
+
+`wfx upgrade` compares each component in the flow against a bundled index at `_assets/component_index.json` that ships with the WFX release.
+
+Run it with no flags to get a read-only compatibility report. The command reads your flow JSON, walks through every component node, and prints one line per node with its status. It does not modify the file.
+
+```bash
+wfx upgrade my-flow.json
+```
+
+Example output:
+
+```text
+  [SAFE] Agent (AgentComponent) - id: abc123
+  [OK] Chat Output (ChatOutput) - id: def456
+```
+
+| CLI output | What it means | Example |
+|---|---|---|
+| `[OK]` | Component matches the current registry. | No action needed. |
+| `[SAFE]` | Component code changed, but ports and fields your flow uses still line up. `wfx upgrade --write` can apply this update automatically. | An output that previously emitted only `Message` now also supports `Data`. |
+| `[BREAKING]` | A port or field your flow relies on was removed. | An input that accepted `Message` and `Data` now accepts only `Message` and your flow uses a `Data` component. |
+| `[BLOCKED]` | The component type no longer exists in this WFX build. | A bundle-only component is not installed in your environment. |
+
+To apply fixes or enforce stricter checks, run:
+
+```bash
+# Apply all safe upgrades and overwrite the file
+wfx upgrade my-flow.json --write
+
+# Fail if any safe upgrades are still pending (use after a dry run before running `--write`)
+wfx upgrade my-flow.json --strict
+```
+
+## Inline compatibility checking with `--upgrade-flow`
+
+Both `wfx run` and `wfx serve` accept an `--upgrade-flow` option so you can apply compatibility checks at execution without a separate `wfx upgrade` step.
+
+```bash
+# Check only — fail if any component is blocked
+wfx run my-flow.json --upgrade-flow=check "Hello world"
+
+# Apply safe upgrades in memory, then run
+wfx run my-flow.json --upgrade-flow=safe "Hello world"
+
+# Same options for serve
+wfx serve my-flow.json --upgrade-flow=safe
+```
+
+| Mode | Behavior |
+|---|---|
+| `check` | Reports compatibility issues and exits non-zero if any component is blocked. No changes are written to disk. |
+| `safe` | Applies all safe upgrades in memory, then runs or serves the flow. Blocked components still cause a non-zero exit. |
+
+## Pin versions
+
+Pin `wfx~=1.10.0` in `requirements.txt` to track all patch releases for a given Primeagent minor without crossing into the next minor automatically.
+
+```text
+# requirements.txt — allows 1.10.1, 1.10.2, … but not 1.11.0
+wfx~=1.10.0
+```
+
+## Migrating from WFX 0.5.x to 1.10.0
+
+WFX was realigned from its standalone `0.5.x` line onto Primeagent's `major.minor` line, so the version number jumps from `0.5.0` to `1.10.0` in one release. This is a version-numbering change, not 95 minor releases of new features.
+
+This jump can affect existing dependency pins in unexpected ways:
+
+| Pin style | Effect |
+|---|---|
+| `wfx==0.5.x` or `wfx<1.0` | Does not upgrade. The deployment stays on 0.5.x. |
+| `wfx>=0.5,<1` | Does not upgrade. The upper bound excludes 1.10.0. |
+| `wfx>=0.5` (no upper bound) | Upgrades automatically to 1.10.0 on the next install. |
+
+Going forward, pin with `wfx~=1.10.0` so you receive compatible patches without silently crossing minor lines.

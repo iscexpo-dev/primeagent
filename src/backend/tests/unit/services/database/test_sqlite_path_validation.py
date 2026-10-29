@@ -6,7 +6,7 @@ an opaque ``RuntimeError: Error creating DB and tables``. ``check_sqlite_databas
 fails fast with an actionable message instead. These helpers only improve
 diagnostics -- they never create directories nor change which URLs are accepted.
 
-Issue: https://github.com/khulnasoft/primeagent/issues/13634
+Issue: https://github.com/khulnasoft-bot/primeagent/issues/13634
 """
 
 from pathlib import Path

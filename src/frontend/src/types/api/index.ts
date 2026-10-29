@@ -99,6 +99,7 @@ export type InputFieldType = {
   // biome-ignore lint/suspicious/noExplicitAny: legacy
   value?: any;
   dynamic?: boolean;
+  api_editable?: boolean;
   proxy?: { id: string; field: string };
   input_types?: Array<string>;
   display_name?: string;
@@ -196,8 +197,8 @@ export type changeUser = {
 };
 
 export type resetPasswordType = {
-  password?: string;
-  profile_image?: string;
+  current_password: string;
+  password: string;
 };
 
 export type Users = {
@@ -205,7 +206,8 @@ export type Users = {
   username: string;
   is_active: boolean;
   is_superuser: boolean;
-  profile_image: string;
+  // UserRead.profile_image is nullable; users who never picked one get null.
+  profile_image: string | null;
   create_at: Date;
   updated_at: Date;
   optins?: {
@@ -321,7 +323,7 @@ export type MutationFunctionType = (
   mutationFn: UseMutationOptions<any, any, any>["mutationFn"],
   options?: Omit<
     // biome-ignore lint/suspicious/noExplicitAny: legacy
-    UseMutationOptions<any, any, any>,
+    UseMutationOptions<any, any, any, any>,
     "mutationFn" | "mutationKey"
   >,
   // biome-ignore lint/suspicious/noExplicitAny: legacy

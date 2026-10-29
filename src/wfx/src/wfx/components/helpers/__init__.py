@@ -103,9 +103,14 @@ def __getattr__(attr_name: str) -> Any:
         raise AttributeError(msg)
 
     # CurrentDateComponent, CalculatorComponent, and IDGeneratorComponent were moved to utilities
-    # Forward them to utilities for backwards compatibility
+    # Forward them to utilities for backwards compatibility.
+    # Import the submodule directly instead of `from wfx.components import utilities`: the latter
+    # routes through wfx.components.__getattr__, which brute-force imports every registered bundle
+    # module looking for a name that is not in its _dynamic_imports table. See _discover_all note.
     if attr_name in ("CurrentDateComponent", "CalculatorComponent", "IDGeneratorComponent"):
-        from wfx.components import utilities
+        from importlib import import_module
+
+        utilities = import_module("wfx.components.utilities")
 
         result = getattr(utilities, attr_name)
         globals()[attr_name] = result

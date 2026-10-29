@@ -1126,7 +1126,7 @@
                 "trace_as_metadata": true,
                 "type": "str",
                 "value": [
-                  "https://raw.githubusercontent.com/khulnasoft/primeagent/refs/heads/main/src/backend/base/primeagent/custom/custom_component/component.py"
+                  "https://raw.githubusercontent.com/khulnasoft-bot/primeagent/refs/heads/main/src/backend/base/primeagent/custom/custom_component/component.py"
                 ]
               },
               "use_async": {
@@ -1482,13 +1482,13 @@
                 "trace_as_metadata": true,
                 "type": "str",
                 "value": [
-                  "https://github.com/khulnasoft/primeagent/blob/main/src/wfx/src/wfx/base/agents/agent.py",
-                  "https://github.com/khulnasoft/primeagent/blob/main/src/wfx/src/wfx/components/llm_operations/structured_output.py",
-                  "https://raw.githubusercontent.com/khulnasoft/primeagent/refs/heads/main/src/wfx/src/wfx/components/tools/calculator.py",
-                  "https://raw.githubusercontent.com/khulnasoft/primeagent/refs/heads/main/src/wfx/src/wfx/components/tavily/tavily_search.py",
-                  "https://raw.githubusercontent.com/khulnasoft/primeagent/refs/heads/main/src/wfx/src/wfx/components/ollama/ollama.py",
-                  "https://raw.githubusercontent.com/khulnasoft/primeagent/refs/heads/main/src/wfx/src/wfx/components/flow_controls/conditional_router.py",
-                  "https://raw.githubusercontent.com/khulnasoft/primeagent/refs/heads/main/src/wfx/src/wfx/components/files_and_knowledge/file.py"
+                  "https://github.com/khulnasoft-bot/primeagent/blob/main/src/wfx/src/wfx/base/agents/agent.py",
+                  "https://github.com/khulnasoft-bot/primeagent/blob/main/src/wfx/src/wfx/components/llm_operations/structured_output.py",
+                  "https://raw.githubusercontent.com/khulnasoft-bot/primeagent/refs/heads/main/src/wfx/src/wfx/components/tools/calculator.py",
+                  "https://raw.githubusercontent.com/khulnasoft-bot/primeagent/refs/heads/main/src/wfx/src/wfx/components/tavily/tavily_search.py",
+                  "https://raw.githubusercontent.com/khulnasoft-bot/primeagent/refs/heads/main/src/wfx/src/wfx/components/ollama/ollama.py",
+                  "https://raw.githubusercontent.com/khulnasoft-bot/primeagent/refs/heads/main/src/wfx/src/wfx/components/flow_controls/conditional_router.py",
+                  "https://raw.githubusercontent.com/khulnasoft-bot/primeagent/refs/heads/main/src/wfx/src/wfx/components/files_and_knowledge/file.py"
                 ]
               },
               "use_async": {
@@ -1844,7 +1844,7 @@
                 "trace_as_metadata": true,
                 "type": "str",
                 "value": [
-                  "https://raw.githubusercontent.com/khulnasoft/primeagent/refs/heads/main/src/backend/base/primeagent/components/custom_component/custom_component.py"
+                  "https://raw.githubusercontent.com/khulnasoft-bot/primeagent/refs/heads/main/src/backend/base/primeagent/components/custom_component/custom_component.py"
                 ]
               },
               "use_async": {

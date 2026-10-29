@@ -5,10 +5,11 @@ slug: /install-custom-dependencies
 
 Primeagent provides optional dependency groups and support for custom dependencies to extend Primeagent functionality. This guide covers how to add dependencies for different Primeagent installations, including Primeagent Desktop and Primeagent OSS.
 
-The Primeagent codebase uses two `pyproject.toml` files to manage dependencies, with one for `base` and one for `main`:
+The Primeagent codebase uses three package layers:
 
-* The `main` package is managed by the root level `pyproject.toml`, and it includes end-user features and main application code, such as Langchain and OpenAI.
-* The `base` package is managed at `src/backend/base/pyproject.toml`, and it includes core infrastructure, such as the FastAPI web framework.
+* The minimal application (`primeagent-base`) is managed at `src/backend/base/pyproject.toml`. As of Primeagent 1.12, it is a complete Primeagent install: UI, API, platform services, built-in components, and the `primeagent` command, without provider extensions. It is version-aligned with `primeagent`, and  depends on `wfx`. There is no `primeagent-core` package.
+* The full package (`primeagent`) is managed by the root-level `pyproject.toml`. It depends on the same `primeagent-base` version and adds the curated standalone `wfx-*` provider extensions.
+* The `wfx` package is managed at `src/wfx/pyproject.toml`. WFX is a lightweight CLI tool for executing and serving Primeagent flows. The `wfx` package does not provide optional dependency groups for end users.
 
 ## Install custom dependencies in Primeagent Desktop {#primeagent-desktop}
 
@@ -33,13 +34,15 @@ If you're working within a cloned Primeagent repository, add dependencies with `
 uv add DEPENDENCY
 ```
 
-### Install optional dependency groups
+### Install optional dependency groups for `primeagent`
 
-Primeagent OSS provides optional dependency groups that extend its functionality.
+The `primeagent` package (main) provides optional dependency groups that extend its functionality.
 
-These dependencies are listed in the [pyproject.toml](https://github.com/khulnasoft-bot/primeagent/blob/main/pyproject.toml#L194) file under `[project.optional-dependencies]`.
+By default, installing `primeagent` without any extras includes all dependencies listed in the `[project.dependencies]` section. Optional dependency groups are not installed by default and must be explicitly requested.
 
-Install dependency groups using pip's `[extras]` syntax. For example, to install Primeagent with the `postgresql` dependency group, enter the following command:
+These optional dependencies are listed in the [primeagent `pyproject.toml`](https://github.com/khulnasoft-bot/primeagent/blob/main/pyproject.toml) file under `[project.optional-dependencies]`.
+
+Install dependency groups using pip's `[extras]` syntax. For example, to install `primeagent` with the `postgresql` dependency group, enter the following command:
 
 ```bash
 uv pip install "primeagent[postgresql]"
@@ -48,14 +51,57 @@ uv pip install "primeagent[postgresql]"
 To install multiple extras, use commas to separate each dependency group:
 
 ```bash
-uv pip install "primeagent[local,postgresql]"
+uv pip install "primeagent[postgresql,audio]"
 ```
+
+Use the `bundles` extra to install the non-PyTorch providers from `wfx-bundles` plus the
+opt-in standalone packages listed in
+[Additional bundles](/extensions-bundle-list#additional-bundles):
+
+```bash
+uv pip install "primeagent[bundles]"
+```
+
+### Install optional dependency groups for `primeagent-base`
+
+`primeagent-base` is the minimal workable Primeagent: the UI, API, platform
+services, and built-in components, without provider extensions. It is
+version-aligned with `primeagent` starting with version 1.12.0. It includes platform services such as Redis, SQLite Knowledge and Memory storage, MCP, Kubernetes, object storage, and
+tracing support. The `primeagent` package depends on this same version of
+`primeagent-base` and adds curated standalone extensions.
+
+The `primeagent-base` package provides its own optional dependency groups that are separate from those in the `primeagent` package. The `primeagent-base` package can be installed as a standalone package with these optional dependency groups.
+
+By default, installing `primeagent-base` without any extras includes all dependencies listed in the `[project.dependencies]` section. Optional dependency groups are not installed by default and must be explicitly requested.
+These optional dependency groups are listed in the [primeagent-base `pyproject.toml`](https://github.com/khulnasoft-bot/primeagent/blob/main/src/backend/base/pyproject.toml) file under `[project.optional-dependencies]`.
+
+Install `primeagent-base` with optional dependency groups using pip's `[extras]` syntax. For example, to install `primeagent-base` with the `postgresql` dependency group:
+
+```bash
+uv pip install "primeagent-base[postgresql]"
+```
+
+To install multiple extras, use commas to separate each dependency group:
+
+```bash
+uv pip install "primeagent-base[postgresql,cassandra]"
+```
+
+Provider components are installed as extensions. For example, install
+`wfx-openai` beside `primeagent-base`, or use `primeagent` to install the curated
+provider set:
+
+```bash
+uv pip install primeagent-base wfx-openai
+```
+
+The base executable is `primeagent`; there is no `primeagent-base` command.
 
 ### Use a virtual environment to test custom dependencies
 
 When testing locally, use a virtual environment to isolate your dependencies and prevent conflicts with other Python projects.
 
-For example, if you want to experiment with `matplotlib` with Primeagent:
+For example, if you want to experiment with a custom dependency like `matplotlib` with Primeagent:
 
 ```bash
 # Create and activate a virtual environment
@@ -66,19 +112,24 @@ source YOUR_PRIMEAGENT_VENV/bin/activate
 uv pip install primeagent matplotlib
 ```
 
+You can also install `primeagent-base` with specific optional dependency groups in your virtual environment:
+
+```bash
+# Install runnable base with selected compatibility extras
+uv pip install "primeagent-base[postgresql,cassandra]" matplotlib
+```
+
 If you're working within a cloned Primeagent repository, add dependencies with `uv add` to reference the existing `pyproject.toml` files:
 
 ```bash
 uv add matplotlib
 ```
 
-The `uv add` commands automatically update the `uv.lock` file in the appropriate location.
+The `uv add` command automatically updates the `uv.lock` file in the appropriate location.
 
 ## Add dependencies to the Primeagent codebase
 
 When contributing to the Primeagent codebase, you might need to add dependencies to Primeagent.
-
-Primeagent uses a workspace with two packages, each with different types of dependencies.
 
 To add a dependency to the `main` package, run `uv add DEPENDENCY` from the project root.
 For example:
@@ -91,7 +142,7 @@ Dependencies can be added to the `main` package as regular dependencies at `[pro
 
 To add a dependency to the `base` package, navigate to `src/backend/base` and run:
 ```bash
-cd src/backend/base && uv add DEPENDENCY
+uv add DEPENDENCY
 ```
 
 To add a development dependency for testing, linting, or debugging, navigate to `src/backend/base` and run:

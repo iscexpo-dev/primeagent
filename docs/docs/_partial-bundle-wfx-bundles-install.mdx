@@ -1,0 +1,12 @@
+:::tip
+This provider is an extra of the `wfx-bundles` metapackage. It is opt-in for both Primeagent and standalone WFX installs:
+
+```bash
+uv pip install "wfx-bundles[<bundle>]"
+```
+
+Replace `<bundle>` with this page's provider name, for example `qdrant`.
+For a torch-free full Primeagent install, run `uv pip install "primeagent[bundles]"`.
+For standalone WFX with every provider in `wfx-bundles`, including PyTorch-based providers, run `uv pip install "wfx[bundles]"`.
+See [Additional bundles](/extensions-bundle-list#additional-bundles) for the exact extra name.
+:::

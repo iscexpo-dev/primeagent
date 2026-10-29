@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-toolguard",
+  "version": "0.2.2",
+  "name": "ToolGuard",
+  "description": "Primeagent Policies component powered by ToolGuard.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "toolguard",
+      "path": "components/models_and_agents"
+    }
+  ]
+}

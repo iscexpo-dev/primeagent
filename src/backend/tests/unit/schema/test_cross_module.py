@@ -95,6 +95,28 @@ class TestDuckTypingMessage:
         assert isinstance(wfx_message, WfxData)
 
 
+class TestContentBlockExcludeUnsetCrossModule:
+    """primeagent and wfx ``ContentBlock`` copies must share the ``exclude_unset`` contract.
+
+    Both ``__init__`` overrides mark only the ``type`` discriminator as set, so
+    a partial patch like ``ContentBlock(title="...")`` dumps just the fields the
+    caller touched. Marking every field set (the prior primeagent-base behavior)
+    re-emitted defaulted ``duration`` / ``header`` / ``contents`` / ``media_url``
+    and clobbered persisted values on the ``aupdate_messages`` merge.
+    """
+
+    def test_primeagent_content_block_exclude_unset_matches_wfx(self):
+        from primeagent.schema.content_types import ContentBlock as PrimeagentContentBlock
+        from wfx.schema.content_types import ContentBlock as WfxContentBlock
+
+        primeagent_dump = PrimeagentContentBlock(title="new", allow_markdown=False).model_dump(exclude_unset=True)
+        wfx_dump = WfxContentBlock(title="new", allow_markdown=False).model_dump(exclude_unset=True)
+
+        assert primeagent_dump == wfx_dump
+        assert primeagent_dump["type"] == "group"
+        assert primeagent_dump.keys() <= {"type", "title", "allow_markdown"}
+
+
 class TestDuckTypingWithInputs:
     """Tests for duck-typing with input validation."""
 

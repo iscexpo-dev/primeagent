@@ -1,9 +1,10 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import ForwardedIconComponent from "@/components/common/genericIconComponent";
 import { Button } from "@/components/ui/button";
 import { customGetHostProtocol } from "@/customization/utils/custom-get-host-protocol";
+import SettingsPageHeader from "@/pages/SettingsPage/components/SettingsPageHeader";
 import { cn } from "@/utils/utils";
 
 type AgentTab = "bob" | "claude-code";
@@ -70,6 +71,31 @@ export default function McpClientPage() {
   const { t } = useTranslation();
   const [selectedAgent, setSelectedAgent] = useState<AgentTab>("bob");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // Arrow-key navigation for the agent tablist (WAI-ARIA tabs pattern):
+  // selection follows focus, Home/End jump to the ends.
+  const handleTabKeyDown = useCallback(
+    (event: React.KeyboardEvent, index: number) => {
+      const lastIndex = agents.length - 1;
+      let nextIndex: number | null = null;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        nextIndex = index === lastIndex ? 0 : index + 1;
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        nextIndex = index === 0 ? lastIndex : index - 1;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = lastIndex;
+      }
+      if (nextIndex === null) return;
+      event.preventDefault();
+      setSelectedAgent(agents[nextIndex].id);
+      setCopiedKey(null);
+      tabRefs.current[nextIndex]?.focus();
+    },
+    [],
+  );
 
   const { host, protocol } = customGetHostProtocol();
   const serverUrl = `${protocol}//${host}`;
@@ -91,49 +117,70 @@ export default function McpClientPage() {
 
   return (
     <div className="flex h-full w-full flex-col gap-6">
-      <div className="flex w-full items-start justify-between gap-6">
-        <div className="flex flex-col">
-          <h2 className="flex items-center text-lg font-semibold tracking-tight">
-            {t("settings.mcpClient.title")}
-            <ForwardedIconComponent
-              name="Mcp"
-              className="ml-2 h-5 w-5 text-primary"
-            />
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {t("settings.mcpClient.description")}
-          </p>
-        </div>
-      </div>
+      <SettingsPageHeader
+        title={t("settings.mcpClient.title")}
+        description={t("settings.mcpClient.description")}
+      />
 
       <div className="flex flex-col gap-4">
-        <div className="flex flex-row justify-start border-b border-border">
-          {agents.map((agent) => (
-            <Button
-              unstyled
-              key={agent.id}
-              className={cn(
-                "flex h-6 flex-row items-end gap-2 text-nowrap border-b-2 border-b-transparent px-3 py-2 text-[13px] font-medium",
-                selectedAgent === agent.id
-                  ? "border-b-2 border-black dark:border-b-white"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => {
-                setSelectedAgent(agent.id);
-                setCopiedKey(null);
-              }}
-            >
-              <ForwardedIconComponent
-                name={agent.icon}
-                className="h-4 w-4"
-                aria-hidden="true"
-              />
-              <span>{agent.title}</span>
-            </Button>
-          ))}
+        <div
+          role="tablist"
+          aria-label={t("settings.mcpClient.agentTablistLabel")}
+          // overflow-x-auto: tab labels are text-nowrap, so at a 320px
+          // viewport the last tab would clip off-screen with no way to reach
+          // it (WCAG 1.4.10); a scrollable strip keeps every tab reachable
+          // without wrapping the underline row.
+          className="flex flex-row justify-start overflow-x-auto border-b border-border"
+        >
+          {agents.map((agent, index) => {
+            const isSelected = selectedAgent === agent.id;
+            return (
+              <Button
+                unstyled
+                key={agent.id}
+                ref={(el) => {
+                  tabRefs.current[index] = el;
+                }}
+                role="tab"
+                id={`mcp-client-tab-${agent.id}`}
+                aria-selected={isSelected}
+                aria-controls="mcp-client-tabpanel"
+                // Roving tabindex: only the active tab is a tab stop; arrows
+                // move within the tablist.
+                tabIndex={isSelected ? 0 : -1}
+                className={cn(
+                  // No fixed height: the icon/text used to overflow the h-6
+                  // box invisibly, and the scrollable tablist would clip it.
+                  // Inset focus outline: the tab fills the scroll container's
+                  // padding box, so the global +2px outline would be clipped.
+                  "flex flex-row items-end gap-2 text-nowrap border-b-2 border-b-transparent px-3 py-2 text-[13px] font-medium focus-visible:-outline-offset-2",
+                  isSelected
+                    ? "border-b-2 border-black dark:border-b-white"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => {
+                  setSelectedAgent(agent.id);
+                  setCopiedKey(null);
+                }}
+                onKeyDown={(event) => handleTabKeyDown(event, index)}
+              >
+                <ForwardedIconComponent
+                  name={agent.icon}
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                />
+                <span>{agent.title}</span>
+              </Button>
+            );
+          })}
         </div>
 
-        <div className="flex flex-col gap-3">
+        <div
+          role="tabpanel"
+          id="mcp-client-tabpanel"
+          aria-labelledby={`mcp-client-tab-${selectedAgent}`}
+          className="flex flex-col gap-3"
+        >
           <ol className="list-decimal pl-5 text-sm text-muted-foreground space-y-1">
             {instructions.steps.map((step, i) => (
               <li key={i}>{step}</li>
@@ -146,6 +193,8 @@ export default function McpClientPage() {
                 <Button
                   unstyled
                   size="icon"
+                  aria-label={t("settings.mcpClient.copyCommand")}
+                  data-testid="copy-command-button"
                   className="h-4 w-4 text-muted-foreground hover:text-foreground"
                   onClick={() => copyToClipboard(claudeCommand, "command")}
                 >
@@ -176,6 +225,8 @@ export default function McpClientPage() {
               <Button
                 unstyled
                 size="icon"
+                aria-label={t("settings.mcpClient.copyConfig")}
+                data-testid="copy-json-button"
                 className="h-4 w-4 text-muted-foreground hover:text-foreground"
                 onClick={() => copyToClipboard(mcpJson, "json")}
               >
@@ -209,6 +260,12 @@ export default function McpClientPage() {
               .
             </span>
           </div>
+
+          {/* The copy buttons only flip an icon; this region announces the
+              result to assistive tech (WCAG 4.1.3). */}
+          <span aria-live="polite" className="sr-only">
+            {copiedKey ? t("settings.mcpClient.copied") : ""}
+          </span>
         </div>
       </div>
     </div>

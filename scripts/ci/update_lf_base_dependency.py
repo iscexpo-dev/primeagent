@@ -11,15 +11,15 @@ ARGUMENT_NUMBER = 3
 
 
 def update_base_dep(pyproject_path: str, new_version: str) -> None:
-    """Update the primeagent-base dependency in pyproject.toml."""
+    """Pin every ``primeagent-base`` requirement in a consumer pyproject."""
     filepath = BASE_DIR / pyproject_path
     content = filepath.read_text(encoding="utf-8")
 
     # Updated pattern to handle PEP 440 version suffixes, extras (e.g., [complete]),
-    # both ~= and == version specifiers, and both primeagent-base and primeagent-base-nightly names
-    # Captures extras in group 2 to preserve them in the replacement
+    # ~=, ==, and >= version specifiers, and both primeagent-base and primeagent-base-nightly names
+    # Captures extras in group 2 to preserve them in each replacement.
     pattern = re.compile(
-        r'("primeagent-base(?:-nightly)?((?:\[[^\]]+\])?)(?:~=|==)[\d.]+(?:\.(?:post|dev|a|b|rc)\d+)*")'
+        r'("primeagent-base(?:-nightly)?((?:\[[^\]]+\])?)(?:~=|==|>=)[\d.]+(?:\.(?:post|dev|a|b|rc)\d+)*")'
     )
 
     # Check if the pattern is found
@@ -28,12 +28,12 @@ def update_base_dep(pyproject_path: str, new_version: str) -> None:
         msg = f'primeagent-base dependency not found in "{filepath}"'
         raise ValueError(msg)
 
-    # Extract extras if present (e.g., "[complete]")
-    extras = match.group(2) if match.group(2) else ""
-    replacement = f'"primeagent-base-nightly{extras}=={new_version}"'
-
-    # Replace the matched pattern with the new one
-    content = pattern.sub(replacement, content)
+    # Keep the canonical `primeagent-base` name; the exact `==<dev>` pin enables pre-release
+    # resolution down the tree and keeps base in lockstep with the run.
+    content = pattern.sub(
+        lambda dependency: f'"primeagent-base{dependency.group(2) or ""}=={new_version}"',
+        content,
+    )
     filepath.write_text(content, encoding="utf-8")
 
 
@@ -43,17 +43,24 @@ def update_wfx_dep_in_base(pyproject_path: str, wfx_version: str) -> None:
     content = filepath.read_text(encoding="utf-8")
 
     # Updated pattern to handle PEP 440 version suffixes, both ~= and == version specifiers,
-    # and both wfx and wfx-nightly names
-    pattern = re.compile(r'("wfx(?:-nightly)?(?:~=|==)[\d.]+(?:\.(?:post|dev|a|b|rc)\d+)*")')
-    replacement = f'"wfx-nightly=={wfx_version}"'
+    # both wfx and wfx-nightly names, extras (e.g. wfx[cassandra], wfx[toolguard]), and
+    # trailing markers (e.g. `; sys_platform != 'win32'`).
+    # The extras group (1) MUST be preserved: base's `[complete]` extra pulls these
+    # `wfx[extra]` references, and if they keep a `~=X.Y.0` floor while base's bare `wfx`
+    # dep is pinned to `==X.Y.0.devN`, the floor (>=X.Y.0) excludes the dev release and
+    # the nightly resolve becomes unsatisfiable.
+    version_pattern = r"[0-9]+(?:\.[0-9]+)*(?:\.(?:post|dev|a|b|rc)\d+)*"
+    pattern = re.compile(rf'"wfx(?:-nightly)?((?:\[[^\]]+\])?)(?:~=|==){version_pattern}([^"]*)"')
+    # Pin base's wfx dep to the exact canonical dev version (single `wfx` distribution, no
+    # `wfx-nightly`), so there is no `wfx` vs `wfx-nightly` install collision with the bundles.
 
     # Check if the pattern is found
     if not pattern.search(content):
         msg = f'WFX dependency not found in "{filepath}"'
         raise ValueError(msg)
 
-    # Replace the matched pattern with the new one
-    content = pattern.sub(replacement, content)
+    # Replace each match, preserving its own extras and environment marker.
+    content = pattern.sub(lambda m: f'"wfx{m.group(1)}=={wfx_version}{m.group(2)}"', content)
     filepath.write_text(content, encoding="utf-8")
 
 
@@ -79,7 +86,7 @@ def main() -> None:
     verify_pep440(base_version)
     verify_pep440(wfx_version)
 
-    # Update primeagent-base dependency in main project
+    # Main delegates directly to the product-aligned base distribution.
     update_base_dep("pyproject.toml", base_version)
 
     # Update WFX dependency in primeagent-base

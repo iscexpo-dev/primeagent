@@ -1,0 +1,292 @@
+[project]
+name = "wfx-bundles"
+version = "1.2.4"
+description = "Primeagent's long-tail provider bundles as a single manifest-less metapackage (the langchain-community model)."
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+license = { text = "MIT" }
+authors = [
+    { name = "Primeagent", email = "contact@prime.khulnasoft.com" },
+]
+keywords = ["primeagent", "wfx", "extension", "bundle", "providers"]
+
+# Runtime: only wfx (the BUNDLE_API surface).  Each provider's third-party SDK
+# is an optional extra (see [project.optional-dependencies]); installing
+# wfx-bundles bare gives the provider *code* but defers each provider's SDK to
+# its extra, so a user opts into exactly the providers they need.  The
+# generated ``all`` extra pulls every provider's deps for explicit opt-in
+# installs such as ``pip install "wfx[bundles]"`` or
+# ``pip install "wfx-bundles[all]"``. 1.12.4 provides the connector SSRF helper.
+dependencies = [
+    "wfx>=1.13.0.dev0,<2.0.0",
+]
+
+[project.optional-dependencies]
+# Per-provider extras + the generated ``all`` / ``all-no-torch`` aggregates.
+# Extra keys are PEP 685-normalized (lowercase, hyphen-separated). ``all``
+# and ``all-no-torch`` are GENERATED from the per-provider keys -- never
+# hand-edit them. ``all`` pulls every provider; ``all-no-torch`` is ``all``
+# minus the torch-pulling providers (see TORCH_EXTRAS), giving a torch-free
+# superset for slim/CPU images. Managed by scripts/migrate/consolidate_bundles.py.
+agentql = []
+aiml = ["langchain-openai>=1.1.6", "openai>=1.68.2,<3.0.0"]
+altk = []  # Retired in 1.13.0. Saved nodes retain migration guidance.
+apify = ["apify-client>=1.8.1"]
+assemblyai = ["assemblyai>=0.33.0,<1.0.0"]
+azure = ["wfx-azure>=0.1.0,<1.0.0"]
+baidu = ["qianfan==0.3.5", "langchain-community>=0.4.1,<1.0.0"]
+bing = ["langchain-community>=0.4.1,<1.0.0"]
+# Retired in 1.13. Saved component identities remain importable.
+chroma = []
+cleanlab = ["cleanlab-tlm>=1.1.2,<2.0.0"]
+clickhouse = ["clickhouse-connect==0.7.19", "langchain-community>=0.4.1,<1.0.0"]
+cloudflare = ["langchain-cloudflare~=0.3.9"]
+codeagents = ["smolagents>=1.8.0"]
+cometapi = ["langchain-openai>=1.1.6", "requests>=2.32.0"]
+composio = ["composio==0.16.0", "composio-langchain==0.16.0"]
+confluence = ["atlassian-python-api==3.41.16", "langchain-community>=0.4.1,<1.0.0"]
+couchbase = ["couchbase>=4.2.1", "dnspython>=2.6,<3", "langchain-community>=0.4.1,<1.0.0"]
+cuga = ["cuga>=0.2.20,<0.3.0; sys_platform != 'darwin' and python_version < '3.14'", "cuga>=0.2.20,<0.3.0; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version < '3.14'", "langchain-litellm==0.5.1; sys_platform != 'darwin' and python_version < '3.14'", "langchain-litellm==0.5.1; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version < '3.14'", "litellm>=1.103.1,<2.0.0,!=1.104.0rc1,!=1.107.0; sys_platform != 'darwin' and python_version < '3.14'", "litellm>=1.103.1,<2.0.0,!=1.104.0rc1,!=1.107.0; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version < '3.14'"]
+deepseek = ["langchain-openai>=1.1.6", "openai>=1.68.2,<3.0.0", "requests>=2.32.0"]
+elastic = ["elasticsearch~=8.19", "langchain-elasticsearch~=1.0.0", "opensearch-py==2.8.0"]
+faiss = ["faiss-cpu==1.9.0.post1; python_version < '3.14'", "faiss-cpu>=1.13.2; python_version >= '3.14'", "langchain-community>=0.4.1,<1.0.0"]
+figranium = []
+funasr = []
+git = ["GitPython>=3.1.58", "langchain-community>=0.4.1,<1.0.0"]
+glean = []
+google = ["wfx-google>=0.2.5,<1.0.0"]
+groq = ["langchain-groq~=1.1.1"]
+homeassistant = ["requests>=2.32.0"]
+huggingface = ["langchain-huggingface~=1.2.0; sys_platform != 'darwin' or platform_machine != 'x86_64'", "huggingface-hub>=1.0.0,<2.0.0", "langchain-community>=0.4.1,<1.0.0"]
+icosacomputing = ["requests>=2.32.0"]
+jigsawstack = ["jigsawstack==0.2.7"]
+langwatch = []
+litellm = ["langchain-openai>=1.1.6", "openai>=1.68.2,<3.0.0"]
+lmstudio = ["langchain-openai>=1.1.6", "openai>=1.68.2,<3.0.0", "langchain-nvidia-ai-endpoints~=1.0.0"]
+maritalk = ["langchain-community>=0.4.1,<1.0.0"]
+mem0 = ["mem0ai>=2.0.2,<3.0.0"]
+milvus = ["langchain-milvus~=0.3.2"]
+mistral = ["langchain-mistralai~=1.1.1"]
+mongodb = ["pymongo>=4.18.2,<5.0.0", "langchain-mongodb>=0.11.0"]
+mrscraper = ["mrscraper-sdk>=0.6.0,<0.7.0"]
+needle = ["needle-python>=0.4.0"]
+notdiamond = []
+notion = ["requests>=2.32.0", "Markdown>=3.8.0"]
+novita = ["langchain-openai>=1.1.6", "requests>=2.32.0"]
+nvidia = ["langchain-nvidia-ai-endpoints~=1.0.0", "nv-ingest-client>=26.1.0,<26.3.0 ; python_version >= '3.12'", "gassist>=0.0.1; sys_platform == 'win32'"]
+olivya = []
+ollama = ["wfx-ollama>=0.1.0,<1.0.0"]
+openrouter = ["langchain-openai>=1.1.6"]
+orcarouter = ["langchain-openai>=1.1.6"]
+perplexity = ["langchain-perplexity>=1.0.0,<2.0.0"]
+pgvector = ["pgvector>=0.4.2", "langchain-community>=0.4.1,<1.0.0"]
+pinecone = ["langchain-pinecone~=0.2.13; python_version < '3.14'"]
+plivo = []
+qdrant = ["qdrant-client>=1.12.0,<2.0.0", "langchain-qdrant>=1.0.0,<2.0.0"]
+redis = ["redis>=7.4.0,<8.0.0", "langchain-community>=0.4.1,<1.0.0"]
+sambanova = ["langchain-sambanova~=1.0.0"]
+scrapegraph = ["scrapegraph-py>=1.12.0"]
+searchapi = ["langchain-community>=0.4.1,<1.0.0"]
+serpapi = ["google-search-results>=2.4.1,<3.0.0", "langchain-community>=0.4.1,<1.0.0"]
+spider = ["spider-client>=0.0.27,<1.0.0"]
+supabase = ["supabase>=2.6.0,<3.0.0", "langchain-community>=0.4.1,<1.0.0"]
+tavily = []
+twelvelabs = ["twelvelabs>=0.4.7,<1.0.0"]
+unstructured = ["langchain-unstructured~=1.0.0"]
+upstash = ["upstash-vector==0.6.0", "langchain-community>=0.4.1,<1.0.0"]
+vectara = ["langchain-community>=0.4.1,<1.0.0"]
+vertexai = ["langchain-google-vertexai>=3.2.0"]
+vlmrun = ["vlmrun[all]>=0.2.0"]
+weaviate = ["weaviate-client>=4.10.2,<5.0.0", "langchain-weaviate>=0.0.6"]
+wikipedia = ["wikipedia==1.4.0", "langchain-community>=0.4.1,<1.0.0"]
+wolframalpha = ["wolframalpha==5.1.3", "langchain-community>=0.4.1,<1.0.0"]
+xai = ["langchain-openai>=1.1.6", "openai>=1.68.2,<3.0.0", "requests>=2.32.0"]
+yahoosearch = ["yfinance==0.2.50"]
+youtube = ["pytube==15.0.0", "youtube-transcript-api>=1.0.0,<2.0.0", "google-api-python-client~=2.161"]
+zep = ["zep-python==2.0.2"]
+all = [
+    "wfx-bundles[agentql]",
+    "wfx-bundles[aiml]",
+    "wfx-bundles[altk]",
+    "wfx-bundles[apify]",
+    "wfx-bundles[assemblyai]",
+    "wfx-bundles[baidu]",
+    "wfx-bundles[bing]",
+    "wfx-bundles[cleanlab]",
+    "wfx-bundles[clickhouse]",
+    "wfx-bundles[cloudflare]",
+    "wfx-bundles[codeagents]",
+    "wfx-bundles[cometapi]",
+    "wfx-bundles[composio]",
+    "wfx-bundles[confluence]",
+    "wfx-bundles[couchbase]",
+    "wfx-bundles[cuga]",
+    "wfx-bundles[deepseek]",
+    "wfx-bundles[elastic]",
+    "wfx-bundles[faiss]",
+    "wfx-bundles[figranium]",
+    "wfx-bundles[funasr]",
+    "wfx-bundles[git]",
+    "wfx-bundles[glean]",
+    "wfx-bundles[groq]",
+    "wfx-bundles[homeassistant]",
+    "wfx-bundles[huggingface]",
+    "wfx-bundles[icosacomputing]",
+    "wfx-bundles[jigsawstack]",
+    "wfx-bundles[langwatch]",
+    "wfx-bundles[litellm]",
+    "wfx-bundles[lmstudio]",
+    "wfx-bundles[maritalk]",
+    "wfx-bundles[mem0]",
+    "wfx-bundles[milvus]",
+    "wfx-bundles[mistral]",
+    "wfx-bundles[mongodb]",
+    "wfx-bundles[mrscraper]",
+    "wfx-bundles[needle]",
+    "wfx-bundles[notdiamond]",
+    "wfx-bundles[notion]",
+    "wfx-bundles[novita]",
+    "wfx-bundles[nvidia]",
+    "wfx-bundles[olivya]",
+    "wfx-bundles[openrouter]",
+    "wfx-bundles[orcarouter]",
+    "wfx-bundles[perplexity]",
+    "wfx-bundles[pgvector]",
+    "wfx-bundles[pinecone]",
+    "wfx-bundles[plivo]",
+    "wfx-bundles[qdrant]",
+    "wfx-bundles[redis]",
+    "wfx-bundles[sambanova]",
+    "wfx-bundles[scrapegraph]",
+    "wfx-bundles[searchapi]",
+    "wfx-bundles[serpapi]",
+    "wfx-bundles[spider]",
+    "wfx-bundles[supabase]",
+    "wfx-bundles[tavily]",
+    "wfx-bundles[twelvelabs]",
+    "wfx-bundles[unstructured]",
+    "wfx-bundles[upstash]",
+    "wfx-bundles[vectara]",
+    "wfx-bundles[vertexai]",
+    "wfx-bundles[vlmrun]",
+    "wfx-bundles[weaviate]",
+    "wfx-bundles[wikipedia]",
+    "wfx-bundles[wolframalpha]",
+    "wfx-bundles[xai]",
+    "wfx-bundles[yahoosearch]",
+    "wfx-bundles[youtube]",
+    "wfx-bundles[zep]",
+]
+all-no-torch = [
+    "wfx-bundles[agentql]",
+    "wfx-bundles[aiml]",
+    "wfx-bundles[altk]",
+    "wfx-bundles[apify]",
+    "wfx-bundles[assemblyai]",
+    "wfx-bundles[baidu]",
+    "wfx-bundles[bing]",
+    "wfx-bundles[cleanlab]",
+    "wfx-bundles[clickhouse]",
+    "wfx-bundles[cloudflare]",
+    "wfx-bundles[cometapi]",
+    "wfx-bundles[composio]",
+    "wfx-bundles[confluence]",
+    "wfx-bundles[couchbase]",
+    "wfx-bundles[deepseek]",
+    "wfx-bundles[elastic]",
+    "wfx-bundles[faiss]",
+    "wfx-bundles[figranium]",
+    "wfx-bundles[funasr]",
+    "wfx-bundles[git]",
+    "wfx-bundles[glean]",
+    "wfx-bundles[groq]",
+    "wfx-bundles[homeassistant]",
+    "wfx-bundles[huggingface]",
+    "wfx-bundles[icosacomputing]",
+    "wfx-bundles[jigsawstack]",
+    "wfx-bundles[langwatch]",
+    "wfx-bundles[litellm]",
+    "wfx-bundles[lmstudio]",
+    "wfx-bundles[maritalk]",
+    "wfx-bundles[mem0]",
+    "wfx-bundles[milvus]",
+    "wfx-bundles[mistral]",
+    "wfx-bundles[mongodb]",
+    "wfx-bundles[mrscraper]",
+    "wfx-bundles[needle]",
+    "wfx-bundles[notdiamond]",
+    "wfx-bundles[notion]",
+    "wfx-bundles[novita]",
+    "wfx-bundles[nvidia]",
+    "wfx-bundles[olivya]",
+    "wfx-bundles[openrouter]",
+    "wfx-bundles[orcarouter]",
+    "wfx-bundles[perplexity]",
+    "wfx-bundles[pgvector]",
+    "wfx-bundles[pinecone]",
+    "wfx-bundles[plivo]",
+    "wfx-bundles[qdrant]",
+    "wfx-bundles[redis]",
+    "wfx-bundles[sambanova]",
+    "wfx-bundles[scrapegraph]",
+    "wfx-bundles[searchapi]",
+    "wfx-bundles[serpapi]",
+    "wfx-bundles[spider]",
+    "wfx-bundles[supabase]",
+    "wfx-bundles[tavily]",
+    "wfx-bundles[twelvelabs]",
+    "wfx-bundles[unstructured]",
+    "wfx-bundles[upstash]",
+    "wfx-bundles[vectara]",
+    "wfx-bundles[vertexai]",
+    "wfx-bundles[vlmrun]",
+    "wfx-bundles[weaviate]",
+    "wfx-bundles[wikipedia]",
+    "wfx-bundles[wolframalpha]",
+    "wfx-bundles[xai]",
+    "wfx-bundles[yahoosearch]",
+    "wfx-bundles[youtube]",
+    "wfx-bundles[zep]",
+]
+
+[project.urls]
+Homepage = "https://github.com/khulnasoft-bot/primeagent"
+Documentation = "https://docs.prime.khulnasoft.com/extensions"
+Repository = "https://github.com/khulnasoft-bot/primeagent"
+
+# Manifest-less discovery via the ``wfx.bundles`` entry-point group (NOT
+# ``primeagent.extensions``).  The loader (wfx.extension.loader._bundles_root)
+# resolves this package with find_spec and folder-walks its immediate
+# subdirectories -- each is one bundle at the @official slot, named after the
+# directory.  No extension.json; exempt from ``wfx extension validate``.
+[project.entry-points."wfx.bundles"]
+wfx_bundles = "wfx_bundles"
+
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wfx_bundles"]
+include = [
+    "src/wfx_bundles/**/*.py",
+    "src/wfx_bundles/**/starter_projects/*.json",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/wfx_bundles",
+    "README.md",
+    "pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+# The bundle's own tests (``tests/``) are run by .github/workflows/cross-bundle-test.yml in a
+# venv holding wfx + this bundle. They were previously in src/backend/tests/, where they skipped
+# in every default install because ``wfx-bundles`` is opt-in -- see issue #14554.
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: fast, isolated component test",
+    "api_key_required: needs a real provider credential; not run in CI",  # pragma: allowlist secret
+]

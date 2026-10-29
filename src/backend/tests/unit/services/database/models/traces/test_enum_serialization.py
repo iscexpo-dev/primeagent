@@ -216,7 +216,7 @@ async def _traces_db_engine():
 
 @pytest.mark.asyncio
 class TestLegacyUppercaseRowsRoundTripThroughOrm:
-    """End-to-end regression for https://github.com/khulnasoft/primeagent/issues/13318.
+    """End-to-end regression for https://github.com/khulnasoft-bot/primeagent/issues/13318.
 
     Before ``values_callable=_enum_values`` shipped in v1.9.2, the trace/span
     enum columns persisted the enum *names* (``"OK"``, ``"ERROR"``, ``"CHAIN"``).

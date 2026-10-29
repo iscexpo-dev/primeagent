@@ -37,10 +37,11 @@ This tutorial demonstrates how you can use Primeagent to create a chatbot applic
 
 2. Add your **OpenAI** API key to both **OpenAI Embeddings** components.
 
-3. Optional: Replace both **Astra DB** vector store components with a **Chroma DB** or another vector store component of your choice.
-This tutorial uses Chroma DB.
+3. Configure both [**Astra DB** components](/bundles-datastax) with your database credentials and the same collection.
+You can replace both with another supported vector store provider, using the same store for ingestion and retrieval.
+Chroma components shown in older screenshots are retired in Primeagent 1.13.
 
-    The **Load Data Flow** should have **Read File**, **Split Text**, **Embedding Model**, vector store (such as **Chroma DB**), and **Chat Output** components:
+    The **Load Data Flow** should have **Read File**, **Split Text**, **Embedding Model**, vector store (such as **Astra DB**), and **Chat Output** components:
 
     ![File loader chat flow](/img/tutorial-chatbot-embed-files.png)
 
@@ -72,8 +73,11 @@ In situations where many users load data or you need to load data programmatical
 
 To load data programmatically, use the `/v2/files/` and `/v1/run/$FLOW_ID` endpoints. The first endpoint loads a file to your Primeagent server, and then returns an uploaded file path. The second endpoint runs the **Load Data Flow**, referencing the uploaded file path, to chunk, embed, and load the data into the vector store.
 
+:::tip
+For an example of constructing file upload requests in Python, see the [Create a chatbot that can ingest files tutorial](/chat-with-files#send-requests-to-your-flow-from-a-python-application).
+:::
+
 The following script demonstrates this process.
-For help with creating this script, use the [Primeagent File Upload Utility](https://primeagent-file-upload-examples.21cgwws14kdz.us-east.codeengine.appdomain.cloud/).
 
 ```js
 // Node 18+ example using global fetch, FormData, and Blob

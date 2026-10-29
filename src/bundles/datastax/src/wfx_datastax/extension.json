@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-datastax",
+  "version": "0.2.0",
+  "name": "DataStax",
+  "description": "DataStax component(s) as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "datastax",
+      "path": "components/datastax"
+    },
+    {
+      "name": "cassandra",
+      "path": "components/cassandra"
+    }
+  ]
+}

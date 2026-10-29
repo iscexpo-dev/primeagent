@@ -4,54 +4,29 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
-from limits import parse
 from pydantic import BaseModel
-from slowapi.errors import RateLimitExceeded
-from slowapi.wrappers import Limit
 
 from primeagent.api.utils import DbSession
 from primeagent.api.v1.schemas import Token
 from primeagent.initial_setup.setup import get_or_create_default_folder
+from primeagent.services.auth.cookies import auth_cookie_name
+from primeagent.services.auth.exceptions import AuthenticationError
 from primeagent.services.database.models.user.crud import get_user_by_id
 from primeagent.services.database.models.user.model import UserRead
 from primeagent.services.deps import get_auth_service, get_settings_service, get_variable_service
-from primeagent.services.rate_limit import get_rate_limit_string
+from primeagent.services.rate_limit import check_rate_limit
 
 router = APIRouter(tags=["Login"])
+
+
+def _cookie_path(request: Request) -> str:
+    """Match the frontend base configured at startup, independent of forwarded headers."""
+    return f"{request.app.root_path.strip().rstrip('/')}/"
 
 
 def get_limiter_from_app(request: Request):
     """Get the rate limiter from app state (initialized after settings load)."""
     return request.app.state.limiter
-
-
-def check_rate_limit(request: Request) -> None:
-    """Check and enforce rate limit for the request.
-
-    Retrieves the limiter from app.state (initialized after settings load in main.py)
-    and manually checks the rate limit using the limits library.
-
-    Raises:
-        RateLimitExceeded: If the rate limit is exceeded
-    """
-    limiter = get_limiter_from_app(request)
-
-    # Parse the rate limit string and check if limit is exceeded
-    limit_item = parse(get_rate_limit_string())
-    if not limiter._limiter.hit(limit_item, limiter._key_func(request)):  # noqa: SLF001
-        # Limit exceeded - raise RateLimitExceeded with proper wrapper
-        limit_wrapper = Limit(
-            limit=limit_item,
-            key_func=limiter._key_func,  # noqa: SLF001
-            scope=None,
-            per_method=False,
-            methods=None,
-            error_message=None,
-            exempt_when=None,
-            cost=1,
-            override_defaults=False,
-        )
-        raise RateLimitExceeded(limit_wrapper)
 
 
 class SessionResponse(BaseModel):
@@ -92,8 +67,9 @@ async def login_to_get_access_token(
     if user:
         tokens = await auth.create_user_tokens(user_id=user.id, db=db, update_last_login=True)
         response.set_cookie(
-            "refresh_token_lf",
+            auth_cookie_name("refresh_token_lf", request),
             tokens["refresh_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.REFRESH_HTTPONLY,
             samesite=auth_settings.REFRESH_SAME_SITE,
             secure=auth_settings.REFRESH_SECURE,
@@ -101,8 +77,9 @@ async def login_to_get_access_token(
             domain=auth_settings.COOKIE_DOMAIN,
         )
         response.set_cookie(
-            "access_token_lf",
+            auth_cookie_name("access_token_lf", request),
             tokens["access_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.ACCESS_HTTPONLY,
             samesite=auth_settings.ACCESS_SAME_SITE,
             secure=auth_settings.ACCESS_SECURE,
@@ -110,8 +87,9 @@ async def login_to_get_access_token(
             domain=auth_settings.COOKIE_DOMAIN,
         )
         response.set_cookie(
-            "apikey_tkn_lflw",
+            auth_cookie_name("apikey_tkn_lflw", request),
             str(user.store_api_key),
+            path=_cookie_path(request),
             httponly=auth_settings.ACCESS_HTTPONLY,
             samesite=auth_settings.ACCESS_SAME_SITE,
             secure=auth_settings.ACCESS_SECURE,
@@ -137,7 +115,7 @@ async def login_to_get_access_token(
 
 
 @router.get("/auto_login", include_in_schema=False)
-async def auto_login(response: Response, db: DbSession):
+async def auto_login(request: Request, response: Response, db: DbSession):
     auth_settings = get_settings_service().auth_settings
 
     if auth_settings.AUTO_LOGIN:
@@ -148,8 +126,9 @@ async def auto_login(response: Response, db: DbSession):
         # of relying on a year-long token.
         if tokens.get("refresh_token"):
             response.set_cookie(
-                "refresh_token_lf",
+                auth_cookie_name("refresh_token_lf", request),
                 tokens["refresh_token"],
+                path=_cookie_path(request),
                 httponly=auth_settings.REFRESH_HTTPONLY,
                 samesite=auth_settings.REFRESH_SAME_SITE,
                 secure=auth_settings.REFRESH_SECURE,
@@ -157,8 +136,9 @@ async def auto_login(response: Response, db: DbSession):
                 domain=auth_settings.COOKIE_DOMAIN,
             )
         response.set_cookie(
-            "access_token_lf",
+            auth_cookie_name("access_token_lf", request),
             tokens["access_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.ACCESS_HTTPONLY,
             samesite=auth_settings.ACCESS_SAME_SITE,
             secure=auth_settings.ACCESS_SECURE,
@@ -173,8 +153,9 @@ async def auto_login(response: Response, db: DbSession):
                 user.store_api_key = ""
 
             response.set_cookie(
-                "apikey_tkn_lflw",
+                auth_cookie_name("apikey_tkn_lflw", request),
                 str(user.store_api_key),  # Ensure it's a string
+                path=_cookie_path(request),
                 httponly=auth_settings.ACCESS_HTTPONLY,
                 samesite=auth_settings.ACCESS_SAME_SITE,
                 secure=auth_settings.ACCESS_SECURE,
@@ -206,14 +187,15 @@ async def refresh_token(
 ):
     auth_settings = get_settings_service().auth_settings
 
-    token = request.cookies.get("refresh_token_lf")
+    token = request.cookies.get(auth_cookie_name("refresh_token_lf", request))
 
     if token:
         auth = get_auth_service()
         tokens = await auth.create_refresh_token(token, db)
         response.set_cookie(
-            "refresh_token_lf",
+            auth_cookie_name("refresh_token_lf", request),
             tokens["refresh_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.REFRESH_HTTPONLY,
             samesite=auth_settings.REFRESH_SAME_SITE,
             secure=auth_settings.REFRESH_SECURE,
@@ -221,8 +203,9 @@ async def refresh_token(
             domain=auth_settings.COOKIE_DOMAIN,
         )
         response.set_cookie(
-            "access_token_lf",
+            auth_cookie_name("access_token_lf", request),
             tokens["access_token"],
+            path=_cookie_path(request),
             httponly=auth_settings.ACCESS_HTTPONLY,
             samesite=auth_settings.ACCESS_SAME_SITE,
             secure=auth_settings.ACCESS_SECURE,
@@ -248,16 +231,22 @@ async def get_session(
     It does not raise an error if unauthenticated, allowing the frontend to gracefully
     handle the session state.
     """
-    from primeagent.services.auth.utils import oauth2_login
+    from primeagent.services.auth.utils import _get_external_token, oauth2_login
 
     # Try to get the token from the request (cookie or Authorization header)
     try:
         token = await oauth2_login(request)
-        if not token:
+        # Extract the external credential separately so a present-but-invalid
+        # native cookie can't shadow a valid external one (mirrors get_current_user
+        # and the WS/SSE paths). oauth2_login may already have collapsed to the
+        # external credential, in which case the service's dedup guard makes the
+        # fallback a no-op.
+        external_token = _get_external_token(request.headers, request.cookies)
+        if not token and not external_token:
             return SessionResponse(authenticated=False)
 
         # Validate the token and get user
-        user = await get_auth_service().get_current_user_from_access_token(token, db)
+        user = await get_auth_service().get_current_user_from_access_token(token, db, external_token=external_token)
         if not user or not user.is_active:
             return SessionResponse(authenticated=False)
 
@@ -265,31 +254,34 @@ async def get_session(
             authenticated=True,
             user=UserRead.model_validate(user, from_attributes=True),
         )
-    except (HTTPException, ValueError) as _:
+    except (AuthenticationError, HTTPException, ValueError) as _:
         # Any authentication error means not authenticated
         return SessionResponse(authenticated=False)
 
 
 @router.post("/logout", include_in_schema=False)
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
     auth_settings = get_settings_service().auth_settings
 
     response.delete_cookie(
-        "refresh_token_lf",
+        auth_cookie_name("refresh_token_lf", request),
+        path=_cookie_path(request),
         httponly=auth_settings.REFRESH_HTTPONLY,
         samesite=auth_settings.REFRESH_SAME_SITE,
         secure=auth_settings.REFRESH_SECURE,
         domain=auth_settings.COOKIE_DOMAIN,
     )
     response.delete_cookie(
-        "access_token_lf",
+        auth_cookie_name("access_token_lf", request),
+        path=_cookie_path(request),
         httponly=auth_settings.ACCESS_HTTPONLY,
         samesite=auth_settings.ACCESS_SAME_SITE,
         secure=auth_settings.ACCESS_SECURE,
         domain=auth_settings.COOKIE_DOMAIN,
     )
     response.delete_cookie(
-        "apikey_tkn_lflw",
+        auth_cookie_name("apikey_tkn_lflw", request),
+        path=_cookie_path(request),
         httponly=auth_settings.ACCESS_HTTPONLY,
         samesite=auth_settings.ACCESS_SAME_SITE,
         secure=auth_settings.ACCESS_SECURE,

@@ -1,0 +1,204 @@
+{
+  "application": {
+    "distribution": "primeagent",
+    "requested": ">=1.13.0,<1.14.0",
+    "requirement": "primeagent==1.13.0",
+    "resolved_version": "1.13.0"
+  },
+  "bundle_api": {
+    "distribution": "wfx",
+    "requested": ">=1.13.0.dev0,<1.14.0",
+    "requirement": "wfx==1.13.0",
+    "resolved_version": "1.13.0"
+  },
+  "bundles": [
+    {
+      "distribution": "wfx-amazon",
+      "extras": [],
+      "providers": [
+        "wfx-amazon"
+      ],
+      "requested": ">=0.2.2,<1.0.0",
+      "requirement": "wfx-amazon==0.2.2",
+      "resolved_version": "0.2.2"
+    },
+    {
+      "distribution": "wfx-anthropic",
+      "extras": [],
+      "providers": [
+        "wfx-anthropic"
+      ],
+      "requested": ">=0.2.0,<1.0.0",
+      "requirement": "wfx-anthropic==0.2.0",
+      "resolved_version": "0.2.0"
+    },
+    {
+      "distribution": "wfx-azure",
+      "extras": [],
+      "providers": [
+        "wfx-azure"
+      ],
+      "requested": ">=0.2.0,<1.0.0",
+      "requirement": "wfx-azure==0.2.0",
+      "resolved_version": "0.2.0"
+    },
+    {
+      "distribution": "wfx-cohere",
+      "extras": [],
+      "providers": [
+        "wfx-cohere"
+      ],
+      "requested": ">=0.2.0,<1.0.0",
+      "requirement": "wfx-cohere==0.2.0",
+      "resolved_version": "0.2.0"
+    },
+    {
+      "distribution": "wfx-datastax",
+      "extras": [],
+      "providers": [
+        "wfx-datastax"
+      ],
+      "requested": ">=0.2.0,<1.0.0",
+      "requirement": "wfx-datastax==0.2.0",
+      "resolved_version": "0.2.0"
+    },
+    {
+      "distribution": "wfx-docling",
+      "extras": [],
+      "providers": [
+        "wfx-docling"
+      ],
+      "requested": ">=0.2.1,<1.0.0",
+      "requirement": "wfx-docling==0.2.1",
+      "resolved_version": "0.2.1"
+    },
+    {
+      "distribution": "wfx-google",
+      "extras": [],
+      "providers": [
+        "wfx-google"
+      ],
+      "requested": ">=0.3.5,<1.0.0",
+      "requirement": "wfx-google==0.3.5",
+      "resolved_version": "0.3.5"
+    },
+    {
+      "distribution": "wfx-ibm",
+      "extras": [],
+      "providers": [
+        "wfx-ibm"
+      ],
+      "requested": ">=0.3.0,<1.0.0",
+      "requirement": "wfx-ibm==0.3.0",
+      "resolved_version": "0.3.0"
+    },
+    {
+      "distribution": "wfx-microsoft",
+      "extras": [],
+      "providers": [
+        "wfx-microsoft"
+      ],
+      "requested": ">=0.1.4,<1.0.0",
+      "requirement": "wfx-microsoft==0.1.4",
+      "resolved_version": "0.1.4"
+    },
+    {
+      "distribution": "wfx-ollama",
+      "extras": [],
+      "providers": [
+        "wfx-ollama"
+      ],
+      "requested": ">=0.2.0,<1.0.0",
+      "requirement": "wfx-ollama==0.2.0",
+      "resolved_version": "0.2.0"
+    },
+    {
+      "distribution": "wfx-openai",
+      "extras": [],
+      "providers": [
+        "wfx-openai"
+      ],
+      "requested": ">=0.2.0,<1.0.0",
+      "requirement": "wfx-openai==0.2.0",
+      "resolved_version": "0.2.0"
+    },
+    {
+      "distribution": "wfx-openai-compatible",
+      "extras": [],
+      "providers": [
+        "wfx-openai-compatible"
+      ],
+      "requested": ">=0.2.0,<1.0.0",
+      "requirement": "wfx-openai-compatible==0.2.0",
+      "resolved_version": "0.2.0"
+    },
+    {
+      "distribution": "wfx-oracle",
+      "extras": [],
+      "providers": [
+        "wfx-oracle"
+      ],
+      "requested": ">=0.2.0,<1.0.0",
+      "requirement": "wfx-oracle==0.2.0",
+      "resolved_version": "0.2.0"
+    },
+    {
+      "distribution": "wfx-slack",
+      "extras": [],
+      "providers": [
+        "wfx-slack"
+      ],
+      "requested": ">=0.2.2,<1.0.0",
+      "requirement": "wfx-slack==0.2.2",
+      "resolved_version": "0.2.2"
+    },
+    {
+      "distribution": "wfx-toolguard",
+      "extras": [],
+      "providers": [
+        "wfx-toolguard"
+      ],
+      "requested": ">=0.2.2,<1.0.0",
+      "requirement": "wfx-toolguard==0.2.2",
+      "resolved_version": "0.2.2"
+    },
+    {
+      "distribution": "wfx-vllm",
+      "extras": [],
+      "providers": [
+        "wfx-vllm"
+      ],
+      "requested": ">=0.2.0,<1.0.0",
+      "requirement": "wfx-vllm==0.2.0",
+      "resolved_version": "0.2.0"
+    }
+  ],
+  "image_families": [
+    "enterprise-ubi-hardened"
+  ],
+  "indexes": [
+    "https://pypi.org/simple"
+  ],
+  "profile": "enterprise-hardened",
+  "profile_digest": "sha256:a5568d72b77fce01",
+  "providers": [
+    "wfx-amazon",
+    "wfx-anthropic",
+    "wfx-azure",
+    "wfx-cohere",
+    "wfx-datastax",
+    "wfx-docling",
+    "wfx-google",
+    "wfx-ibm",
+    "wfx-microsoft",
+    "wfx-ollama",
+    "wfx-openai",
+    "wfx-openai-compatible",
+    "wfx-oracle",
+    "wfx-slack",
+    "wfx-toolguard",
+    "wfx-vllm"
+  ],
+  "python": ">=3.10,<3.15",
+  "schema_version": 1
+}

@@ -3,6 +3,8 @@ import { cloneDeep } from "lodash";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { useIsFlowReadOnly } from "@/contexts/permissionsContext";
+import { handleBlockedSave } from "@/hooks/flows/handle-blocked-save";
 import useSaveFlow from "@/hooks/flows/use-save-flow";
 import useAlertStore from "@/stores/alertStore";
 import useFlowStore from "@/stores/flowStore";
@@ -64,9 +66,15 @@ const FlowSettingsComponent = ({
     flowData ? undefined : state.currentFlow,
   );
   const setCurrentFlow = useFlowStore((state) => state.setCurrentFlow);
+  // A flow card (`flowData`) must not use the registered autosave: it may
+  // belong to an editor that is gone or holds a different flow.
+  const pendingAutoSave = useFlowStore((state) =>
+    flowData ? undefined : state.autoSaveFlow,
+  );
   const setSuccessData = useAlertStore((state) => state.setSuccessData);
   const flows = useFlowsManagerStore((state) => state.flows);
   const flow = flowData ?? currentFlow;
+  const isReadOnly = useIsFlowReadOnly(flow?.id);
   const [name, setName] = useState(flow?.name ?? "");
   const [description, setDescription] = useState(flow?.description ?? "");
   const [locked, setLocked] = useState<boolean>(flow?.locked ?? false);
@@ -83,20 +91,31 @@ const FlowSettingsComponent = ({
 
   function handleSubmit(event?: React.FormEvent<HTMLFormElement>): void {
     if (event) event.preventDefault();
+    if (isReadOnly) return;
     setIsSaving(true);
     if (!flow) return;
     const newFlow = updateFlowWithFormValues(flow, name, description, locked);
 
     if (autoSaving) {
-      saveFlow(newFlow)
-        ?.then(() => {
+      const persistSettings = async () => {
+        try {
+          // Queue behind the editor's saves: a canvas save run alongside a
+          // lock change carries the old lock state and the server rejects it.
+          if (pendingAutoSave) {
+            await pendingAutoSave.enqueue(newFlow);
+          } else {
+            await saveFlow(newFlow);
+          }
           setIsSaving(false);
           setSuccessData({ title: t("success.changesSaved") });
           close();
-        })
-        .catch(() => {
+        } catch (error) {
           setIsSaving(false);
-        });
+          // Never close on a failed save: the form holds the only copy of what was typed.
+          handleBlockedSave(error, { announce: true });
+        }
+      };
+      void persistSettings();
     } else {
       setCurrentFlow(newFlow);
       setIsSaving(false);
@@ -130,6 +149,7 @@ const FlowSettingsComponent = ({
             submitForm={submitForm}
             locked={locked}
             setLocked={setLocked}
+            readOnly={isReadOnly}
           />
         </div>
         <div className="flex justify-end gap-2">
@@ -148,7 +168,8 @@ const FlowSettingsComponent = ({
               size="sm"
               data-testid="save-flow-settings"
               loading={isSaving}
-              disabled={disableSave}
+              disabled={disableSave || isReadOnly}
+              title={isReadOnly ? t("version.readOnly") : undefined}
             >
               {t("modal.saveButton")}
             </Button>
