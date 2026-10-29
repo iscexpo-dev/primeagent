@@ -1,20 +1,25 @@
 services:
   primeagent:
     image: khulnasoft/primeagent:latest # or another version tag on https://hub.docker.com/r/khulnasoft/primeagent
-    pull_policy: always # set to 'always' when using 'latest' image
+    pull_policy: always               # set to 'always' when using 'latest' image
     ports:
       - "7860:7860"
     depends_on:
       - postgres
     environment:
       - PRIMEAGENT_DATABASE_URL=postgresql://primeagent:primeagent@postgres:5432/primeagent
+      - PRIMEAGENT_SUPERUSER_PASSWORD=${PRIMEAGENT_SUPERUSER_PASSWORD:?set PRIMEAGENT_SUPERUSER_PASSWORD in .env}
       # This variable defines where the logs, file storage, monitor data and secret keys are stored.
       - PRIMEAGENT_CONFIG_DIR=/app/primeagent
     volumes:
       - primeagent-data:/app/primeagent
 
   postgres:
-    image: postgres:16
+    # Pinned to a specific Debian base (trixie) so the postgres:16 tag does not
+    # silently roll its OS underneath us — that roll causes a glibc collation
+    # version mismatch warning on existing volumes. Matches the primeagent image
+    # base. See https://github.com/khulnasoft-bot/primeagent/issues/9608
+    image: postgres:16-trixie
     environment:
       POSTGRES_USER: primeagent
       POSTGRES_PASSWORD: primeagent

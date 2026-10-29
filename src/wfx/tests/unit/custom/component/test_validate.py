@@ -2,14 +2,34 @@ import ast
 from textwrap import dedent
 
 import pytest
+from wfx.custom.eval import eval_custom_component_code
 from wfx.custom.validate import (
     _get_module_fallbacks,
     _resolve_attribute,
     create_class,
     create_function,
     execute_function,
+    extract_class_name,
     prepare_global_scope,
 )
+
+
+@pytest.mark.asyncio
+async def test_eval_custom_component_code_supports_module_level_async_helpers():
+    code = dedent("""
+from wfx.custom import Component
+
+async def async_helper():
+    return "async helper result"
+
+class AsyncHelperComponent(Component):
+    async def run(self):
+        return await async_helper()
+    """)
+
+    component_class = eval_custom_component_code(code)
+
+    assert await component_class().run() == "async helper result"
 
 
 def test_importing_primeagent_module_in_wfx():
@@ -501,3 +521,77 @@ class Comp(Component):
         """)
         result = create_class(code, "Comp")
         assert result.__name__ == "Comp"
+
+
+class TestExtractClassName:
+    """The class name lookup is cached per exact source text."""
+
+    SOURCE = """\
+from wfx.custom import Component
+
+class Helper:
+    pass
+
+class Greeter(Component):
+    pass
+"""
+
+    def setup_method(self):
+        extract_class_name.cache_clear()
+
+    def teardown_method(self):
+        extract_class_name.cache_clear()
+
+    def test_name_is_extracted_and_cached(self):
+        first = extract_class_name(self.SOURCE)
+        second = extract_class_name(self.SOURCE)
+
+        assert first == "Greeter"
+        assert second is first
+        assert extract_class_name.cache_info().hits == 1
+
+    def test_modified_source_is_parsed_again(self):
+        extract_class_name(self.SOURCE)
+        modified = self.SOURCE.replace("class Greeter(Component)", "class Farewell(Component)")
+
+        assert extract_class_name(modified) == "Farewell"
+
+    def test_cache_capacity_and_lru_eviction(self):
+        capacity = 128
+        sources = [self.SOURCE.replace("Greeter", f"Component{i}") for i in range(capacity + 1)]
+        for i, source in enumerate(sources[:-1]):
+            assert extract_class_name(source) == f"Component{i}"
+
+        info = extract_class_name.cache_info()
+        assert info.maxsize == capacity
+        assert info.currsize == capacity
+        assert info.misses == capacity
+
+        # Refresh the oldest entry so the second entry becomes least recently used.
+        assert extract_class_name(sources[0]) == "Component0"
+        assert extract_class_name(sources[-1]) == f"Component{capacity}"
+        assert extract_class_name.cache_info().currsize == capacity
+        assert extract_class_name.cache_info().misses == capacity + 1
+
+        # The refreshed entry and newest entry are still hits after overflowing the cache.
+        assert extract_class_name(sources[0]) == "Component0"
+        assert extract_class_name(sources[-1]) == f"Component{capacity}"
+        assert extract_class_name.cache_info().hits == 3
+        assert extract_class_name.cache_info().misses == capacity + 1
+
+        # The evicted entry is parsed again without growing the cache.
+        assert extract_class_name(sources[1]) == "Component1"
+        assert extract_class_name.cache_info().misses == capacity + 2
+        assert extract_class_name.cache_info().currsize == capacity
+
+    @pytest.mark.parametrize(
+        ("code", "error"),
+        [("def broken(:\n", ValueError), ("class Helper:\n    pass\n", TypeError)],
+    )
+    def test_errors_are_raised_on_every_call(self, code, error):
+        for _ in range(2):
+            with pytest.raises(error):
+                extract_class_name(code)
+
+        assert extract_class_name.cache_info().misses == 2
+        assert extract_class_name.cache_info().currsize == 0

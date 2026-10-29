@@ -7,11 +7,15 @@ from typing import Any
 from gunicorn import glogging
 from gunicorn.app.base import BaseApplication
 from uvicorn.workers import UvicornWorker
-from wfx.log.logger import InterceptHandler
+from wfx.log.logger import InterceptHandler, get_file_handler, structlog_routes_to_stdlib
 
 
 class PrimeagentUvicornWorker(UvicornWorker):
-    CONFIG_KWARGS = {"loop": "asyncio"}
+    # ``reset_contextvars``: start every request task from a clean context. Without it a
+    # pipelined request inherits the previous request's ended server span and OpenTelemetry
+    # emits it as an INTERNAL child of an unrelated request. Kept in step with the
+    # direct-uvicorn kwargs in ``primeagent.__main__.build_direct_uvicorn_kwargs``.
+    CONFIG_KWARGS = {"loop": "asyncio", "reset_contextvars": True}
     _has_exited = False
 
     def init_process(self) -> None:
@@ -55,9 +59,15 @@ class PrimeagentUvicornWorker(UvicornWorker):
 class Logger(glogging.Logger):
     """Implements and overrides the gunicorn logging interface.
 
-    This class inherits from the standard gunicorn logger and overrides it by
-    replacing the handlers with `InterceptHandler` in order to route the
-    gunicorn logs to loguru.
+    This class inherits from the standard gunicorn logger and overrides it so
+    gunicorn's records join Primeagent's log output instead of gunicorn's own.
+
+    How they get there depends on which mode structlog is in, because
+    ``uvicorn.workers.UvicornWorker.__init__`` copies whatever handler list ends up
+    on ``gunicorn.error``/``gunicorn.access`` onto ``uvicorn.error``/``uvicorn.access``
+    and sets ``propagate = False``. Whatever is installed here is therefore also
+    what every uvicorn record in the worker gets, with no fallback to the root
+    logger. See ``_install_handlers``.
     """
 
     def __init__(self, cfg) -> None:
@@ -65,8 +75,42 @@ class Logger(glogging.Logger):
         logging.getLogger("gunicorn.error").setLevel(logging.WARNING)
         logging.getLogger("gunicorn.access").setLevel(logging.WARNING)
 
-        logging.getLogger("gunicorn.error").handlers = [InterceptHandler()]
-        logging.getLogger("gunicorn.access").handlers = [InterceptHandler()]
+        self._install_handlers("gunicorn.error")
+        self._install_handlers("gunicorn.access")
+
+    @staticmethod
+    def _install_handlers(name: str) -> None:
+        """Give ``name`` a handler that terminates, never one that cycles.
+
+        In stdout mode structlog renders directly, so an ``InterceptHandler`` is a
+        terminating sink and the behaviour is unchanged.
+
+        In log-file mode structlog is backed by the stdlib factory, so
+        ``InterceptHandler`` would hand the record to a structlog logger that
+        resolves right back to *this* logger -- a cycle that grows the payload
+        every lap until the process is OOM-killed. Attach the rotating file handler
+        directly instead. It has to be the handler itself rather than an empty list
+        plus ``propagate = True``: ``UvicornWorker`` copies this list and turns
+        propagation off, so an empty list would silently drop every uvicorn record.
+        """
+        stdlib_logger = logging.getLogger(name)
+
+        if not structlog_routes_to_stdlib():
+            stdlib_logger.handlers = [InterceptHandler()]
+            return
+
+        file_handler = get_file_handler()
+        if file_handler is None:
+            # File mode without a file handler should not happen, but falling back
+            # to propagation loses records rather than looping them.
+            stdlib_logger.handlers = []
+            stdlib_logger.propagate = True
+            return
+
+        stdlib_logger.handlers = [file_handler]
+        # The handler is attached directly, so propagating to root -- which owns
+        # that same handler -- would write every record twice.
+        stdlib_logger.propagate = False
 
     def error(self, msg, *args, **kwargs):
         """Override error method to filter out SIGSEGV messages."""
@@ -90,57 +134,44 @@ class PrimeagentApplication(BaseApplication):
         self.application = None
         super().__init__()
 
-    # Thread name prefixes that are known to be benign before fork.
-    # BatchSpanProcessor (OTel), Prometheus scrape threads, and loguru's
-    # async queue worker are all safe to ignore here - they never survive
-    # into workers and produce no side-effects when the fd is inherited.
-    _BENIGN_THREAD_PREFIXES = (
-        "OTel",  # OpenTelemetry SDK (BatchSpanProcessor, etc.)
-        "opentelemetry",  # alternate OTel naming
-        "prometheus",  # Prometheus client background threads
-        "loguru",  # loguru enqueue=True worker
-        "asyncio",  # event-loop helper threads (Python internals)
-        "ThreadPoolExecutor",  # stdlib executor - harmless in parent
-        "concurrent.futures",  # same pool, different prefix
-    )
-
-    @classmethod
-    def _is_benign_thread(cls, thread) -> bool:
-        return any(thread.name.startswith(prefix) for prefix in cls._BENIGN_THREAD_PREFIXES)
-
     @classmethod
     def pre_fork(cls, server, _worker):
         import gc
         import os
-        import threading
 
-        all_non_main = [t for t in threading.enumerate() if t.is_alive() and t is not threading.main_thread()]
-        debug_mode = os.environ.get("PRIMEAGENT_DEBUG_FORK_GHOSTS", "").lower() in ("1", "true", "yes")
+        # Benign-thread allowlist + ghost detection live in wfx.fork (shared with wfx serve).
+        from wfx.fork import find_ghost_connections, find_ghost_threads
 
-        if debug_mode and all_non_main:
-            names = [t.name for t in all_non_main]
-            server.log.debug("All non-main threads before fork (debug): %s", names)
+        ghost_threads = find_ghost_threads()
 
-        suspicious = [t for t in all_non_main if not cls._is_benign_thread(t)]
-        if suspicious:
-            names = [t.name for t in suspicious]
+        if os.environ.get("PRIMEAGENT_DEBUG_FORK_GHOSTS", "").lower() in ("1", "true", "yes"):
+            import threading
+
+            all_non_main = [t.name for t in threading.enumerate() if t.is_alive() and t is not threading.main_thread()]
+            if all_non_main:
+                server.log.debug("All non-main threads before fork (debug): %s", all_non_main)
+
+        if ghost_threads:
+            names = [t.name for t in ghost_threads]
             server.log.warning("Ghost threads found before fork (these will be dead in workers): %s", names)
 
-        try:
-            import psutil
+        # find_ghost_connections() returns [] when psutil is absent; surface that here as a
+        # debug breadcrumb so an empty result isn't mistaken for "checked and clean".
+        import importlib.util
 
-            conns = psutil.Process().net_connections(kind="tcp")
-            ghost_conns = [c for c in conns if c.status != "LISTEN"]
-            if ghost_conns:
-                details = [(c.laddr, c.raddr, c.status) for c in ghost_conns]
-                server.log.warning(
-                    "Ghost TCP connections found before fork (will be dead in workers): %s",
-                    details,
-                )
-        except ImportError:
+        if importlib.util.find_spec("psutil") is None:
             server.log.debug("psutil not installed; skipping ghost TCP connection check")
+
+        try:
+            ghost_conns = find_ghost_connections()
         except Exception as e:  # noqa: BLE001
             server.log.warning("Failed to inspect TCP connections before fork: %s", e)
+            ghost_conns = []
+        if ghost_conns:
+            server.log.warning(
+                "Ghost TCP connections found before fork (will be dead in workers): %s",
+                ghost_conns,
+            )
 
         try:
             gc.collect()

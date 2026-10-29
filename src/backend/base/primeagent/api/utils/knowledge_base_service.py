@@ -20,6 +20,7 @@ Phase 2's new endpoints will add their own query methods alongside.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ from uuid import UUID, uuid4
 
 from sqlmodel import select
 from wfx.log.logger import logger
+from wfx.services.authorization.base import ResourceVisibilityScope
 
 from primeagent.services.database.models.knowledge_base import KnowledgeBaseRecord, KnowledgeBaseStatus
 from primeagent.services.deps import session_scope
@@ -95,7 +97,7 @@ async def create_record(
     chunk_overlap: int = 200,
     separator: str | None = None,
     column_config: list[dict[str, Any]] | None = None,
-    backend_type: str = "chroma",
+    backend_type: str = "sqlite",
     backend_config: dict[str, Any] | None = None,
     chunks: int = 0,
     words: int = 0,
@@ -113,6 +115,14 @@ async def create_record(
     that read from ``model_selection``. Callers that previously passed
     those two params now just supply ``model_selection``.
     """
+    from primeagent.api.utils.kb_helpers import validate_kb_name
+    from primeagent.services.knowledge_base_storage.coordinator import ensure_legacy_name_available
+
+    validate_kb_name(name)
+    if backend_type != "chroma":
+        # All creates, including Knowledge components and Memory stores, must
+        # preserve names owned by sources the startup scan has not adopted yet.
+        await ensure_legacy_name_available(user_id, name)
     normalized_selection = _normalize_model_selection(model_selection)
     record = KnowledgeBaseRecord(
         id=record_id or uuid4(),
@@ -136,10 +146,30 @@ async def create_record(
         session.add(record)
         await session.commit()
         await session.refresh(record)
+    if backend_type == "sqlite":
+        from primeagent.services.knowledge_base_storage.runtime import backend_for_record
+
+        backend = None
+        try:
+            backend = await backend_for_record(record, create=True)
+            await backend.ensure_ready()
+        except BaseException:
+            # A failed initialization must not leave a ready, apparently empty
+            # KB. The UUID directory is never adopted by another create.
+            async with session_scope() as session:
+                failed_record = await session.get(KnowledgeBaseRecord, record.id)
+                if failed_record is not None:
+                    await session.delete(failed_record)
+                    await session.commit()
+            raise
+        finally:
+            if backend is not None:
+                await backend.teardown()
     return record
 
 
 async def get_by_user_and_name(user_id: UUID, name: str) -> KnowledgeBaseRecord | None:
+    """Find a knowledge base within the specified owner namespace."""
     async with session_scope() as session:
         stmt = select(KnowledgeBaseRecord).where(
             KnowledgeBaseRecord.user_id == user_id,
@@ -150,6 +180,7 @@ async def get_by_user_and_name(user_id: UUID, name: str) -> KnowledgeBaseRecord 
 
 
 async def get_by_id(record_id: UUID) -> KnowledgeBaseRecord | None:
+    """Read a knowledge base by UUID, leaving authorization to the caller."""
     async with session_scope() as session:
         return await session.get(KnowledgeBaseRecord, record_id)
 
@@ -168,6 +199,36 @@ async def list_by_name(name: str) -> list[KnowledgeBaseRecord]:
         return list(result.all())
 
 
+async def get_backends_for_names(names: list[str]) -> dict[str, tuple[str, dict]]:
+    """Return ``{name: (backend_type, backend_config)}`` for KB names in one query.
+
+    Used to enrich Memory Base list/read responses with the backing KB's
+    vector-store backend without an N+1 per-item lookup. ``backend_config`` is
+    included so callers can distinguish Chroma Local from Chroma Cloud (both are
+    stored as ``backend_type="chroma"``; the discriminator is
+    ``backend_config["mode"] == "cloud"``); it carries only variable *names* and
+    routing flags, never secrets.
+
+    Keyed by name alone: Memory Base ``kb_name``s carry a random suffix so they
+    are globally unique, which also lets this resolve shared (cross-user) Memory
+    Bases. Missing names are absent from the map; callers default to
+    ``("chroma", {})``.
+    """
+    if not names:
+        return {}
+    async with session_scope() as session:
+        stmt = select(
+            KnowledgeBaseRecord.name,
+            KnowledgeBaseRecord.backend_type,
+            KnowledgeBaseRecord.backend_config,
+        ).where(KnowledgeBaseRecord.name.in_(names))  # type: ignore[attr-defined]
+        result = await session.exec(stmt)
+        return {
+            name: (backend_type or "chroma", backend_config or {})
+            for name, backend_type, backend_config in result.all()
+        }
+
+
 async def list_by_user(user_id: UUID) -> list[KnowledgeBaseRecord]:
     """Return all KBs for ``user_id`` (newest first)."""
     async with session_scope() as session:
@@ -180,12 +241,47 @@ async def list_by_user(user_id: UUID) -> list[KnowledgeBaseRecord]:
         return list(result.all())
 
 
-async def backfill_all_users_from_disk(*, kb_root: Path | None = None) -> int:
-    """Backfill missing KB rows for every existing user.
+async def list_owned_or_visible(
+    user_id: UUID,
+    visibility: ResourceVisibilityScope,
+) -> list[KnowledgeBaseRecord]:
+    """Return KB rows owned by ``user_id`` or visible through a supported scope."""
+    from primeagent.services.authorization.listing import restrict_to_owned_or_visible_scope
 
-    Runs during application startup so list/detail endpoints can stay
-    read-only. Returns the total number of inserted rows across all
-    users and never raises for per-user failures.
+    async with session_scope() as session:
+        # KnowledgeBaseRecord has no canonical workspace/project columns, so
+        # domain-only grants intentionally remain owner-scoped.
+        stmt = restrict_to_owned_or_visible_scope(
+            select(KnowledgeBaseRecord),
+            id_column=KnowledgeBaseRecord.id,
+            owner_clause=KnowledgeBaseRecord.user_id == user_id,
+            visibility=visibility,
+        ).order_by(KnowledgeBaseRecord.created_at.desc())  # type: ignore[attr-defined]
+        result = await session.exec(stmt)
+        return list(result.all())
+
+
+async def backfill_all_users_from_disk(
+    *,
+    kb_root: Path | None = None,
+    username: str | None = None,
+    dry_run: bool = False,
+) -> int:
+    """Adopt KB directories that have no ``knowledge_base`` row.
+
+    Legacy-recovery only. The ``knowledge_base`` row is the sole authority for KB
+    metadata and nothing in the steady-state code path reads the on-disk
+    ``embedding_metadata.json`` sidecar any more, so this exists purely to adopt
+    directories written by a Primeagent version that predates that change. It is
+    opt-in at startup (``PRIMEAGENT_KB_DISK_RECONCILE_ENABLED``) and available on
+    demand as ``primeagent reconcile-kb-from-disk``.
+
+    ``username`` narrows the scan to a single account — the usual shape of a
+    real recovery ("this user's KBs vanished after the upgrade"). ``dry_run``
+    reports what would be adopted without writing.
+
+    Returns the number of rows inserted (or that would be inserted, under
+    ``dry_run``). Never raises for per-user failures.
     """
     from primeagent.api.utils.kb_helpers import KBStorageHelper
     from primeagent.services.database.models.user.model import User
@@ -195,7 +291,10 @@ async def backfill_all_users_from_disk(*, kb_root: Path | None = None) -> int:
         return 0
 
     async with session_scope() as session:
-        users = list((await session.exec(select(User))).all())
+        stmt = select(User)
+        if username:
+            stmt = stmt.where(User.username == username)
+        users = list((await session.exec(stmt)).all())
 
     inserted = 0
     for user in users:
@@ -203,13 +302,78 @@ async def backfill_all_users_from_disk(*, kb_root: Path | None = None) -> int:
         if not kb_user_root.exists():
             continue
         try:
-            inserted += await backfill_from_disk(user_id=user.id, kb_user_root=kb_user_root)
+            inserted += await backfill_from_disk(
+                user_id=user.id,
+                kb_user_root=kb_user_root,
+                dry_run=dry_run,
+            )
         except Exception as exc:  # noqa: BLE001
             await logger.awarning(
-                "knowledge-base startup reconciliation failed for user %s: %s",
+                "knowledge-base disk reconciliation failed for user %s: %s",
                 user.username,
                 exc,
             )
+
+    return inserted
+
+
+async def backfill_memory_base_rows() -> int:
+    """Ensure every Memory Base has a backing ``knowledge_base`` row.
+
+    Memory Bases are DB-driven: their backend + embedding config resolve from the
+    ``knowledge_base`` row, never an on-disk sidecar. Memory Bases created before
+    that row existed have only a ``memory_base`` row, so this startup reconcile
+    creates the missing ``knowledge_base`` row from the ``memory_base`` table
+    itself — no disk access, so it works on a replica whose filesystem never held
+    the KB directory.
+
+    Only Memory Bases *lacking* a ``knowledge_base`` row are fetched (a single
+    ``NOT EXISTS`` query), so after the first run this returns zero rows and does
+    almost nothing — startup cost is proportional to the backlog, not the total
+    Memory Base count. ``backend_type="chroma"`` with empty config is the correct
+    reconstruction: a Memory Base with no row predates the backend selector, when
+    every Memory Base was local Chroma, and the ``memory_base`` table records no
+    backend to recover. Memory Bases created through the selector get their real
+    backend from ``_create_kb_record_for_memory_base`` and never reach this path.
+
+    Returns the number of rows inserted. Never raises — per-MB failures are logged
+    and skipped so one bad row doesn't block startup.
+    """
+    from sqlalchemy import exists
+
+    from primeagent.services.database.models.memory_base.model import MemoryBase
+    from primeagent.services.memory_base.embedding_helpers import infer_embedding_provider
+
+    # Fetch only Memory Bases with no matching knowledge_base row (by owner + name).
+    orphan_stmt = (
+        select(MemoryBase)
+        .where(MemoryBase.kb_name != "")
+        .where(
+            ~exists(
+                select(KnowledgeBaseRecord.id)
+                .where(KnowledgeBaseRecord.user_id == MemoryBase.user_id)
+                .where(KnowledgeBaseRecord.name == MemoryBase.kb_name)
+            )
+        )
+    )
+    async with session_scope() as session:
+        orphans = list((await session.exec(orphan_stmt)).all())
+
+    inserted = 0
+    for mb in orphans:
+        try:
+            provider = infer_embedding_provider(mb.embedding_model)
+            await create_record(
+                user_id=mb.user_id,
+                name=mb.kb_name,
+                model_selection={"name": mb.embedding_model, "provider": provider},
+                backend_type="chroma",
+                backend_config={},
+                source_types=["memory"],
+            )
+            inserted += 1
+        except Exception as exc:  # noqa: BLE001
+            await logger.aerror("memory-base backfill: failed to upsert KB row for %s: %s", mb.kb_name, exc)
 
     return inserted
 
@@ -232,7 +396,11 @@ async def update_stats(
     deleted between the ingestion start and the finalize call; we
     don't want that to fail the run.
     """
-    async with session_scope() as session:
+    from primeagent.services.knowledge_base_storage.runtime import operation
+
+    if await get_by_id(record_id) is None:
+        return
+    async with operation(record_id), session_scope() as session:
         row = await session.get(KnowledgeBaseRecord, record_id)
         if row is None:
             await logger.awarning("knowledge_base row %s missing on update_stats; skipping", record_id)
@@ -264,7 +432,12 @@ async def update_status(
     status: KnowledgeBaseStatus,
     failure_reason: str | None = None,
 ) -> None:
-    async with session_scope() as session:
+    """Persist the KB ingestion status and refresh its activity timestamp."""
+    from primeagent.services.knowledge_base_storage.runtime import operation
+
+    if await get_by_id(record_id) is None:
+        return
+    async with operation(record_id), session_scope() as session:
         row = await session.get(KnowledgeBaseRecord, record_id)
         if row is None:
             return
@@ -279,7 +452,12 @@ async def update_column_config(
     record_id: UUID,
     column_config: list[dict[str, Any]],
 ) -> None:
-    async with session_scope() as session:
+    """Persist the KB's source metadata column configuration."""
+    from primeagent.services.knowledge_base_storage.runtime import operation
+
+    if await get_by_id(record_id) is None:
+        return
+    async with operation(record_id), session_scope() as session:
         row = await session.get(KnowledgeBaseRecord, record_id)
         if row is None:
             return
@@ -290,16 +468,22 @@ async def update_column_config(
 
 
 async def delete_record(record_id: UUID) -> None:
-    """Remove the KB row. Caller is responsible for filesystem cleanup."""
-    async with session_scope() as session:
+    """Drain writers and tombstone storage before removing authoritative routing."""
+    from primeagent.services.knowledge_base_storage.runtime import delete_storage_for_record, operation
+
+    record = await get_by_id(record_id)
+    if record is None:
+        return
+    await delete_storage_for_record(record)
+    async with operation(record_id, allowed_states=("deleted",)), session_scope() as session:
         row = await session.get(KnowledgeBaseRecord, record_id)
-        if row is None:
-            return
-        await session.delete(row)
-        await session.commit()
+        if row is not None:
+            await session.delete(row)
+            await session.commit()
 
 
 async def delete_by_user_and_name(user_id: UUID, name: str) -> None:
+    """Retire the matching owner-scoped knowledge base when it exists."""
     record = await get_by_user_and_name(user_id, name)
     if record is not None:
         await delete_record(record.id)
@@ -328,9 +512,8 @@ async def read_metadata(
 def record_to_metadata_dict(record: KnowledgeBaseRecord) -> dict[str, Any]:
     """Serialize a row into the legacy JSON-file shape.
 
-    Matches the keys ``KBAnalysisHelper.get_metadata`` and the API
-    routes expect so a DB-first migration doesn't need a parallel
-    consumer refactor.
+    Matches the key set the API routes and the frontend expect, so the
+    row can back the response shape without a parallel consumer refactor.
     """
     status = record.status
     if status == KnowledgeBaseStatus.READY.value and record.chunks <= 0:
@@ -352,6 +535,9 @@ def record_to_metadata_dict(record: KnowledgeBaseRecord) -> dict[str, Any]:
         "column_config": record.column_config,
         "backend_type": record.backend_type,
         "backend_config": record.backend_config,
+        "storage_state": record.storage_state,
+        "storage_generation": record.storage_generation,
+        "active_migration_id": str(record.active_migration_id) if record.active_migration_id else None,
         "chunks": record.chunks,
         "words": record.words,
         "characters": record.characters,
@@ -385,13 +571,15 @@ async def backfill_from_disk(
     *,
     user_id: UUID,
     kb_user_root: Path,
+    dry_run: bool = False,
 ) -> int:
     """Create missing ``knowledge_base`` rows for existing KB directories.
 
-    Called on first boot after the Phase 1.5 migration lands so every
-    pre-existing KB gains a row. Also serves as an idempotent
-    fallback: if a user drops an exported KB directory on disk, this
-    upserts the corresponding row on next access.
+    Legacy-recovery only — see :func:`backfill_all_users_from_disk`. This is the
+    one remaining reader of the on-disk ``embedding_metadata.json`` sidecar, and
+    it runs only when an operator asks for it.
+
+    ``dry_run`` counts what would be adopted without writing any rows.
 
     Returns the number of rows inserted. Never raises — failures are
     logged and skipped so one malformed KB directory doesn't block the
@@ -401,6 +589,7 @@ async def backfill_from_disk(
         return 0
 
     from primeagent.api.utils.kb_helpers import KBStorageHelper
+    from primeagent.services.knowledge_base_storage.coordinator import _is_retired_source
 
     inserted = 0
     for kb_dir in kb_user_root.iterdir():
@@ -419,6 +608,17 @@ async def backfill_from_disk(
         if existing is not None:
             continue
 
+        # A successful upgrade retains the original source and sidecar for
+        # rollback. Its durable binding outlives routing-row deletion, so every
+        # recovery entrypoint must consult it before adopting that source again.
+        try:
+            relative = (Path(kb_user_root.name) / kb_dir.name).as_posix()
+            if await asyncio.to_thread(_is_retired_source, relative, root=kb_user_root.parent):
+                continue
+        except Exception as exc:  # noqa: BLE001 - uncertain retirement must never resurrect storage
+            await logger.aerror("backfill: cannot verify retirement for %s: %s", kb_dir, exc)
+            continue
+
         metadata = load_metadata_from_disk(kb_dir)
         if not metadata:
             # Unreadable metadata: skip. A subsequent ingestion will
@@ -426,9 +626,6 @@ async def backfill_from_disk(
             continue
 
         try:
-            from primeagent.api.utils.kb_helpers import KBAnalysisHelper
-
-            metadata = KBAnalysisHelper.get_metadata(kb_dir, fast=False) or metadata
             model_selection = _normalize_model_selection(metadata.get("model_selection"))
             record_id = _coerce_uuid(metadata.get("id")) or uuid4()
             # ``backend_type``/``backend_config`` are persisted by
@@ -457,23 +654,24 @@ async def backfill_from_disk(
                         "provider": provider_raw,
                     }
 
-            await create_record(
-                user_id=user_id,
-                name=name,
-                model_selection=normalized_selection,
-                chunk_size=int(metadata.get("chunk_size") or 1000),
-                chunk_overlap=int(metadata.get("chunk_overlap") or 200),
-                separator=metadata.get("separator"),
-                column_config=metadata.get("column_config") or [],
-                backend_type=backend_type,
-                backend_config=backend_config,
-                chunks=_coerce_int(metadata.get("chunks"), default=0),
-                words=_coerce_int(metadata.get("words"), default=0),
-                characters=_coerce_int(metadata.get("characters"), default=0),
-                size_bytes=_coerce_int(metadata.get("size_bytes", metadata.get("size")), default=0),
-                source_types=_coerce_source_types(metadata.get("source_types")),
-                record_id=record_id,
-            )
+            if not dry_run:
+                await create_record(
+                    user_id=user_id,
+                    name=name,
+                    model_selection=normalized_selection,
+                    chunk_size=int(metadata.get("chunk_size") or 1000),
+                    chunk_overlap=int(metadata.get("chunk_overlap") or 200),
+                    separator=metadata.get("separator"),
+                    column_config=metadata.get("column_config") or [],
+                    backend_type=backend_type,
+                    backend_config=backend_config,
+                    chunks=_coerce_int(metadata.get("chunks"), default=0),
+                    words=_coerce_int(metadata.get("words"), default=0),
+                    characters=_coerce_int(metadata.get("characters"), default=0),
+                    size_bytes=_coerce_int(metadata.get("size_bytes", metadata.get("size")), default=0),
+                    source_types=_coerce_source_types(metadata.get("source_types")),
+                    record_id=record_id,
+                )
             inserted += 1
         except Exception as exc:  # noqa: BLE001
             await logger.aerror("backfill: failed to upsert KB %s/%s: %s", user_id, name, exc)

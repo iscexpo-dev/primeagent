@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from wfx.services.telemetry.constants import DEFAULT_SEGMENT_WRITE_KEY
+
 
 class TelemetrySettings(BaseModel):
     """Telemetry, error tracking, and tracing settings."""
@@ -14,12 +16,23 @@ class TelemetrySettings(BaseModel):
     # Telemetry
     do_not_track: bool = False
     """If set to True, Primeagent will not track telemetry."""
-    telemetry_base_url: str = "https://primeagent.gateway.scarf.sh"
+    segment_write_key: str = DEFAULT_SEGMENT_WRITE_KEY
+    """Segment source write key. Official release artifacts include the production default."""
+    segment_api_url: str = "https://api.segment.io/v1/track"
+    """Segment HTTP Tracking API endpoint."""
 
     transactions_storage_enabled: bool = True
     """If set to True, Primeagent will track transactions between flows."""
     vertex_builds_storage_enabled: bool = True
     """If set to True, Primeagent will keep track of each vertex builds (outputs) in the UI for any flow."""
+    sync_result_storage_enabled: bool = False
+    """If set to True, a completed ``mode=sync`` workflow run caches its outputs to ``Job.result``
+    (and its session to ``job_metadata``) so a later GET status on that job_id returns them.
+
+    Off by default: sync callers already receive the full outputs and session_id in the inline
+    response, so persisting them again is an extra per-request job-row write with no documented
+    consumer. Enable only for a client that submits sync runs and later polls GET status. Background
+    runs are unaffected — they always persist their result (the caller is detached and must poll)."""
 
     telemetry_writer_enabled: bool = True
     """Route transaction and vertex_build writes through an async batched writer backed by a

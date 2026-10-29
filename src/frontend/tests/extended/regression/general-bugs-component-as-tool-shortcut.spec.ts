@@ -5,7 +5,9 @@ import { extractAndCleanCode } from "../../utils/extract-and-clean-code";
 
 test(
   "user must be able to use component as tool shortcut only if has tool mode is True",
-  { tag: ["@release", "@components"] },
+  {
+    tag: ["@release", "@components"],
+  },
   async ({ page }) => {
     await awaitBootstrapTest(page);
 
@@ -57,7 +59,13 @@ test(
     await page.locator("textarea").last().press(`ControlOrMeta+a`);
     await page.keyboard.press("Backspace");
     await page.locator("textarea").last().fill(updatedCode);
-    const customComponentPromise = page.waitForResponse("**/custom_component");
+    const customComponentPromise = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return (
+        response.request().method() === "POST" &&
+        url.pathname === "/api/v1/custom_component"
+      );
+    });
     await page.locator('//*[@id="checkAndSaveBtn"]').click();
     const customComponentResponse = await customComponentPromise;
     // check if the response is 200

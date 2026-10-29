@@ -17,11 +17,13 @@ from wfx.mcp.flow_builder_tools import (
     DescribeFlowIO,
     GenerateComponent,
     GetFieldValue,
+    ListTemplates,
     ProposeFieldEdit,
     ProposePlan,
     RemoveComponent,
     RunFlow,
     SearchComponentTypes,
+    UseTemplate,
 )
 
 from primeagent.agentic.flows.model_config import build_model_config
@@ -37,6 +39,18 @@ on the user's canvas. Components appear in real time as you add them.
 - **search_components** - Find components by name/category. No args = list all.
 - **describe_component** - Get a component TYPE's inputs, outputs, fields.
 - **get_field_value** - Read field values from a component on the canvas (by ID). No field_name = list all.
+
+Treat configuration metadata from `describe_component` as authoritative:
+- When `conditional_options` are present, use the first rule whose `when` fields
+  match the intended configuration. An empty `when` is the fallback. Configure
+  a mode and its dependent selections together when changing modes.
+- For closed scalar `options`, use exact, case-sensitive values. For `list` fields,
+  select each item from the options. A `combobox` allows free-text values; preserve
+  structured values (such as duration objects) and structured options in their declared shape.
+- Keep numeric values within `range_spec` bounds. When an optional field has a
+  `default`, omit it unless the user requests another value.
+- If configuration fails validation, correct the invalid parameter before retrying;
+  the rejected configuration call does not apply any of its parameter changes.
 
 **Edit existing flow (user reviews each change):**
 - **propose_field_edit** - Propose a field value change. User sees a diff card and accepts/rejects.
@@ -89,6 +103,12 @@ randomly pick one path one turn and the other path the next.
   (review and add it to the canvas)" — do NOT claim it is already "on
   the canvas" / "no canvas" unless it was applied. State it accurately
   in the user's language.
+
+**Starter templates:**
+- **use_template** - Instantiate a starter template by name as the proposed flow (one call,
+  same review gate as build_flow). Use ONLY when the request clearly matches a starter
+  template (e.g. "simple chatbot" -> Memory Chatbot, "RAG flow" -> a RAG template) — call
+  `list_templates` if unsure of the exact name; otherwise build normally with build_flow.
 
 **Run:**
 - **run_flow** - Execute the user's CURRENT canvas flow with its configured values
@@ -292,6 +312,48 @@ incremental edits go through `propose_field_edit` / live-edit tools directly.
 - Run `describe_component(type)` for EVERY component before generating edges
   so input names and output types match exactly.
 
+## Loops and branching
+
+- **Loop over a list**: use `LoopComponent`. Its `Inputs` (`Loop.data`) MUST be
+  connected to a data source — ALWAYS add a `ChatInput` (or another producer)
+  feeding `Loop.data`, even when the user only names the body components. A Loop
+  with an unconnected `Inputs` has nothing to iterate and CANNOT run — never
+  deliver one. Its `item` output emits one element per iteration AND doubles as
+  the loop-feedback input: wire `Loop.item -> <first body component>`, process,
+  then wire the body's FINAL output back into `Loop.item` (yes, `item` as the
+  TARGET — it is a loop input). Wire `Loop.done -> <downstream>` for the
+  aggregated result. A loop flow is intentionally cyclic; do not "fix" the cycle.
+  TYPES (CRITICAL): `Loop.item` emits `Data` — it can NOT wire directly into a
+  Message input like `Agent.input_value` or `LanguageModelComponent.input_value`.
+  Put a `ParserComponent` between them (`Loop.item -> ParserComponent.input_data`,
+  `ParserComponent.parsed_text -> <body>.input_value`). The feedback TARGET
+  `Loop.item` accepts Message, so a Message output (e.g. `Agent.response`) feeds
+  back into `L.item` directly with no converter. Build the loop in ONE
+  `build_flow` call from this canonical spec (adapt the body to the request; the
+  components below are current and correct — do NOT spend turns re-discovering
+  the loop wiring or describing each of them):
+  ```
+  nodes:
+    I: ChatInput
+    L: LoopComponent
+    P: ParserComponent
+    A: Agent
+    O: ChatOutput
+  edges:
+    I.message -> L.data
+    L.item -> P.input_data
+    P.parsed_text -> A.input_value
+    A.response -> L.item
+    L.done -> O.input_value
+  ```
+  If `build_flow` reports an error, fix the spec from the error message and call
+  `build_flow` again immediately — never restart component discovery.
+- **If/else branching**: use `ConditionalRouter` (If-Else). Wire the value to route
+  into `input_text` and the comparison value into `match_text`, then wire BOTH
+  branches: `R.true_result -> <true path>` and `R.false_result -> <false path>`.
+  Each branch may end in its own output component — two ChatOutputs is valid.
+  For Data-based conditions use `DataConditionalRouter`.
+
 ## Configuration Rules
 
 - When the user describes a **persona or use-case** (e.g., "customer service for
@@ -323,13 +385,16 @@ model) and the flow will be run/tested, you MUST set its `model` BEFORE
 running — otherwise the run fails with "No model selected".
 
 Pick the model in this STRICT priority order:
-1. **The model the user EXPLICITLY named WINS — always.** If the user asked
+1. **The model the user EXPLICITLY named WINS unless a runtime
+   `[Model provider policy ...]` notice says its provider is unavailable.**
+   If the user asked
    for a specific model ("use GPT-5.4", "use the OpenAI 5.4 model", "switch to
    claude-sonnet-4-5", "troque para gemini-2.5-pro"), use THAT model — never
    substitute a different version or the `preferred` model for it, even if the
-   requested model is not in the `[Available language models ...]` block and
-   even if a "preferred" model is offered. (e.g. user said "5.4" / "gpt-5.4"
-   and preferred is "gpt-5.5" → you MUST set the 5.4 model, NOT gpt-5.5.)
+   exact requested model is not listed and even if a "preferred" model is
+   offered. (e.g. user said "5.4" / "gpt-5.4" and preferred is "gpt-5.5"
+   → you MUST set the 5.4 model, NOT gpt-5.5.) If a policy notice omits or
+   rejects the provider, do not discover, configure, or run it.
    BUT set the **canonical model id** — the EXACT id as it appears in the
    provider catalog / `describe_component` / the `[Available language models]`
    block, NOT the user's loose wording. Provider model ids are CASE-SENSITIVE
@@ -343,19 +408,18 @@ Pick the model in this STRICT priority order:
    `preferred`; if there is none, pick ANY provider from "providers with
    credentials configured" (provider-agnostic — do NOT assume OpenAI; use
    whatever the user actually has keys for, e.g. Anthropic, Google, Groq).
-3. Only if no such block is present at all may you fall back to
-   `provider="OpenAI", name="gpt-4o-mini"`.
+3. Only if neither an Available-language-model block nor a restrictive
+   Model-provider-policy notice is present may you preserve the historical
+   fallback `provider="OpenAI", name="gpt-4o-mini"`.
 
 `configure_component(component_id="Agent-...", params='{"model": [{"provider": "<provider>", "name": "<name>"}]}')`.
 Never run a flow whose Agent has no model. NEVER claim in your reply that you
 used a model different from the one you actually set on the canvas — report the
 EXACT model you configured.
 
-Common providers and example model names:
-- `OpenAI` — `gpt-4o`, `gpt-4o-mini`, `gpt-5`, `o1-mini`
-- `Anthropic` — `claude-sonnet-4-5-20250929`, `claude-haiku-4-5`
-- `Google Generative AI` — `gemini-2.5-flash`, `gemini-2.5-pro`
-- `Groq`, `Azure OpenAI`, `Ollama`, `IBM WatsonX`
+Provider and model names are deployment-specific. Treat the runtime
+`[Available language models ...]` block as the authority; never infer that a
+provider is available from these instructions or from an example below.
 
 Add a SEPARATE model component (OpenAIModel etc.) only when the user
 EXPLICITLY says "add an OpenAIModel component" / "create a model node" — never
@@ -478,19 +542,15 @@ async def build_toolkit() -> list:
         ConfigureComponent(),
         BuildFlowFromSpec(),
         RunFlow(),
+        ListTemplates(),
+        UseTemplate(),
     ]
     tools: list = []
     for component in canvas_components:
         tools.extend(await component.to_toolkit())
 
-    # Sandboxed filesystem tools. We instantiate a fresh component per build so
-    # each request gets its own ``bound_user_id`` capture inside ``_get_tools``.
-    # B1: bind the request's user identity AND force per-user isolation BEFORE
-    # ``_get_tools`` runs (it captures bound_user_id once for the tool's lifetime).
-    # The agentic ContextVar is set in assistant_service before this flow's
-    # ``get_graph`` runs, so it's reliably available here. Mirrors
-    # files_router.get_file — write and read paths resolve to the same
-    # users/<hash(user_id)>/ root regardless of AUTO_LOGIN.
+    # Fresh FileSystemToolComponent per build: user identity + isolation must bind
+    # BEFORE _get_tools captures bound_user_id (set in assistant_service ContextVar).
     from primeagent.agentic.services.user_components_context import current_user_id
 
     fs = FileSystemToolComponent()
@@ -512,6 +572,7 @@ async def get_graph(
     provider: str | None = None,
     model_name: str | None = None,
     api_key_var: str | None = None,
+    iterations_limit: int | None = None,
 ) -> Graph:
     """Create and return the FlowBuilderAssistant graph.
 
@@ -519,12 +580,26 @@ async def get_graph(
         provider: Model provider (e.g., "OpenAI", "Anthropic").
         model_name: Model name (e.g., "gpt-4o").
         api_key_var: Optional API key variable name.
+        iterations_limit: Per-request Agent step budget; defaults to the shared
+            assistant budget (``PRIMEAGENT_ASSISTANT_ITERATIONS`` or the pinned
+            value). This flow is Python-built, so the JSON-side
+            ``inject_iterations_into_flow`` never touches it — the budget must
+            arrive here or the Agent silently runs on the component default.
 
     Returns:
         Graph: The configured flow builder assistant graph.
     """
+    from primeagent.agentic.services.flow_preparation import (
+        MAX_ASSISTANT_ITERATIONS,
+        assistant_iterations_default,
+    )
+
     provider = provider or "OpenAI"
     model_name = model_name or "gpt-4o"
+    if iterations_limit is None:
+        step_budget = assistant_iterations_default()
+    else:
+        step_budget = max(1, min(int(iterations_limit), MAX_ASSISTANT_ITERATIONS))
 
     chat_input = ChatInput()
     chat_input.set(sender="User", sender_name="User")
@@ -540,6 +615,7 @@ async def get_graph(
         "system_prompt": FLOW_BUILDER_PROMPT,
         "tools": tools,
         "temperature": 0.1,
+        "max_iterations": step_budget,
     }
     if api_key_var:
         agent_config["api_key"] = api_key_var

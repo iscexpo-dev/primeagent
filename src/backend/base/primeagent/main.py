@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 import warnings
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from http import HTTPStatus
 from pathlib import Path
@@ -15,21 +16,36 @@ import anyio
 import httpx
 import sqlalchemy
 from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi_pagination import add_pagination
 from filelock import FileLock
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import PydanticDeprecatedSince20
 from pydantic_core import PydanticSerializationError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from wfx.interface.utils import setup_llm_caching
 from wfx.log.logger import configure, logger
+from wfx.observability import (
+    EXECUTION_CLIENT_HEADER,
+    execution_client,
+    instrument_fastapi_app,
+    start_event_loop_lag_monitor,
+    stop_event_loop_lag_monitor,
+)
+from wfx.services.settings.feature_flags import FEATURE_FLAGS
 
-from primeagent.api import health_check_router, log_router
+from primeagent.api import log_router
+from primeagent.api.health_check_router import health_check_router
 from primeagent.api.router import router
+from primeagent.api.utils.migration_pause import MigrationPauseMiddleware
+from primeagent.api.v1 import connections
+from primeagent.api.v1.audit_reads import VERBATIM_QUERY_PARAMS
 from primeagent.api.v1.mcp_projects import init_mcp_servers
+from primeagent.api.validation_errors import request_validation_exception_handler
+from primeagent.api.warm_graph import is_warm_registry_enabled
+from primeagent.cli.preflight import PreflightAbortError, ensure_production_preflight
 from primeagent.initial_setup.setup import (
     copy_profile_pictures,
     create_or_update_starter_projects,
@@ -39,9 +55,12 @@ from primeagent.initial_setup.setup import (
 )
 from primeagent.middleware import ContentSizeLimitMiddleware
 from primeagent.plugin_routes import load_plugin_routes
+from primeagent.services.audit.attribution import AuditRequestContextMiddleware
 from primeagent.services.database.models.deployment.exceptions import DeploymentGuardError
 from primeagent.services.database.service import UnsupportedPostgreSQLVersionError
 from primeagent.services.deps import (
+    get_background_execution_service,
+    get_db_service,
     get_queue_service,
     get_service,
     get_settings_service,
@@ -49,8 +68,9 @@ from primeagent.services.deps import (
     session_scope,
 )
 from primeagent.services.schema import ServiceType
-from primeagent.services.tracing.otel_fastapi_patch import patch_otel_fastapi_route_details
+from primeagent.services.telemetry.opentelemetry import instrument_db_pool
 from primeagent.services.utils import initialize_services, initialize_settings_service, teardown_services
+from primeagent.utils.frontend import render_frontend_index
 from primeagent.utils.mcp_cleanup import cleanup_mcp_sessions
 
 if TYPE_CHECKING:
@@ -66,6 +86,39 @@ warnings.filterwarnings("ignore", category=ResourceWarning, message=".*MemoryObj
 _tasks: list[asyncio.Task] = []
 
 MAX_PORT = 65535
+GZIP_MINIMUM_SIZE = 1000
+GZIP_COMPRESS_LEVEL = 6
+# application/x-ndjson is deliberately absent: build event streams compress 78-99% and,
+# being streamed, bypass GZIP_MINIMUM_SIZE entirely.
+GZIP_ALREADY_COMPRESSED_CONTENT_TYPES = (
+    "application/octet-stream",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+)
+GZIP_EXCLUDED_CONTENT_TYPES = (*DEFAULT_EXCLUDED_CONTENT_TYPES, *GZIP_ALREADY_COMPRESSED_CONTENT_TYPES)
+
+# Enterprise lifespan hook registry. Enterprise plugins append async callables
+# at app-construction time (plugin registration runs before the lifespan
+# starts); the lifespan awaits "startup" hooks after all services are
+# initialized, right before it yields, and "shutdown" hooks first on teardown.
+# Hooks are best-effort: a failing hook is logged and never blocks OSS startup
+# or shutdown.
+_enterprise_lifespan_hooks: dict[str, list[Callable[[], Awaitable[None]]]] = {
+    "startup": [],
+    "shutdown": [],
+}
+
+
+async def _run_enterprise_lifespan_hooks(phase: str) -> None:
+    """Run registered enterprise lifecycle hooks and isolate failures between hooks."""
+    for hook in list(_enterprise_lifespan_hooks.get(phase, [])):
+        try:
+            await hook()
+        except Exception as e:  # noqa: BLE001
+            hook_name = getattr(hook, "__name__", getattr(hook, "__qualname__", type(hook).__name__))
+            await logger.awarning(f"Enterprise lifespan {phase} hook {hook_name} failed: {e}")
 
 
 async def log_exception_to_telemetry(exc: Exception, context: str) -> None:
@@ -79,12 +132,15 @@ async def log_exception_to_telemetry(exc: Exception, context: str) -> None:
 
 class RequestCancelledMiddleware(BaseHTTPMiddleware):
     def __init__(self, app) -> None:
+        """Initialize middleware that tracks client disconnections."""
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        """Race request handling against a client-disconnection watcher."""
         sentinel = object()
 
         async def cancel_handler():
+            """Wait until the requesting client disconnects."""
             while True:
                 if await request.is_disconnected():
                     return sentinel
@@ -105,6 +161,7 @@ class RequestCancelledMiddleware(BaseHTTPMiddleware):
 
 class JavaScriptMIMETypeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        """Convert serialization failures into an HTTP response."""
         try:
             response = await call_next(request)
         except Exception as exc:
@@ -126,6 +183,7 @@ class JavaScriptMIMETypeMiddleware(BaseHTTPMiddleware):
 
 
 async def load_bundles_with_error_handling():
+    """Load configured bundles and fall back to an empty result on network errors."""
     try:
         return await load_bundles_from_urls()
     except (httpx.TimeoutException, httpx.HTTPError, httpx.RequestError) as exc:
@@ -147,9 +205,8 @@ def cors_origins_contain_wildcard(origins) -> bool:
 
 def warn_about_future_cors_changes(settings):
     """Warn users about upcoming CORS security changes in version 1.7."""
-    # Check if using permissive (backward compatible) settings: a wildcard origin
-    # combined with credentials. Share the wildcard predicate with the middleware
-    # configuration so both fire for the same set of origins (string or list form).
+    # Shares the wildcard predicate with the middleware configuration so the
+    # warning and the permissive CORS setup fire for the same set of origins.
     using_permissive = cors_origins_contain_wildcard(settings.cors_origins) and settings.cors_allow_credentials is True
 
     if using_permissive:
@@ -160,13 +217,20 @@ def warn_about_future_cors_changes(settings):
 
 
 def get_lifespan(*, fix_migration=False, version=None):
+    """Build the application startup and shutdown context for services and background workers."""
     initialize_settings_service()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        """Start application services and stop their owned background tasks on shutdown."""
         from wfx.interface.components import component_cache, get_and_cache_all_types_dict
 
-        from primeagent.preload import PreloadStep, get_owned_temp_dirs, is_step_complete
+        from primeagent.preload import (
+            PreloadStep,
+            get_owned_temp_dirs,
+            initialize_environment_variables,
+            is_step_complete,
+        )
 
         configure()
 
@@ -179,6 +243,17 @@ def get_lifespan(*, fix_migration=False, version=None):
         sync_flows_from_fs_task = None
         mcp_init_task = None
         models_dev_refresh_task = None
+        # Same reason as ``temp_dirs`` below: the shutdown path stops this, so it must exist
+        # even when startup fails before it is created.
+        lag_monitor = None
+        warm_registry_task = None
+        # Started per worker below when trigger_dispatcher_enabled; the loops it
+        # owns are DB-leased singletons, so every replica may run one.
+        trigger_dispatcher = None
+        # The listener child, in subprocess mode only. Exactly one API worker
+        # hosts it (a named lease elects which), because the API defaults to
+        # several workers and N listeners would fight over every connection.
+        trigger_listeners = None
         # Bind ``temp_dirs`` before the ``try`` so the shutdown cleanup in the
         # ``finally`` block (which iterates it) never raises ``UnboundLocalError``
         # when startup fails before bundle loading assigns it below. Otherwise an
@@ -209,15 +284,50 @@ def get_lifespan(*, fix_migration=False, version=None):
                     except Exception as e:  # noqa: BLE001
                         await logger.awarning(f"Failed to initialize Sentry SDK (check PRIMEAGENT_SENTRY_DSN): {e}")
 
+            # Production preflight safety net and universal enforcement point.
+            # On the `primeagent run` route the CLI parent already ran this before
+            # forking (the PRIMEAGENT_PREFLIGHT_COMPLETED sentinel makes it a no-op
+            # here); for entrypoints that bypass the CLI (make backend, uvicorn
+            # --factory, raw gunicorn) this is where the checks actually execute.
+            # Placed before initialize_services so a missing required dependency
+            # aborts before we open the database or apply migrations. No-op in dev.
+            await ensure_production_preflight(
+                get_settings_service(),
+                verbose=os.getenv("PRIMEAGENT_LOG_LEVEL", "info").lower() == "debug",
+            )
+
             await logger.adebug("Initializing services")
-            # When the master already ran preload, the service_manager (and the
-            # DB service object) are inherited via fork. We still call
-            # initialize_services() here so each worker rebuilds its own fresh
-            # connection pool on first use (the master disposed its engine
-            # before fork). The call is idempotent: factory registration and
-            # migration application both no-op when already done.
+            # Even when preload state is inherited via fork, initialize_services() must run
+            # so each worker rebuilds its own connection pool (idempotent otherwise).
             await initialize_services(fix_migration=fix_migration)
+            await initialize_environment_variables()
+            from primeagent.services.knowledge_base_storage.coordinator import fence_legacy_records, schedule_upgrade
+
+            await fence_legacy_records()
             await logger.adebug(f"Services initialized in {asyncio.get_event_loop().time() - start_time:.2f}s")
+
+            # Surface the custom-component execution posture. Component code is exec()'d on
+            # the server at flow-build time (the feature); in multi-user mode with the
+            # permissive defaults every active non-admin user can therefore run arbitrary
+            # code. Warn once so operators discover the two lockdown settings rather than
+            # learning about the exposure from a report. No-op for the single-user default
+            # and for any deployment that already restricted this. Never raises.
+            from primeagent.utils.security_posture import log_custom_component_execution_posture
+
+            await log_custom_component_execution_posture(get_settings_service())
+
+            # Surface env-driven pgVector so operators can confirm the deployment
+            # snap-configured to Postgres as the default Knowledge Base vector store.
+            try:
+                from wfx.base.knowledge_bases.backends.postgres import postgres_env_configured
+
+                if postgres_env_configured():
+                    await logger.ainfo(
+                        "pgVector detected via PGVECTOR_CONNECTION_STRING — "
+                        "default Knowledge Base vector store is Postgres (pgvector)."
+                    )
+            except Exception as exc:  # noqa: BLE001 — never block startup on a detection log
+                await logger.adebug(f"pgVector detection skipped: {exc}")
 
             # Start the telemetry writer (no-op when telemetry_writer_enabled is False).
             try:
@@ -227,14 +337,47 @@ def get_lifespan(*, fix_migration=False, version=None):
                 if telemetry_writer is not None and telemetry_writer.is_enabled():
                     await telemetry_writer.start()
             except Exception as exc:  # noqa: BLE001
-                # If the user explicitly opted in (telemetry_writer_enabled=True)
-                # but startup failed, this is an error not a warning — every
-                # subsequent write will silently fall back to the legacy direct-
-                # write path that this feature was built to replace.
+                # Explicit opt-in + failed startup is an error, not a warning: writes would
+                # silently fall back to the legacy direct-write path.
                 await logger.aerror(
                     f"Failed to start telemetry writer; transactions and vertex_build "
                     f"writes will use the legacy direct-write path: {exc}"
                 )
+
+            # Periodic authz audit-log retention sweep (no-op unless enabled); the boot
+            # sweep already pruned, this keeps long-running instances bounded.
+            try:
+                from primeagent.services.task.audit_cleanup import audit_log_cleanup_worker
+
+                await audit_log_cleanup_worker.start()
+            except Exception as exc:  # noqa: BLE001 — never block startup on cleanup scheduling
+                await logger.awarning(f"Failed to start authz audit-log cleanup worker: {exc}")
+            try:
+                from primeagent.services.audit.retention import audit_event_cleanup_worker
+
+                await audit_event_cleanup_worker.start()
+            except Exception as exc:  # noqa: BLE001
+                await logger.awarning(f"Failed to start audit event cleanup worker: {exc}")
+            from primeagent.services.audit.exclusions import warn_about_ignored_exclusions
+
+            await warn_about_ignored_exclusions()
+
+            try:
+                from primeagent.services.data_subjects.worker import data_subject_erase_worker
+
+                await data_subject_erase_worker.start()
+            except Exception as exc:  # noqa: BLE001 — never block startup on the erase worker
+                await logger.awarning(f"Failed to start the data subject erase worker: {exc}")
+
+            # Keep the default OSS provider ceiling coherent across backend
+            # worker processes after an administrator commits a replacement.
+            # This worker is part of policy enforcement, so a scheduling failure
+            # must fail startup rather than leave a worker stale indefinitely.
+            from primeagent.services.task.model_provider_policy_refresh import (
+                model_provider_policy_refresh_worker,
+            )
+
+            await model_provider_policy_refresh_worker.start()
 
             current_time = asyncio.get_event_loop().time()
             await logger.adebug("Setting up LLM caching")
@@ -250,24 +393,57 @@ def get_lifespan(*, fix_migration=False, version=None):
                 await copy_profile_pictures()
                 await logger.adebug(f"Profile pictures copied in {asyncio.get_event_loop().time() - current_time:.2f}s")
 
-            current_time = asyncio.get_event_loop().time()
-            await logger.adebug("Reconciling knowledge base rows from disk")
+            # Disk reconciliation is opt-in. The ``knowledge_base`` row is the sole
+            # authority for KB metadata, so this scan exists only to adopt directories
+            # left behind by a version that still wrote the on-disk sidecar. Operators
+            # who need it can flip PRIMEAGENT_KB_DISK_RECONCILE_ENABLED or run
+            # ``primeagent reconcile-kb-from-disk`` once, instead of paying a filesystem
+            # walk on every boot forever.
+            if get_settings_service().settings.kb_disk_reconcile_enabled:
+                current_time = asyncio.get_event_loop().time()
+                await logger.adebug("Reconciling knowledge base rows from disk")
+                try:
+                    from primeagent.api.utils import knowledge_base_service
+
+                    inserted = await knowledge_base_service.backfill_all_users_from_disk()
+                    elapsed = asyncio.get_event_loop().time() - current_time
+                    await logger.adebug(
+                        f"Knowledge base reconciliation completed in {elapsed:.2f}s ({inserted} rows inserted)"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    await logger.awarning("Knowledge base reconciliation skipped after startup error: %s", exc)
+
+            # Memory Bases resolve their backend + embedding purely from the
+            # knowledge_base row (no on-disk sidecar), so ensure every Memory Base
+            # has one. Sourced from the memory_base table, not disk, so it's
+            # replica-safe; only Memory Bases missing a row are touched.
+            #
+            # Deliberately NOT gated behind kb_disk_reconcile_enabled: this is a
+            # DB->DB reconcile that reads no filesystem. Skipping it would leave a
+            # legacy Memory Base with no knowledge_base row, which makes backend and
+            # embedding resolution raise and makes ``check_mismatch`` report a false
+            # mismatch — prompting a regenerate that resets every session cursor.
             try:
                 from primeagent.api.utils import knowledge_base_service
 
-                inserted = await knowledge_base_service.backfill_all_users_from_disk()
-                elapsed = asyncio.get_event_loop().time() - current_time
-                await logger.adebug(
-                    f"Knowledge base reconciliation completed in {elapsed:.2f}s ({inserted} rows inserted)"
-                )
+                mb_inserted = await knowledge_base_service.backfill_memory_base_rows()
+                if mb_inserted:
+                    await logger.adebug(f"Memory Base row reconciliation inserted {mb_inserted} rows")
             except Exception as exc:  # noqa: BLE001
-                await logger.awarning("Knowledge base reconciliation skipped after startup error: %s", exc)
+                await logger.awarning("Memory Base row reconciliation skipped after startup error: %s", exc)
 
+            # Include reconstructed Memory backing rows in the same automatic
+            # upgrade. No ingestion-status update can remove their storage fence.
+            await fence_legacy_records()
+            schedule_upgrade()
+
+            prometheus_started = False
             if get_settings_service().settings.prometheus_enabled:
                 try:
                     from prometheus_client import start_http_server
 
                     start_http_server(get_settings_service().settings.prometheus_port)
+                    prometheus_started = True
                     await logger.adebug(
                         f"Started Prometheus server on port {get_settings_service().settings.prometheus_port}"
                     )
@@ -286,14 +462,21 @@ def get_lifespan(*, fix_migration=False, version=None):
                     else:
                         await logger.awarning(f"Failed to start Prometheus server: {e}")
 
+            # Only the process that actually bound the Prometheus port runs the DB-derived
+            # collector, so `gunicorn -w N` does not spawn N collectors all querying the
+            # database while only one of them exposes anything to scrape.
+            from primeagent.services.background_execution.metrics_collector import maybe_start_metrics_collector
+
+            await maybe_start_metrics_collector(
+                _app, get_settings_service().settings, prometheus_started=prometheus_started
+            )
+
             telemetry_service = get_telemetry_service()
 
             # Gate: Load bundles
             if is_step_complete(PreloadStep.BUNDLES):
-                # Inherit bundle paths from master via COW.
-                # get_owned_temp_dirs() returns the preloaded dirs if this is
-                # the master, or an empty list if this is a worker (workers
-                # must NOT clean up the master's temp_dirs).
+                # get_owned_temp_dirs() is empty for workers — they inherit bundle paths
+                # via COW and must NOT clean up the master's temp_dirs.
                 temp_dirs = get_owned_temp_dirs()
                 await logger.adebug("Skipping bundle load: inherited from master")
             else:
@@ -303,16 +486,11 @@ def get_lifespan(*, fix_migration=False, version=None):
                 get_settings_service().settings.components_path.extend(bundles_components_paths)
                 await logger.adebug(f"Bundles loaded in {asyncio.get_event_loop().time() - current_time:.2f}s")
 
-            # Locally-registered dev extensions (``wfx extension dev``) are
-            # loaded later via :func:`import_extension_components` through the
-            # @official-slot pathway alongside installed extensions, so they
-            # share the BundleRegistry, palette decoration, and reload
-            # endpoint with pip-installed bundles.  Nothing to wire here.
+            # Dev extensions load later via import_extension_components alongside
+            # installed ones (shared BundleRegistry/palette/reload); nothing to wire here.
 
-            # Gate: Cache component types
-            # When types_cached is True, workers inherited the populated cache via COW; we still need a
-            # local handle for create_or_update_starter_projects. starter_projects_created can remain False
-            # if the master failed after caching types but before finishing starter projects.
+            # Gate: cache component types. Workers inherit the cache via COW but still need a
+            # local handle for create_or_update_starter_projects (master may have failed mid-way).
             if is_step_complete(PreloadStep.TYPES_CACHED):
                 await logger.adebug("Skipping types cache: inherited from master")
                 all_types_dict = component_cache.all_types_dict
@@ -334,10 +512,8 @@ def get_lifespan(*, fix_migration=False, version=None):
             if is_step_complete(PreloadStep.STARTER_PROJECTS):
                 await logger.adebug("Skipping starter projects: inherited from master")
             else:
-                # Use file-based lock to prevent multiple workers from creating duplicate starter projects
-                # concurrently. Note that it's still possible that one worker may complete this task, release
-                # the lock, then another worker pick it up, but the operation is idempotent so worst case it
-                # duplicates the initialization work.
+                # File-based lock keeps workers from creating starter projects concurrently;
+                # the operation is idempotent so a lock handoff only duplicates work.
                 current_time = asyncio.get_event_loop().time()
                 await logger.adebug("Creating/updating starter projects")
 
@@ -392,24 +568,16 @@ def get_lifespan(*, fix_migration=False, version=None):
                 f"started MCP Composer service in {asyncio.get_event_loop().time() - current_time:.2f}s"
             )
 
-            # Gate: Auto-configure agentic MCP server (when agentic_experience enabled)
-            if get_settings_service().settings.agentic_experience:
-                if is_step_complete(PreloadStep.AGENTIC_MCP):
-                    await logger.adebug(
-                        "Skipping agentic MCP server config: master already completed it during preload"
-                    )
-                else:
-                    from primeagent.api.utils.mcp.agentic_mcp import auto_configure_agentic_mcp_server
+            # Backfill MCP servers from the legacy per-user JSON file into the
+            # mcp_server table (idempotent + multi-replica-safe; existing file-based
+            # users are migrated to the DB store automatically on upgrade).
+            try:
+                from primeagent.api.utils.mcp.backfill import backfill_mcp_servers_from_files
 
-                    current_time = asyncio.get_event_loop().time()
-                    await logger.ainfo("Configuring Agentic MCP server...")
-                    try:
-                        async with session_scope() as session:
-                            await auto_configure_agentic_mcp_server(session)
-                        elapsed = asyncio.get_event_loop().time() - current_time
-                        await logger.adebug(f"Agentic MCP server configured in {elapsed:.2f}s")
-                    except Exception as e:  # noqa: BLE001
-                        await logger.awarning(f"Failed to configure agentic MCP server: {e}")
+                async with session_scope() as session:
+                    await backfill_mcp_servers_from_files(session)
+            except Exception as e:  # noqa: BLE001
+                await logger.awarning(f"Failed to backfill MCP servers from legacy files: {e}")
 
             # Gate: Load flows from directory
             current_time = asyncio.get_event_loop().time()
@@ -420,6 +588,34 @@ def get_lifespan(*, fix_migration=False, version=None):
                 await load_flows_from_directory()
                 await logger.adebug(f"Flows loaded in {asyncio.get_event_loop().time() - current_time:.2f}s")
 
+            # Opt-in execution cache: warm flows into the in-memory
+            # registry, then run the background reconcile loop that keeps this machine
+            # in sync with the shared ``flow`` table (add new / swap changed / evict
+            # deleted) with no Redis. Placed here — after the component-type cache,
+            # starter projects, and flow sources are loaded — so graph builds have every
+            # dependency they need (an earlier placement made hardened configs fail every
+            # build). Preload is outside readiness and machine-serialized; reconciliation
+            # starts after this worker's attempt, including when preload fails. Runs once
+            # per worker (app "lifespan"); the settings service is safe here.
+            if is_warm_registry_enabled(get_settings_service().settings):
+                from primeagent.services.warm_registry.reconcile import reconcile_loop, warm_all
+
+                async def run_warm_registry() -> None:
+                    """Preload off readiness, then keep cached entries reconciled."""
+                    try:
+                        # Best effort and intentionally off the readiness path: one
+                        # large or malformed stored flow must not hold the worker's
+                        # health endpoint hostage during deployment.
+                        await warm_all()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — the loop self-heals
+                        await logger.aerror(f"warm flow registry: initial warm failed: {exc}")
+                    await reconcile_loop()
+
+                # One supervised handle keeps shutdown cancellation simple.
+                warm_registry_task = asyncio.create_task(run_warm_registry())
+
             # Per-worker setup: sync_flows_from_fs and queue service
             # (MUST be started per-worker: they create asyncio tasks bound to this event loop)
             sync_flows_from_fs_task = asyncio.create_task(sync_flows_from_fs())
@@ -427,10 +623,37 @@ def get_lifespan(*, fix_migration=False, version=None):
             if not queue_service.is_started():
                 queue_service.start()
 
+            # Reconcile background-execution jobs left behind by a crashed worker:
+            # fail orphaned IN_PROGRESS rows, re-enqueue QUEUED rows. Best-effort
+            # so a reconcile hiccup never blocks boot.
+            with suppress(Exception):
+                await get_background_execution_service().sweep_orphans_on_startup()
+
+            # Triggers: the dispatcher and the schedule tick producer. Both are
+            # singletons held by a ``trigger_lease`` row, so starting one in
+            # every API replica still fires each schedule once and runs each
+            # ledger event once. Best-effort: a trigger loop that cannot start
+            # must never stop the API from booting.
+            with suppress(Exception):
+                from primeagent.services.triggers.dispatcher import start_dispatcher_if_enabled
+
+                trigger_dispatcher = start_dispatcher_if_enabled()
+
+            # Track B listeners. Off unless PRIMEAGENT_LISTENERS_MODE=subprocess:
+            # the supported multi-replica shape is a separate `primeagent
+            # listeners` service, which the API neither starts nor knows about.
+            with suppress(Exception):
+                from primeagent.services.triggers.listeners.subprocess_host import (
+                    start_listener_subprocess_if_enabled,
+                )
+
+                trigger_listeners = start_listener_subprocess_if_enabled()
+
             total_time = asyncio.get_event_loop().time() - start_time
             await logger.adebug(f"Total initialization time: {total_time:.2f}s")
 
             async def delayed_init_mcp_servers():
+                """Initialize project MCP servers after starter-project setup has had time to finish."""
                 await asyncio.sleep(10.0)  # Increased delay to allow starter projects to be created
                 current_time = asyncio.get_event_loop().time()
                 await logger.adebug("Loading MCP servers for projects")
@@ -452,7 +675,10 @@ def get_lifespan(*, fix_migration=False, version=None):
 
             # Start the delayed initialization as a background task
             # Allows the server to start first to avoid race conditions with MCP Server startup
-            mcp_init_task = asyncio.create_task(delayed_init_mcp_servers())
+            if get_settings_service().settings.skip_mcp_auto_init:
+                await logger.adebug("Skipping MCP server auto-initialization (skip_mcp_auto_init=True)")
+            else:
+                mcp_init_task = asyncio.create_task(delayed_init_mcp_servers())
 
             async def refresh_models_dev_periodically() -> None:
                 """Hydrate the models.dev catalog at startup and refresh daily.
@@ -500,10 +726,8 @@ def get_lifespan(*, fix_migration=False, version=None):
 
                     await asyncio.sleep(refresh_interval_seconds)
 
-            # PRIMEAGENT_MODELS_DEV_REFRESH=false disables the live models.dev
-            # fetch. Tests set this: the startup fetch otherwise fires from a
-            # background task during whatever test is running, hitting the
-            # network and tripping event-loop-block detectors (pyleak).
+            # PRIMEAGENT_MODELS_DEV_REFRESH=false disables the live models.dev fetch; tests set
+            # it because the background fetch hits the network and trips pyleak detectors.
             if os.getenv("PRIMEAGENT_MODELS_DEV_REFRESH", "true").lower() not in ("false", "0", "no"):
                 models_dev_refresh_task = asyncio.create_task(refresh_models_dev_periodically())
             else:
@@ -516,13 +740,45 @@ def get_lifespan(*, fix_migration=False, version=None):
             await start_streamable_http_manager()
             await start_project_task_group()
 
+            # Started in the lifespan rather than with the rest of the telemetry setup: it
+            # needs the running loop, and under gunicorn the services are initialized in the
+            # master before the fork, so a task created there would not exist in the workers.
+            # Best-effort, like every other optional subsystem here: instrumentation must
+            # never be the reason the server fails to boot.
+            try:
+                lag_monitor = start_event_loop_lag_monitor(telemetry_service.ot.meter_provider)
+            except Exception as e:  # noqa: BLE001
+                await logger.awarning(f"Event loop lag monitor failed to start: {e}")
+            # Pool saturation is read from the live engine at collection time, so it has to be
+            # registered after the database service exists.
+            try:
+                instrument_db_pool(telemetry_service.ot.meter_provider, get_db_service().engine)
+            except Exception as e:  # noqa: BLE001
+                await logger.awarning(f"DB pool metrics failed to register: {e}")
+
+            # Enterprise startup hooks run last: every service they may touch
+            # is initialized by this point.
+            await _run_enterprise_lifespan_hooks("startup")
+
             yield
         except asyncio.CancelledError:
             await logger.adebug("Lifespan received cancellation signal")
         except UnsupportedPostgreSQLVersionError:
-            # Normally caught by the pre-flight check in __main__.py
-            # before the server starts.  If we get here anyway (e.g.
-            # direct uvicorn invocation via ``make backend``), exit
+            # Normally caught by the pre-flight check in __main__.py; on direct uvicorn
+            # invocation exit immediately and tell the parent (reloader) to stop.
+            import signal
+
+            sys.stdout.flush()
+            sys.stderr.flush()
+            with suppress(ProcessLookupError, PermissionError):
+                os.kill(os.getppid(), signal.SIGTERM)
+            os._exit(3)
+        except PreflightAbortError:
+            # Same rationale as UnsupportedPostgreSQLVersionError above: on the
+            # `primeagent run` route this is caught before the server starts. If we
+            # reach here, boot came via a CLI-bypassing entrypoint (make backend,
+            # uvicorn --factory) with deployment_profile=prod and a required
+            # dependency missing. The summary has already been printed — exit
             # immediately and tell the parent (reloader) to stop.
             import signal
 
@@ -541,6 +797,36 @@ def get_lifespan(*, fix_migration=False, version=None):
             # CRITICAL: Cleanup MCP sessions FIRST, before any other shutdown logic.
             # This ensures MCP subprocesses are killed even if shutdown is interrupted.
             await cleanup_mcp_sessions()
+
+            # Stop the background-execution metrics collector. No-op when it never
+            # started, and it swallows its own errors: a collector that fails to stop
+            # must not be the reason shutdown does not finish.
+            from primeagent.services.background_execution.metrics_collector import stop_metrics_collector
+
+            await stop_metrics_collector(_app)
+
+            # Enterprise shutdown hooks run before service teardown so they can
+            # still flush through live services. Also reached when startup
+            # failed before the hooks ran — enterprise stop() paths must (and
+            # do) tolerate never having started.
+            await _run_enterprise_lifespan_hooks("shutdown")
+            from primeagent.services.knowledge_base_storage.coordinator import stop_upgrade
+
+            try:
+                await stop_upgrade()
+            except Exception as exc:  # noqa: BLE001 -- storage shutdown must not skip other cleanup
+                await logger.awarning("Failed to stop storage upgrade: %s", type(exc).__name__)
+            from primeagent.services.knowledge_base_storage.runtime import close_coordination_pools
+
+            try:
+                await close_coordination_pools()
+            except Exception as exc:  # noqa: BLE001 -- failed disposal must not skip service and sandbox cleanup
+                await logger.awarning("Failed to close storage coordination pools: %s", type(exc).__name__)
+
+            # After the MCP cleanup above, deliberately: stopping the sampler awaits a
+            # cancellation, and parking there first would both delay that guarantee and give
+            # the supervisor's own cancellation somewhere to be swallowed.
+            await stop_event_loop_lag_monitor(lag_monitor)
 
             # Clean shutdown with progress indicator
             # Create shutdown progress (show verbose timing if log level is DEBUG)
@@ -575,6 +861,48 @@ def get_lifespan(*, fix_migration=False, version=None):
                         await stop_streamable_http_manager()
                     except Exception as e:  # noqa: BLE001
                         await logger.aerror(f"Failed to stop MCP server streamable-http session manager: {e}")
+                    try:
+                        from primeagent.api.v1.agentic_mcp import stop_agentic_streamable_http_manager
+
+                        await stop_agentic_streamable_http_manager()
+                    except Exception as e:  # noqa: BLE001
+                        await logger.aerror(f"Failed to stop agentic MCP streamable-http session manager: {e}")
+                    # Close the shared A2A push-notification webhook client.
+                    try:
+                        from primeagent.api.v1.a2a import close_push_client
+
+                        await close_push_client()
+                    except Exception as e:  # noqa: BLE001
+                        await logger.aerror(f"Failed to close A2A push notification client: {e}")
+                    # Stop the authz audit-log retention worker (best-effort;
+                    # no-op when it was never scheduled).
+                    try:
+                        from primeagent.services.task.audit_cleanup import audit_log_cleanup_worker
+
+                        await audit_log_cleanup_worker.stop()
+                    except Exception as e:  # noqa: BLE001
+                        await logger.aerror(f"Failed to stop authz audit-log cleanup worker: {e}")
+                    try:
+                        from primeagent.services.audit.retention import audit_event_cleanup_worker
+
+                        await audit_event_cleanup_worker.stop()
+                    except Exception as e:  # noqa: BLE001
+                        await logger.aerror(f"Failed to stop audit event cleanup worker: {e}")
+                    try:
+                        from primeagent.services.data_subjects.worker import data_subject_erase_worker
+
+                        await data_subject_erase_worker.stop()
+                    except Exception as e:  # noqa: BLE001
+                        await logger.aerror(f"Failed to stop the data subject erase worker: {e}")
+                    try:
+                        from primeagent.services.task.model_provider_policy_refresh import (
+                            model_provider_policy_refresh_worker,
+                        )
+
+                        await model_provider_policy_refresh_worker.stop()
+                    except Exception as e:  # noqa: BLE001
+                        await logger.aerror(f"Failed to stop model-provider policy refresh worker: {e}")
+
                     # Cancel background tasks
                     tasks_to_cancel = []
                     if sync_flows_from_fs_task:
@@ -586,6 +914,22 @@ def get_lifespan(*, fix_migration=False, version=None):
                     if models_dev_refresh_task and not models_dev_refresh_task.done():
                         models_dev_refresh_task.cancel()
                         tasks_to_cancel.append(models_dev_refresh_task)
+                    # Shutdown cleanup: cancel the reconcile loop if running and await it
+                    # below (cancel() raises CancelledError inside the loop) so shutdown
+                    # waits for it to actually finish.
+                    if warm_registry_task and not warm_registry_task.done():
+                        warm_registry_task.cancel()
+                        tasks_to_cancel.append(warm_registry_task)
+                    # SIGTERM the listener child and wait for it, so its
+                    # connection leases are released rather than left to expire.
+                    if trigger_listeners is not None:
+                        with suppress(Exception):
+                            await trigger_listeners.stop()
+                    # Stops the loop AND hands the lease back, so another
+                    # replica takes over without waiting out the TTL.
+                    if trigger_dispatcher is not None:
+                        with suppress(Exception):
+                            await trigger_dispatcher.stop()
                     if tasks_to_cancel:
                         # Wait for all tasks to complete, capturing exceptions
                         results = await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
@@ -596,10 +940,8 @@ def get_lifespan(*, fix_migration=False, version=None):
 
                 # Step 2: Cleaning Up Services
                 with shutdown_progress.step(2):
-                    # Drain pending audit writes before services tear down so
-                    # rows scheduled mid-request still land in the DB. We do
-                    # this here (not in teardown_services) because the DB
-                    # session factory must still be alive.
+                    # Drain pending audit writes here (not teardown_services) because the
+                    # DB session factory must still be alive.
                     try:
                         from primeagent.services.authorization.utils import drain_pending_audit_writes
 
@@ -610,6 +952,19 @@ def get_lifespan(*, fix_migration=False, version=None):
                         await asyncio.wait_for(teardown_services(), timeout=30)
                     except asyncio.TimeoutError:
                         await logger.awarning("Teardown services timed out after 30s.")
+                    finally:
+                        # Shut down the code-execution sandbox VMs even when
+                        # teardown_services fails, and in addition to the
+                        # module's atexit hook: QEMU only reaps guests on
+                        # parent death from 10.2+, so an uvicorn worker
+                        # recycling without a full interpreter exit could
+                        # otherwise leave microVMs running (issue #12029).
+                        try:
+                            from wfx.utils.sandbox import shutdown_sandbox
+
+                            await asyncio.to_thread(shutdown_sandbox)
+                        except Exception as sandbox_exc:  # noqa: BLE001 — never block shutdown on sandbox teardown
+                            await logger.awarning(f"Sandbox teardown failed: {sandbox_exc}")
 
                 # Step 3: Clearing Temporary Files
                 with shutdown_progress.step(3):
@@ -641,6 +996,18 @@ def get_lifespan(*, fix_migration=False, version=None):
 
 def create_app():
     """Create the FastAPI app and include the router."""
+    from primeagent.services.triggers.listeners.guard import is_listener_process
+
+    if is_listener_process():
+        # decisions/process-model.md: "The boot path asserts that no FastAPI app
+        # is created in the listener process, so the two never converge again by
+        # accident." Both prior trigger attempts converged here.
+        msg = (
+            "This process is a Primeagent trigger listener and must not host the API. "
+            "Run the API and 'primeagent listeners' as separate processes."
+        )
+        raise RuntimeError(msg)
+
     from primeagent.utils.version import get_version_info
 
     __version__ = get_version_info()["version"]
@@ -655,9 +1022,20 @@ def create_app():
         lifespan=lifespan,
         root_path=settings.root_path,
     )
+    # Registered first so it sits innermost: the BaseHTTPMiddleware layers above turn every
+    # response into a stream, and a streamed response carries no Content-Length to test.
+    app.add_middleware(
+        GZipMiddleware,
+        minimum_size=GZIP_MINIMUM_SIZE,
+        compresslevel=GZIP_COMPRESS_LEVEL,
+        exclude_content_types=GZIP_EXCLUDED_CONTENT_TYPES,
+    )
     app.add_middleware(
         ContentSizeLimitMiddleware,
     )
+    if FEATURE_FLAGS.instance_migration:
+        # Registered before CORS, which then wraps it: a browser on another origin can read the refusal.
+        app.add_middleware(MigrationPauseMiddleware)
 
     add_sentry_middleware(app)
 
@@ -667,16 +1045,12 @@ def create_app():
     # Configure CORS using settings (with backward compatible defaults)
     origins = settings.cors_origins
     allow_credentials = settings.cors_allow_credentials
-    # Security: a wildcard origin combined with credentials is unsafe (and invalid
-    # per the CORS spec). Starlette would reflect the caller's Origin and return
-    # Access-Control-Allow-Credentials: true, letting any site make credentialed
-    # cross-origin requests (CSRF / token theft). Force credentials off whenever
-    # the origin list is a wildcard; specific origins keep credentials.
+    # Security: wildcard origin + credentials lets any site make credentialed
+    # cross-origin requests (CSRF / token theft), so force credentials off.
     if cors_origins_contain_wildcard(origins):
         if allow_credentials:
-            # Surface the override so an operator who set credentials on purpose can
-            # see why credentialed requests stopped working and points them at the
-            # wildcard origin as the cause.
+            # Surface the override so operators see why credentialed requests
+            # stopped working (wildcard origin is the cause).
             logger.warning(
                 "CORS: wildcard origin ('*') is configured together with "
                 "PRIMEAGENT_CORS_ALLOW_CREDENTIALS=true; disabling credentials because a "
@@ -697,15 +1071,32 @@ def create_app():
         allow_headers=settings.cors_allow_headers,
     )
     app.add_middleware(JavaScriptMIMETypeMiddleware)
+    app.add_middleware(AuditRequestContextMiddleware)
+
+    @app.middleware("http")
+    async def bind_execution_client(request: Request, call_next):
+        """Bind the caller's self-declared client for the life of the request.
+
+        Middleware rather than per-route wiring because every surface wants it and a route that
+        forgot would silently report nothing. The value is read from a header rather than the
+        request body: the v2 run model rejects extra fields, so a body field would be a public
+        schema change, and this is advisory metadata rather than part of the contract.
+
+        Self-reported, so it is spoofable, and execution_client drops anything outside the known
+        vocabulary. Never use it for authorization.
+        """
+        with execution_client(request.headers.get(EXECUTION_CLIENT_HEADER)):
+            return await call_next(request)
 
     @app.middleware("http")
     async def check_boundary(request: Request, call_next):
+        """Require a multipart boundary for file-upload requests."""
         if "/api/v1/files/upload" in request.url.path:
             content_type = request.headers.get("Content-Type")
 
             if not content_type or "multipart/form-data" not in content_type or "boundary=" not in content_type:
                 return JSONResponse(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     content={"detail": "Content-Type header must be 'multipart/form-data' with a boundary parameter."},
                 )
 
@@ -713,7 +1104,7 @@ def create_app():
 
             if not re.match(r"^[\w\-]{1,70}$", boundary):
                 return JSONResponse(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     content={"detail": "Invalid boundary format"},
                 )
 
@@ -727,7 +1118,7 @@ def create_app():
 
             if not body.startswith(boundary_start) or not body.endswith((boundary_end, boundary_end_no_newline)):
                 return JSONResponse(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     content={"detail": "Invalid multipart formatting"},
                 )
 
@@ -757,9 +1148,13 @@ def create_app():
 
     @app.middleware("http")
     async def flatten_query_string_lists(request: Request, call_next):
+        """Expand comma-separated query values into repeated query parameters."""
         flattened: list[tuple[str, str]] = []
         for key, value in request.query_params.multi_items():
-            flattened.extend((key, entry) for entry in value.split(","))
+            if key in VERBATIM_QUERY_PARAMS:
+                flattened.append((key, value))
+            else:
+                flattened.extend((key, entry) for entry in value.split(","))
 
         request.scope["query_string"] = urlencode(flattened, doseq=True).encode("utf-8")
 
@@ -814,11 +1209,37 @@ def create_app():
     # Discover and register additional routers from plugins (primeagent.plugins entry-point)
     load_plugin_routes(app)
 
+    # Replaces FastAPI's default 422 handler, which echoes each submitted value
+    # (credentials included) back in the error body.
+    app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
+
     @app.exception_handler(DeploymentGuardError)
     async def deployment_guard_exception_handler(_request: Request, exc: DeploymentGuardError):
+        """Return a conflict response when a deployment guard rejects an operation."""
         return JSONResponse(
             status_code=HTTPStatus.CONFLICT,
             content={"detail": exc.detail},
+        )
+
+    from wfx.exceptions.tweaks import TweakRefusedError
+
+    @app.exception_handler(TweakRefusedError)
+    async def tweak_refused_exception_handler(_request: Request, exc: TweakRefusedError):
+        """Refused tweaks are a 422 naming the keys, not a silent drop.
+
+        Mirrors the detail shape of the existing output-selection validator so a
+        caller parses one error format across the run API.
+        """
+        return JSONResponse(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            content={
+                "detail": {
+                    "error": "Refused tweaks",
+                    "code": "TWEAKS_REFUSED",
+                    "message": exc.reason,
+                    "fields": exc.refused,
+                }
+            },
         )
 
     # Add rate limit exception handler
@@ -840,6 +1261,11 @@ def create_app():
             path=request.url.path,
             method=request.method,
         )
+        if request.scope.get("endpoint") in (
+            connections.complete_connection_oauth,
+            connections.bind_connection_oauth_browser,
+        ):
+            return connections.oauth_rate_limit_response(int(retry_after_seconds))
         return JSONResponse(
             status_code=HTTPStatus.TOO_MANY_REQUESTS,
             content={
@@ -851,8 +1277,36 @@ def create_app():
             },
         )
 
+    from fastapi.exceptions import ResponseValidationError
+
+    @app.exception_handler(ResponseValidationError)
+    async def response_validation_exception_handler(_request: Request, exc: ResponseValidationError):
+        """A route returned what its response_model rejects: log it in full, answer generically.
+
+        str(exc) lists each pydantic error with its ``input`` -- the server-side value
+        that failed to serialize, or for a missing field the whole object -- then the
+        endpoint's file, line and function. The catch-all below sent all of it to the
+        client and to telemetry.
+        """
+        # exc_info renders the full errors to the console and log file; the message is the
+        # field OTel log export can carry, so it names the failure without the values.
+        await logger.aerror("Response validation failed", exc_info=exc)
+        # Telemetry leaves the server. Send a copy that keeps the type, the traceback and
+        # the route template, and reduces each error to its type and location. A location
+        # is field names, list indexes and dict keys, never the value.
+        located = ResponseValidationError(
+            [{"type": error.get("type"), "loc": error.get("loc")} for error in exc.errors()],
+            endpoint_ctx={"path": exc.endpoint_path} if exc.endpoint_path else None,
+        )
+        await log_exception_to_telemetry(located.with_traceback(exc.__traceback__), "handler")
+        return JSONResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            content={"message": "Internal server error: the response failed validation"},
+        )
+
     @app.exception_handler(Exception)
     async def exception_handler(_request: Request, exc: Exception):
+        """Convert uncaught application exceptions into API responses."""
         if isinstance(exc, HTTPException):
             await logger.aerror(f"HTTPException: {exc}", exc_info=exc)
             return JSONResponse(
@@ -868,11 +1322,10 @@ def create_app():
             content={"message": str(exc)},
         )
 
-    # FastAPI >=0.137 lazy include_router puts `_IncludedRouter` wrappers (no `.path`)
-    # in `app.routes`, which crashes OTel's span route extraction on partial matches
-    # (e.g. CORS preflight). Patch the helper before instrumenting.
-    patch_otel_fastapi_route_details()
-    FastAPIInstrumentor.instrument_app(app)
+    # Instrument this app for HTTP server telemetry (stable semconv + the FastAPI >=0.137
+    # lazy-include route patch + instrument_app). The helper lives in wfx so wfx serve
+    # instruments its own app the same way.
+    instrument_fastapi_app(app)
 
     add_pagination(app)
 
@@ -916,16 +1369,55 @@ def setup_static_files(app: FastAPI, static_files_dir: Path) -> None:
         app (FastAPI): FastAPI app.
         static_files_dir (str): Path to the static files directory.
     """
-    app.mount(
-        "/",
-        StaticFiles(directory=static_files_dir, html=True),
-        name="static",
-    )
+    frontend_html = render_frontend_index((static_files_dir / "index.html").read_text(encoding="utf-8"), app.root_path)
+
+    @app.api_route("/", include_in_schema=False, methods=["GET", "HEAD"])
+    @app.api_route("/index.html", include_in_schema=False, methods=["GET", "HEAD"])
+    async def frontend_index():
+        """Serve the frontend with the prefix selected at backend startup."""
+        return HTMLResponse(frontend_html, headers={"Cache-Control": "no-store"})
+
+    # Unknown /api/* GETs must return a JSON 404 instead of the SPA shell.
+    # Reserve /api GET/HEAD to force a 404 that the handler below shapes as JSON.
+    # Only GET/HEAD are claimed: wrong-method requests to real endpoints still
+    # get a native 405, and real API routes are registered earlier so they win.
+    @app.api_route("/api/{_path:path}", include_in_schema=False, methods=["GET", "HEAD"])
+    async def api_not_found(_path: str):
+        """Reject unknown API routes before the frontend catch-all route."""
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # Serve the favicon from an explicit high-priority route instead of relying on
+    # the low-priority app.frontend() static route. Browsers request /favicon.ico
+    # with an image Accept header, which app.frontend() does not treat as a
+    # navigation request; if the file is ever missed there the request falls
+    # through to the 404 handler, which returns index.html (HTML) and the browser
+    # renders no icon. A dedicated route always answers with the file and the
+    # correct media type, or a clean 404 when it is absent, independent of the
+    # frontend fallback heuristics.
+    favicon_path = static_files_dir / "favicon.ico"
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        """Serve the frontend favicon when the asset exists."""
+        if await anyio.Path(favicon_path).exists():
+            return FileResponse(favicon_path, media_type="image/x-icon")
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # FastAPI >=0.138 serves the frontend build as low-priority routes: path
+    # operations are matched first, static files only if nothing else matched.
+    # All client-side routes use the handler below so they receive the same
+    # runtime base as the entrypoint, including routes with dotted segments.
+    app.frontend("/", directory=str(static_files_dir), fallback=None)
 
     @app.exception_handler(404)
     async def custom_404_handler(_request, _exc):
         # Return JSON for all API endpoints to prevent HTML responses
-        if _request.url.path.startswith("/api"):
+        """Return JSON for missing API routes and preserve frontend page handling."""
+        path = _request.url.path
+        root_path = _request.scope.get("root_path", "").rstrip("/")
+        if root_path and path.startswith(f"{root_path}/"):
+            path = path[len(root_path) :]
+        if path == "/api" or path.startswith("/api/"):
             # Extract detail from HTTPException if available
             detail = _exc.detail if isinstance(_exc, HTTPException) else "Not Found"
             return JSONResponse(
@@ -933,12 +1425,7 @@ def setup_static_files(app: FastAPI, static_files_dir: Path) -> None:
                 content=detail if isinstance(detail, dict) else {"detail": detail},
             )
 
-        path = anyio.Path(static_files_dir) / "index.html"
-
-        if not await path.exists():
-            msg = f"File at path {path} does not exist."
-            raise RuntimeError(msg)
-        return FileResponse(path)
+        return await frontend_index()
 
 
 def get_static_files_dir():

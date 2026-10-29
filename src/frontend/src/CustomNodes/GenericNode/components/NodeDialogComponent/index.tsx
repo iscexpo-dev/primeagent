@@ -25,7 +25,7 @@ interface NodeDialogProps {
   open: boolean;
   onClose: () => void;
   onCreated?: (value: string) => void;
-  dialogInputs?: {
+  dialogInputs: {
     fields: { data: { node: APIClassType } };
     functionality: string;
   };
@@ -294,6 +294,7 @@ export const NodeDialog: React.FC<NodeDialogProps> = ({
                   isFlexView: false,
                   required:
                     (fieldValue as { required: boolean })?.required ?? false,
+                  requiredText: t("field.required"),
                 })}
               </div>
               <ParameterRenderComponent
@@ -305,12 +306,11 @@ export const NodeDialog: React.FC<NodeDialogProps> = ({
                 templateData={fieldValue as Partial<InputFieldType>}
                 templateValue={(fieldValue as { value: string })?.value ?? ""}
                 editNode={false}
+                showParameter={true}
+                inspectionPanel={false}
                 handleNodeClass={() => {}}
-                nodeClass={dialogNodeData as APIClassType}
-                disabled={
-                  (fieldValue as unknown as { disabled: boolean })?.disabled ??
-                  false
-                }
+                nodeClass={dialogNodeData}
+                disabled={fieldValue?.disabled ?? false}
                 placeholder={
                   (fieldValue as { placeholder: string })?.placeholder ?? ""
                 }

@@ -160,7 +160,7 @@ class RunOutput(BaseModel):
         Checks each component output dict for an ``"error"`` key, and also
         inspects the top-level ``artifacts`` dict.
 
-        Adapted from ``WorkflowResponse.has_errors()`` in khulnasoft/sdk
+        Adapted from ``WorkflowResponse.has_errors()`` in khulnasoft-bot/sdk
         (Janardan Singh Kavia, IBM Corp., Apache 2.0).
         """
         for component_out in self.outputs:
@@ -202,8 +202,8 @@ class RunResponse(BaseModel):
 
     # ------------------------------------------------------------------
     # WorkflowResponse-style helpers
-    # (adapted from khulnasoft/sdk, Janardan Singh Kavia, IBM Corp.,
-    #  Apache 2.0 — https://github.com/khulnasoft/sdk/pull/1)
+    # (adapted from khulnasoft-bot/sdk, Janardan Singh Kavia, IBM Corp.,
+    #  Apache 2.0 — https://github.com/khulnasoft-bot/sdk/pull/1)
     # ------------------------------------------------------------------
 
     def get_chat_output(self) -> str | None:
@@ -238,7 +238,7 @@ class RunResponse(BaseModel):
     def has_errors(self) -> bool:
         """Return ``True`` if any output block reports an error.
 
-        Adapted from ``WorkflowResponse.has_errors()`` in khulnasoft/sdk
+        Adapted from ``WorkflowResponse.has_errors()`` in khulnasoft-bot/sdk
         (Janardan Singh Kavia, IBM Corp., Apache 2.0).
         """
         return any(output.has_errors() for output in self.outputs)
@@ -248,7 +248,7 @@ class RunResponse(BaseModel):
 
         For V1 synchronous runs this is equivalent to checking that the
         server returned usable output.  Adapted from
-        ``WorkflowResponse.is_completed()`` in khulnasoft/sdk
+        ``WorkflowResponse.is_completed()`` in khulnasoft-bot/sdk
         (Janardan Singh Kavia, IBM Corp., Apache 2.0).
         """
         return bool(self.outputs) and not self.has_errors()
@@ -256,7 +256,7 @@ class RunResponse(BaseModel):
     def is_failed(self) -> bool:
         """Return ``True`` when the run produced no outputs or contains errors.
 
-        Adapted from ``WorkflowResponse.is_failed()`` in khulnasoft/sdk
+        Adapted from ``WorkflowResponse.is_failed()`` in khulnasoft-bot/sdk
         (Janardan Singh Kavia, IBM Corp., Apache 2.0).
         """
         return not self.outputs or self.has_errors()

@@ -1,6 +1,5 @@
-// @ts-nocheck
 import { act, renderHook } from "@testing-library/react";
-import type { APIClassType, APIDataType } from "../../types/api";
+import type { APIDataType } from "../../types/api";
 import { useTypesStore } from "../typesStore";
 
 // Mock the complex utility functions
@@ -90,10 +89,12 @@ describe("useTypesStore", () => {
 
     act(() => {
       useTypesStore.setState({
+        activeScopeKey: null,
         ComponentFields: new Set(),
         types: {},
         templates: {},
         data: {},
+        componentDisplayNames: {},
       });
     });
   });
@@ -139,7 +140,7 @@ describe("useTypesStore", () => {
 
     it("should handle empty Set", () => {
       const { result } = renderHook(() => useTypesStore());
-      const emptySet = new Set<string>();
+      const emptySet = new Set();
 
       act(() => {
         result.current.setComponentFields(emptySet);
@@ -234,7 +235,7 @@ describe("useTypesStore", () => {
       );
     });
 
-    it("should merge with existing data", () => {
+    it("should replace existing data", () => {
       const { result } = renderHook(() => useTypesStore());
 
       act(() => {
@@ -245,11 +246,10 @@ describe("useTypesStore", () => {
         result.current.setTypes(mockAPIData2);
       });
 
-      expect(result.current.data).toEqual({ ...mockAPIData, ...mockAPIData2 });
-      expect(mockExtractSecretFieldsFromComponents).toHaveBeenCalledWith({
-        ...mockAPIData,
-        ...mockAPIData2,
-      });
+      expect(result.current.data).toEqual(mockAPIData2);
+      expect(mockExtractSecretFieldsFromComponents).toHaveBeenCalledWith(
+        mockAPIData2,
+      );
     });
 
     it("should handle empty API data", () => {
@@ -290,6 +290,62 @@ describe("useTypesStore", () => {
       expect(result.current.data["TextInput"]).toEqual(
         updatedData["TextInput"],
       );
+    });
+  });
+
+  describe("clearScopedTypes", () => {
+    it("clears all palette-derived state without changing the active scope", () => {
+      mockTypesGenerator.mockReturnValue(mockTypes);
+      mockTemplatesGenerator.mockReturnValue(mockTemplates);
+      mockExtractSecretFieldsFromComponents.mockReturnValue(
+        new Set(["TextInput", "NumberInput"]),
+      );
+
+      const { result } = renderHook(() => useTypesStore());
+
+      act(() => {
+        result.current.activateScope("flow:flow-a");
+        result.current.setScopedTypes("flow:flow-a", mockAPIData, {
+          textinput: {
+            display_name: ["Text Input"],
+            description: ["Scoped description"],
+          },
+        });
+      });
+
+      let cleared = false;
+      act(() => {
+        cleared = result.current.clearScopedTypes("flow:flow-a");
+      });
+
+      expect(cleared).toBe(true);
+      expect(result.current.activeScopeKey).toBe("flow:flow-a");
+      expect(result.current.types).toEqual({});
+      expect(result.current.templates).toEqual({});
+      expect(result.current.data).toEqual({});
+      expect(result.current.ComponentFields).toEqual(new Set());
+      expect(result.current.componentDisplayNames).toEqual({});
+    });
+
+    it("does not clear palette data owned by another scope", () => {
+      mockTypesGenerator.mockReturnValue(mockTypes);
+      mockTemplatesGenerator.mockReturnValue(mockTemplates);
+
+      const { result } = renderHook(() => useTypesStore());
+
+      act(() => {
+        result.current.activateScope("flow:flow-b");
+        result.current.setScopedTypes("flow:flow-b", mockAPIData, {});
+      });
+
+      let cleared = true;
+      act(() => {
+        cleared = result.current.clearScopedTypes("flow:flow-a");
+      });
+
+      expect(cleared).toBe(false);
+      expect(result.current.activeScopeKey).toBe("flow:flow-b");
+      expect(result.current.data).toEqual(mockAPIData);
     });
   });
 
@@ -467,9 +523,6 @@ describe("useTypesStore", () => {
         result.current.addComponentField("field2");
       });
 
-      // setData will call setComponentFields internally, so track the fields before
-      const fieldsBeforeSetData = new Set(result.current.ComponentFields);
-
       act(() => {
         result.current.setData(mockAPIData);
         result.current.addComponentField("field3");
@@ -486,7 +539,7 @@ describe("useTypesStore", () => {
       const { result } = renderHook(() => useTypesStore());
 
       act(() => {
-        result.current.setData(null as any);
+        result.current.setData(null as unknown as APIDataType);
       });
 
       expect(result.current.data).toBeNull();
@@ -524,7 +577,7 @@ describe("useTypesStore", () => {
 
     it("should handle large ComponentFields sets", () => {
       const { result } = renderHook(() => useTypesStore());
-      const largeSet = new Set<string>();
+      const largeSet = new Set();
 
       for (let i = 0; i < 1000; i++) {
         largeSet.add(`field-${i}`);

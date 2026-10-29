@@ -56,9 +56,6 @@ def load_toml_config(config_path: Path) -> dict[str, Any] | None:
         import tomli  # Python 3.10
 
     try:
-        if not (config_path.stat().st_mode & 0o444):
-            message = f"Permission denied: {config_path}"
-            raise PermissionError(message)
         with config_path.open("rb") as file_handle:
             return tomli.load(file_handle)
     except (ValueError, OSError) as exc:

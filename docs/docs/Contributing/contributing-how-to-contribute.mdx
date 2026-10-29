@@ -5,6 +5,7 @@ slug: /contributing-how-to-contribute
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import PartialAutoLoginDefaults from '@site/docs/_partial-auto-login-defaults.mdx';
 
 This guide is intended to help you start contributing to Primeagent.
 As an open-source codebase in a rapidly developing field, Primeagent welcomes contributions, whether it be in the form of a new feature, improved infrastructure, or better documentation.
@@ -31,6 +32,7 @@ Install Primeagent from source by forking the repository and setting up your dev
 
 ### Prerequisites
 
+* [Python](https://www.python.org/downloads/) 3.10 to 3.14
 * [uv](https://docs.astral.sh/uv/getting-started/installation/) version 0.4 or later
 * [Node.js](https://nodejs.org/en/download/package-manager)
 * [Make](https://www.gnu.org/software/make/#documentation) (Linux and macOS only)
@@ -129,6 +131,10 @@ Do one of the following:
 The Primeagent frontend is served at `http://localhost:7860`.
 
 </details>
+
+<PartialAutoLoginDefaults />
+
+From a local development backend, you can also use `make backend login=true` to enable automatic login.
 
 ### Set up your Primeagent development environment
 
@@ -288,7 +294,11 @@ This can help you find broken links before creating a PR.
 
 To submit a pull request, do the following:
 
-1. Open a new GitHub pull request with your patch against the `main` branch.
+1. Open a GitHub pull request against the active `release-X.Y.Z` release candidate branch.
+Do not target `main`.
+For example, if the latest released version is `1.8.0`, your pull request should target the `release-1.9.0` branch.
+Include a clear title and description.
+
 2. Ensure the PR title follows semantic commit conventions. For example, features are `feat: add new feature` and fixes are `fix: correct issue with X`.
 
 Some additional guidance on pull request titles:

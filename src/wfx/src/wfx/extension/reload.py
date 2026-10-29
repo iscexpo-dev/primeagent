@@ -75,6 +75,7 @@ from wfx.extension.bundle_registry import (
     ReloadInProgressError,
 )
 from wfx.extension.errors import ExtensionError
+from wfx.extension.integration_conflicts import IntegrationConflictError
 from wfx.extension.loader import (
     DEFAULT_MODULE_NAMESPACE,
     SLOT_EXTRA,
@@ -261,6 +262,34 @@ def reload_bundle(
     reload_id = uuid.uuid4().hex
     live = registry.get_bundle(bundle)
 
+    # Manifest-less wfx.bundles metapackage providers have no extension.json
+    # for the pipeline's load_extension stage; refuse with a typed code
+    # before resolving sources rather than failing later with a misleading
+    # manifest-not-found.  These records change only when the metapackage
+    # distribution is upgraded, which requires a process restart anyway.
+    if live is not None and live.manifestless:
+        return _failure(
+            bundle=bundle,
+            reload_id=reload_id,
+            errors=[
+                ExtensionError(
+                    code="reload-manifestless-unsupported",
+                    message=(
+                        f"Bundle {bundle!r} comes from a manifest-less wfx.bundles metapackage "
+                        "and cannot be hot-reloaded."
+                    ),
+                    location=str(live.source_path) if live.source_path else bundle,
+                    content=bundle,
+                    hint=(
+                        "Upgrade or reinstall the metapackage distribution and restart the "
+                        "server to pick up changes.  For a hot-reload development loop, use "
+                        "`wfx extension dev <path>` with a manifest-shipping bundle instead."
+                    ),
+                )
+            ],
+            previous=live,
+        )
+
     # Resolve effective source + slot from the live record when not given.
     effective_source = _resolve_source(source_path, live)
     effective_slot: Literal["official", "extra"] = slot or (live.slot if live else SLOT_OFFICIAL)
@@ -423,6 +452,7 @@ def _run_pipeline_body(
             effective_source,
             slot=effective_slot,
             module_namespace=staging_namespace,
+            bundle_name=bundle,
         )
 
     # ---------- Stage 2: validate ----------
@@ -476,6 +506,7 @@ def _run_pipeline_body(
         extension_version=staging.extension_version or (previous.extension_version if previous else "0.0.0"),
         slot=effective_slot,
         components=new_components,
+        integrations=tuple(staging.integrations),
         distribution=staging.distribution,
         source_path=effective_source,
     )
@@ -486,6 +517,18 @@ def _run_pipeline_body(
     # an RLock, so install_bundle()'s own internal acquire is a no-op
     # reentry while this context is active.
     with registry.write_locked():
+        try:
+            registry.validate_bundle(new_record)
+        except IntegrationConflictError as exc:
+            result = _failure(
+                bundle=bundle,
+                reload_id=reload_id,
+                errors=exc.errors,
+                warnings=tuple(staging.warnings),
+                previous=previous,
+            )
+            _emit_bundle_reload_event(result, user_id=user_id)
+            return result
         swap_warnings = _swap_sys_modules(
             previous=previous,
             new_components=new_components,

@@ -6,8 +6,12 @@ slug: /get-started-quickstart
 import Icon from "@site/src/components/icon";
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import PartialGlobalModelProviders from '@site/docs/_partial-global-model-providers.mdx';
+import PartialAutoLoginDefaults from '@site/docs/_partial-auto-login-defaults.mdx';
 
 Get started with Primeagent by loading a template flow, running it, and then serving it at the `/run` API endpoint.
+
+<PartialAutoLoginDefaults />
 
 ## Prerequisites
 
@@ -61,24 +65,32 @@ The **Simple Agent** template consists of an [**Agent** component](/agents) conn
 
 Many components can be tools for agents, including [Model Context Protocol (MCP) servers](/mcp-server). The agent decides which tools to call based on the context of a given query.
 
-2. In the **Agent** component, enter your OpenAI API key directly or use a <Icon name="Globe" aria-hidden="true"/> [global variable](/configuration-global-variables).
+2. In the **Agent** component, click **Setup Provider** to select your language model provider.
+   <PartialGlobalModelProviders />
+3. In the **Agent** component, select your configured model from the **Language Model** dropdown.
 
-    This example uses the **Agent** component's built-in OpenAI model.
-    If you want to use a different provider, edit the model provider, model name, and credentials accordingly.
-    If your preferred provider or model isn't listed, set **Model Provider** to **Connect other models**, and then connect any [language model component](/components-models#additional-language-models).
+    <details>
+    <summary>Access more models and providers</summary>
 
-3. To run the flow, click <Icon name="Play" aria-hidden="true"/> **Playground**.
+    There are two ways to access more models and providers:
 
-4. To test the **Calculator** tool, ask the agent a simple math question, such as `I want to add 4 and 4.`
+    * Edit Primeagent's global <Icon name="BrainCog" aria-hidden="true" /> **Models** configuration. These providers and models are part of Primeagent's core functionality. Use the **Ollama** provider to connect to any model hosted on a local or remote Ollama instance.
+    * Connect any [additional language model component](/components-models#additional-language-models) to the **Agent** component's **Language Model** port.
+
+    </details>
+
+4. To run the flow, click <Icon name="Play" aria-hidden="true"/> **Playground**.
+
+5. To test the **Calculator** tool, ask the agent a simple math question, such as `I want to add 4 and 4.`
 To help you test and evaluate your flows, the **Playground** shows the agent's reasoning process as it analyzes the prompt, selects a tool, and then uses the tool to generate a response.
 In this case, a math question causes the agent to select the **Calculator** tool and use an action like `evaluate_expression`.
 
 ![Playground with Agent tool](/img/quickstart-simple-agent-playground.png)
 
-5. To test the **URL** tool, ask the agent about current events.
+6. To test the **URL** tool, ask the agent about current events.
 For this request, the agent selects the **URL** tool's `fetch_content` action, and then returns a summary of current news headlines.
 
-6. When you are done testing the flow, click <Icon name="X" aria-hidden="true"/>**Close**.
+7. When you are done testing the flow, click <Icon name="X" aria-hidden="true"/>**Close**.
 
 :::tip Next steps
 Now that you've run your first flow, try these next steps:
@@ -530,13 +542,15 @@ Tweaks override the flow's components' settings for a single run only.
 They don't modify the underlying flow configuration or persist between runs.
 
 Tweaks are added to the `/run` endpoint's `payload`.
-To assist with formatting, you can define tweaks in Primeagent's **Input Schema** pane before copying the code snippet.
+To assist with formatting, [expose the fields you want to override](/concepts-publish#input-schema) before copying the code snippet.
 
-1. To open the **Input Schema** pane, from the **API access** pane, click **Input Schema**.
-2. In the **Input Schema** pane, select the parameter you want to modify in your next request.
-Enabling parameters in the **Input Schema** pane doesn't permanently change the listed parameters. It only adds them to the sample code snippets.
-3. For example, to change the LLM provider from OpenAI to Groq, and include your Groq API key with the request, select the values **Model Providers**, **Model**, and **Groq API Key**.
-Primeagent updates the `tweaks` object in the code snippets based on your input parameters, and includes default values to guide you.
+1. On the canvas, select the component whose parameter you want to override.
+2. Click **Parameters**, and then click **API** on the field you want to include in the snippet.
+3. Click **Share** > **API access**.
+   Enabling **API** on a field doesn't permanently change the parameter value. It only adds the field to the sample code snippets.
+4. For example, to change the agent's LLM model from OpenAI to Anthropic and include your Anthropic API key with the request, select the **Agent** component, open **Parameters**, and enable **API** on the **Language Model** field.
+
+Primeagent updates the `tweaks` object in the code snippets based on your exposed parameters, and includes default values to guide you.
 Use the updated code snippets in your script to run your flow with your overrides.
 
 ```json
@@ -546,9 +560,9 @@ payload = {
     "input_value": "hello world!",
     "tweaks": {
         "Agent-ZOknz": {
-            "agent_llm": "Groq",
-            "api_key": "GROQ_API_KEY",
-            "model_name": "llama-3.1-8b-instant"
+            "agent_llm": "Anthropic",
+            "api_key": "ANTHROPIC_API_KEY",
+            "model_name": "claude-opus-4-5-20251101"
         }
     }
 }

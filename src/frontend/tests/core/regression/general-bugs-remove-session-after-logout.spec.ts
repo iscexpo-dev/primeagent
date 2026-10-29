@@ -1,17 +1,23 @@
 import { expect, test } from "../../fixtures";
 
 import { TEXTS } from "../../utils/constants/texts";
+import { submitLoginAndRequireSuccess } from "../../utils/login-primeagent";
 
 test(
   "user must not be able to login after logout and refresh the page when auto_login is false",
-  { tag: ["@release", "@api"] },
+  {
+    tag: ["@release", "@api"],
+  },
   async ({ page }) => {
     await page.route("**/api/v1/auto_login", (route) => {
       route.fulfill({
-        status: 500,
+        status: 403,
         contentType: "application/json",
         body: JSON.stringify({
-          detail: { auto_login: false },
+          detail: {
+            message: "Auto login is disabled.",
+            auto_login: false,
+          },
         }),
       });
     });
@@ -32,7 +38,7 @@ test(
 
     await page.goto("/");
 
-    await page.waitForSelector(`text=${TEXTS.authSignInHeader}`, {
+    await expect(page.getByRole("button", { name: TEXTS.signIn })).toBeVisible({
       timeout: 30000,
     });
 
@@ -41,13 +47,13 @@ test(
       .fill(TEXTS.authDefaultCredential);
     await page
       .getByPlaceholder(TEXTS.placeholderPassword)
-      .fill(TEXTS.authDefaultCredential);
+      .fill(TEXTS.authDefaultPassword);
 
     await page.evaluate(() => {
       sessionStorage.removeItem("testMockAutoLogin");
     });
 
-    await page.getByRole("button", { name: TEXTS.signIn }).click();
+    await submitLoginAndRequireSuccess(page);
 
     await page.waitForSelector('[data-testid="mainpage_title"]', {
       timeout: 30000,
@@ -65,7 +71,7 @@ test(
 
     await page.reload();
 
-    await page.waitForSelector(`text=${TEXTS.authSignInHeader}`, {
+    await expect(page.getByRole("button", { name: TEXTS.signIn })).toBeVisible({
       timeout: 30000,
     });
 

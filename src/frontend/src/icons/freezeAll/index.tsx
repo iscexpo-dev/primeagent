@@ -6,7 +6,5 @@ export const freezeAllIcon = forwardRef<
   SVGSVGElement,
   React.PropsWithChildren<{ className?: string }>
 >((props, ref) => {
-  return (
-    <SvgFreezeAll ref={ref} {...props} className={props.className ?? ""} />
-  );
+  return <SvgFreezeAll ref={ref} {...props} />;
 });

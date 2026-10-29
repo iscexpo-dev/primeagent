@@ -5,8 +5,9 @@ import { TEXTS } from "../../utils/constants/texts";
 
 test(
   "user can add components by hovering and clicking the plus icon",
-  { tag: ["@release", "@components", "@workspace"] },
-
+  {
+    tag: ["@release", "@components", "@workspace"],
+  },
   async ({ page }) => {
     // Navigate to homepage and handle initial modal
     await awaitBootstrapTest(page);
@@ -26,8 +27,11 @@ test(
     });
     // Hover over the component and verify plus icon
     const componentLocator = page.getByTestId("input_outputChat Input");
-    // Find the plus icon within the specific component container
-    const plusIcon = componentLocator.getByTestId("icon-Plus");
+    // The add button (and its Plus icon) is a sibling of the row-label div,
+    // not a descendant of it — scope directly off the button itself.
+    const plusIcon = page
+      .getByTestId("add-component-button-chat-input")
+      .getByTestId("icon-Plus");
 
     // Get the opacity
     const opacity = await plusIcon.evaluate((el) =>

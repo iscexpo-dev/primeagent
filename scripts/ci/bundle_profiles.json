@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "image_families": {
+    "enterprise-ubi-hardened": {
+      "profile": "enterprise-hardened",
+      "install_phase": "build"
+    }
+  },
+  "profiles": {
+    "enterprise-hardened": {
+      "description": "Reviewed provider inventory for the supported Enterprise UBI/hardened application image family.",
+      "owners": [
+        "Primeagent Enterprise maintainers",
+        "Primeagent release maintainers"
+      ],
+      "update_cadence": "Review on every Primeagent minor release and whenever a provider is added, removed, or graduated.",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": ">=3.10,<3.15",
+      "application": {
+        "distribution": "primeagent",
+        "version": ">=1.13.0,<1.14.0",
+        "bundle_source": "pyproject.toml"
+      },
+      "bundle_api": {
+        "distribution": "wfx",
+        "version": ">=1.13.0.dev0,<1.14.0"
+      },
+      "bundles": [
+        {
+          "distribution": "wfx-ibm",
+          "extras": [],
+          "version": ">=0.3.0,<1.0.0",
+          "providers": [
+            "wfx-ibm"
+          ]
+        },
+        {
+          "distribution": "wfx-docling",
+          "extras": [],
+          "version": ">=0.2.1,<1.0.0",
+          "providers": [
+            "wfx-docling"
+          ]
+        },
+        {
+          "distribution": "wfx-datastax",
+          "extras": [],
+          "version": ">=0.2.0,<1.0.0",
+          "providers": [
+            "wfx-datastax"
+          ]
+        },
+        {
+          "distribution": "wfx-toolguard",
+          "extras": [],
+          "version": ">=0.2.2,<1.0.0",
+          "providers": [
+            "wfx-toolguard"
+          ]
+        },
+        {
+          "distribution": "wfx-openai",
+          "extras": [],
+          "version": ">=0.2.0,<1.0.0",
+          "providers": [
+            "wfx-openai"
+          ]
+        },
+        {
+          "distribution": "wfx-anthropic",
+          "extras": [],
+          "version": ">=0.2.0,<1.0.0",
+          "providers": [
+            "wfx-anthropic"
+          ]
+        },
+        {
+          "distribution": "wfx-azure",
+          "extras": [],
+          "version": ">=0.2.0,<1.0.0",
+          "providers": [
+            "wfx-azure"
+          ]
+        },
+        {
+          "distribution": "wfx-ollama",
+          "extras": [],
+          "version": ">=0.2.0,<1.0.0",
+          "providers": [
+            "wfx-ollama"
+          ]
+        },
+        {
+          "distribution": "wfx-amazon",
+          "extras": [],
+          "version": ">=0.2.2,<1.0.0",
+          "providers": [
+            "wfx-amazon"
+          ]
+        },
+        {
+          "distribution": "wfx-cohere",
+          "extras": [],
+          "version": ">=0.2.0,<1.0.0",
+          "providers": [
+            "wfx-cohere"
+          ]
+        },
+        {
+          "distribution": "wfx-oracle",
+          "extras": [],
+          "version": ">=0.2.0,<1.0.0",
+          "providers": [
+            "wfx-oracle"
+          ]
+        },
+        {
+          "distribution": "wfx-vllm",
+          "extras": [],
+          "version": ">=0.2.0,<1.0.0",
+          "providers": [
+            "wfx-vllm"
+          ]
+        },
+        {
+          "distribution": "wfx-openai-compatible",
+          "extras": [],
+          "version": ">=0.2.0,<1.0.0",
+          "providers": [
+            "wfx-openai-compatible"
+          ]
+        },
+        {
+          "distribution": "wfx-google",
+          "extras": [],
+          "version": ">=0.3.5,<1.0.0",
+          "providers": [
+            "wfx-google"
+          ]
+        },
+        {
+          "distribution": "wfx-microsoft",
+          "extras": [],
+          "version": ">=0.1.4,<1.0.0",
+          "providers": [
+            "wfx-microsoft"
+          ]
+        },
+        {
+          "distribution": "wfx-slack",
+          "extras": [],
+          "version": ">=0.2.2,<1.0.0",
+          "providers": [
+            "wfx-slack"
+          ]
+        }
+      ]
+    }
+  }
+}

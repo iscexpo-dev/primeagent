@@ -43,6 +43,8 @@ from wfx.extension.errors import (
     ExtensionError,
     ExtensionErrorCollection,
 )
+from wfx.extension.integration_compat import IntegrationVersionError, check_integration_runtime
+from wfx.extension.integration_manifest import resolve_integration_manifest
 from wfx.extension.manifest import (
     DEFERRED_FIELDS,
     ExtensionManifest,
@@ -253,23 +255,6 @@ def _validate_manifest_phase(root: Path, report: ValidateReport) -> ManifestSour
         msg = "manifest discovery returned an inconsistent result"
         raise RuntimeError(msg)
 
-    # Detect multi-bundle BEFORE model_validate so the dedicated discriminant
-    # fires reliably even if other manifest fields are also wrong.
-    bundles = raw_data.get("bundles") if isinstance(raw_data, dict) else None
-    if isinstance(bundles, list) and len(bundles) > 1:
-        report.errors.add_error(
-            ExtensionError(
-                code="multi-bundle-unsupported",
-                message=(
-                    f"Manifest declares {len(bundles)} bundles; v0 accepts exactly one. "
-                    "Multi-bundle support is deferred to a future milestone."
-                ),
-                location=f"{source_path}:bundles",
-                hint=("Split each bundle into its own Extension distribution until multi-bundle support ships."),
-            )
-        )
-        return None
-
     # Detect deferred fields BEFORE model_validate so that authors get a clean
     # discriminant rather than a generic schema error wall.
     deferred_present: list[str] = []
@@ -296,7 +281,18 @@ def _validate_manifest_phase(root: Path, report: ValidateReport) -> ManifestSour
         return None
 
     try:
+        check_integration_runtime(raw_data)
         manifest = ExtensionManifest.model_validate(raw_data)
+    except IntegrationVersionError as exc:
+        report.errors.add_error(
+            ExtensionError(
+                code="wfx-version-too-old",
+                message=str(exc),
+                location=str(source_path),
+                hint="Upgrade wfx; the integration reference does not need to be rewritten.",
+            )
+        )
+        return None
     except ValidationError as exc:
         summary, _ = _format_pydantic_error(exc)
         report.errors.add_error(
@@ -400,6 +396,26 @@ def _is_component_class(node: ast.ClassDef) -> bool:
         if isinstance(base, ast.Name) and (base.id == "Component" or base.id.endswith("Component")):
             return True
         if isinstance(base, ast.Attribute) and (base.attr == "Component" or base.attr.endswith("Component")):
+            return True
+    return False
+
+
+def _inherits_entry_point(node: ast.ClassDef) -> bool:
+    """True when a *derived* Component base plausibly supplies the entry-point.
+
+    Subclasses of bases like ``LCVectorStoreComponent`` / ``LCToolComponent`` /
+    ``LCModelComponent`` inherit the class-level ``outputs = [Output(...)]``
+    declaration and only override the output *method*, so the subclass body
+    shows neither ``build`` nor ``outputs`` (the original pilots declared
+    ``outputs`` inline, which is why this never fired before the partner
+    graduations).  Static analysis cannot resolve the base across modules, so
+    accept any base whose name ends with ``Component`` but is not the root
+    ``Component`` itself -- the loader's registration-time checks remain the
+    real gate, exactly as for :func:`_is_component_class`.
+    """
+    for base in node.bases:
+        name = base.id if isinstance(base, ast.Name) else base.attr if isinstance(base, ast.Attribute) else None
+        if name and name != "Component" and name.endswith("Component"):
             return True
     return False
 
@@ -577,7 +593,7 @@ def _scan_python_file(py_path: Path, bundle_root: Path, errors: ExtensionErrorCo
     for node in tree.body if isinstance(tree, ast.Module) else []:
         if isinstance(node, ast.ClassDef) and _is_component_class(node):
             has_component = True
-            if not _has_build_method(node):
+            if not _has_build_method(node) and not _inherits_entry_point(node):
                 errors.add_error(
                     ExtensionError(
                         code="build-method-missing",
@@ -860,15 +876,19 @@ def validate_extension(
 
     manifest = source.manifest
 
-    # Pass 2 + 3 per bundle.  v0 schema-validates length<=1 already, so this
-    # loop runs once in practice; written generically so the plumbing is in
-    # place when multi-bundle ships.
+    # Pass 2 + 3 independently for every declared bundle.
     for bundle in manifest.bundles:
         resolved, path_error = _resolve_bundle_path(root_path, bundle.path)
         if path_error is not None or resolved is None:
             if path_error is not None:
                 report.errors.add_error(path_error)
             continue
+        for reference in manifest.integrations:
+            if reference.bundle != bundle.name:
+                continue
+            _, integration_error = resolve_integration_manifest(resolved, reference)
+            if integration_error is not None:
+                report.errors.add_error(integration_error)
         summary = _scan_bundle(bundle.name, resolved, report.errors)
         # Count files we actually scanned for ``bundle_files_scanned`` stat.
         report.bundle_files_scanned += sum(1 for _ in summary.bundle_root.rglob("*.py") if _.is_file())

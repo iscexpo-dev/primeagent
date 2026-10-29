@@ -3,16 +3,23 @@ import { adjustScreenView } from "../../utils/adjust-screen-view";
 import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
 
 import { TEXTS } from "../../utils/constants/texts";
+import { skipIfComponentUnavailable } from "../../utils/skip-if-component-unavailable";
 
 test(
   "user should be able to use duckduckgo search component",
-  { tag: ["@release", "@components"] },
+  {
+    tag: ["@release", "@components"],
+  },
   async ({ page }) => {
     await awaitBootstrapTest(page);
 
     await page.getByTestId("blank-flow").click();
     await page.getByTestId("sidebar-search-input").click();
     await page.getByTestId("sidebar-search-input").fill("duck");
+    await skipIfComponentUnavailable(
+      page.getByTestId("duckduckgoDuckDuckGo Search"),
+      "DuckDuckGo",
+    );
 
     await page.waitForSelector(
       '[data-testid="disclosure-bundles-duckduckgo"]',

@@ -21,6 +21,13 @@ cache_service = "primeagent.services.cache.service:ThreadingInMemoryCache"
 auth_service = "primeagent.services.auth.service:AuthService"
 session_service = "primeagent.services.session.service:SessionService"
 
+# Model Provider Policy (optional; the built-in implementation allows every registered provider)
+# model_provider_policy_service = "acme_primeagent.policy:AcmeModelProviderPolicyService"
+
+# Connection Resolver (optional; the built-in EnvConnectionResolver reads
+# LF_CONNECTION__<PROVIDER>__<NAME> from the request scope, then the environment)
+# connection_resolver_service = "acme_primeagent.connections:AcmeConnectionResolver"
+
 # Chat & Communication
 chat_service = "primeagent.services.chat.service:ChatService"
 

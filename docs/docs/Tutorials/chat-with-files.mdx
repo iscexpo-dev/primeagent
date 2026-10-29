@@ -70,7 +70,7 @@ This example uses a local Primeagent instance, and it asks the LLM to evaluate a
 If you don't have a resume on hand, you can download [fake-resume.txt](/files/fake-resume.txt).
 
 :::tip
-For help with constructing file upload requests in Python, JavaScript, and curl, see the [Primeagent File Upload Utility](https://primeagent-file-upload-examples.21cgwws14kdz.us-east.codeengine.appdomain.cloud/).
+For an example of constructing file upload requests in JavaScript, see the [Create a vector RAG chatbot tutorial](/chat-with-rag#load-data-and-generate-embeddings).
 :::
 
 1. To construct the request, gather the following information:
@@ -211,7 +211,7 @@ def chat_with_flow(input_message, file_paths):
         tweaks[component_id] = {"path": file_path}
 ```
 
-You can also use a [**Directory** component](/directory) to load all files in a directory or pass an archive file to the **Read File** component.
+You can also pass an archive file to the **Read File** component to load multiple files at once.
 
 ### Upload external files at runtime
 

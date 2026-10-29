@@ -1,6 +1,6 @@
 """Tests for Alembic migration-log path resolution and read-only resilience.
 
-Regression coverage for https://github.com/khulnasoft/primeagent/issues/11143:
+Regression coverage for https://github.com/khulnasoft-bot/primeagent/issues/11143:
 the default Alembic log path resolved into the installed package directory,
 which is read-only in hardened container/Kubernetes deployments (non-root user
 or read-only root filesystem). Opening it for writing raised an unhandled

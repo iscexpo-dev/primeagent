@@ -1,6 +1,9 @@
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest.importorskip("wfx_bundles")
+
 from wfx.components.deepseek.deepseek import DeepSeekModelComponent
 from wfx.custom.custom_component.component import Component
 from wfx.custom.utils import build_custom_component_template

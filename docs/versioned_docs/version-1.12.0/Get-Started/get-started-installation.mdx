@@ -1,0 +1,229 @@
+---
+title: Install Primeagent
+slug: /get-started-installation
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Cards from "@site/src/components/Cards";
+import Card from "@site/src/components/Card";
+import Icon from "@site/src/components/icon";
+
+Primeagent can be installed in multiple ways. Choose an option below to jump to the steps.
+
+<Cards cols={2}>
+  <Card icon={<Icon name="Monitor" size={20} />} title="Primeagent Desktop (recommended)" href="#install-and-run-primeagent-desktop">
+    Standalone app with dependency management and simple upgrades.
+  </Card>
+  <Card icon={<Icon name="Container" size={20} />} title="Docker" href="#install-and-run-primeagent-docker">
+    Run Primeagent in a container in isolation.
+  </Card>
+  <Card icon={<Icon name="Package" size={20} />} title="Python package" href="#install-and-run-the-primeagent-oss-python-package">
+    Full control over environment, dependencies, and versioning.
+  </Card>
+  <Card icon={<Icon name="GitFork" size={20} />} title="Install from source" href="/contributing-how-to-contribute#install-primeagent-from-source">
+    Contribute to Primeagent or work from a local clone.
+  </Card>
+</Cards>
+
+## Install and run Primeagent Desktop {#install-and-run-primeagent-desktop}
+
+Primeagent Desktop is a desktop version of Primeagent that simplifies dependency management and upgrades.
+However, some features aren't available for Primeagent Desktop, such as the **Shareable Playground** and **Voice Mode**.
+
+<Tabs>
+<TabItem value="macos" label="macOS" default>
+
+Primeagent Desktop requires macOS 13 or later.
+
+1. Navigate to [Primeagent Desktop](https://www.prime.khulnasoft.com/desktop).
+2. Click **Download Primeagent**, enter your contact information, and then click **Download**.
+3. Mount and install the Primeagent application.
+4. When the installation completes, open the Primeagent application, and then create your first flow with the [Quickstart](/get-started-quickstart).
+
+</TabItem>
+<TabItem value="Windows" label="Windows">
+
+
+1. Navigate to [Primeagent Desktop](https://www.prime.khulnasoft.com/desktop).
+2. Click **Download Primeagent**, enter your contact information, and then click **Download**.
+3. Open the **File Explorer**, and then navigate to **Downloads**.
+4. Double-click the downloaded `.msi` file, and then use the install wizard to install Primeagent Desktop.
+
+    :::tip
+    Windows installations of Primeagent Desktop require a C++ compiler that may not be present on your system. If you receive a `C++ Build Tools Required!` error, follow the on-screen prompt to install Microsoft C++ Build Tools, or [install Microsoft Visual Studio](https://visualstudio.microsoft.com/downloads/).
+    :::
+
+5. When the installation completes, open the Primeagent application, and then create your first flow with the [Quickstart](/get-started-quickstart).
+
+</TabItem>
+</Tabs>
+
+For upgrade information, see the [Release notes](/release-notes).
+
+To manage dependencies in Primeagent Desktop, see [Install custom dependencies in Primeagent Desktop](/install-custom-dependencies#primeagent-desktop).
+
+## Install and run Primeagent with Docker {#install-and-run-primeagent-docker}
+
+You can use the Primeagent Docker image to start a Primeagent container.
+For more information, see [Deploy Primeagent on Docker](/deployment-docker).
+
+1. Install and start [Docker](https://docs.docker.com/).
+
+2. Pull the latest [Primeagent Docker image](https://hub.docker.com/r/khulnasoft/primeagent) and start it:
+
+    ```bash
+    docker run -p 7860:7860 \
+      -e PRIMEAGENT_AUTO_LOGIN=false \
+      -e PRIMEAGENT_SUPERUSER_PASSWORD=SUPERUSER_PASSWORD \
+      khulnasoft/primeagent:latest
+    ```
+
+    By default, the official Docker images set `PRIMEAGENT_AUTO_LOGIN=false` by default.
+
+    Replace `SUPERUSER_PASSWORD` with a strong password for the Primeagent superuser.
+
+    For more information, see [Docker image defaults](/deployment-docker#docker-image-security-defaults).
+
+3. To access Primeagent, navigate to `http://localhost:7860/`.
+
+4. Create your first flow with the [Quickstart](/get-started-quickstart).
+
+## Install and run the Primeagent OSS Python package {#install-and-run-the-primeagent-oss-python-package}
+
+1. Make sure you have the required dependencies and infrastructure:
+
+    - [Python](https://www.python.org/downloads/release/python-3100/) version 3.10 to 3.14
+    - [uv](https://docs.astral.sh/uv/getting-started/installation/)
+    - Sufficient infrastructure:
+       - Minimum: Dual-core CPU and 2 GB RAM
+       - Recommended: Multi-core CPU and at least 4 GB RAM
+    - Browser:
+       - Google Chrome is recommended but not required
+
+2. Create a virtual environment with [uv](https://docs.astral.sh/uv/pip/environments).
+
+    <details>
+    <summary>Need help with virtual environments?</summary>
+
+    Virtual environments ensure Primeagent is installed in an isolated, fresh environment.
+    To create a new virtual environment, do the following.
+
+        <Tabs>
+        <TabItem value="linux-macos" label="Linux or macOS" default>
+
+        1. Navigate to where you want your virtual environment to be created, and then create it with `uv`:
+
+            ```shell
+            uv venv VENV_NAME
+            ```
+
+            Replace `VENV_NAME` with a name for your virtual environment.
+
+        2. Start the virtual environment:
+
+            ```shell
+            source VENV_NAME/bin/activate
+            ```
+
+            Your shell's prompt changes to display that you're currently working in a virtual environment:
+
+            ```text
+            (VENV_NAME) ➜  primeagent git:(main) ✗
+            ```
+
+        3. To deactivate the virtual environment and return to your regular shell, type `deactivate`.
+
+            When activated, the virtual environment temporarily modifies your `PATH` variable to prioritize packages installed within the virtual environment.
+            To avoid conflicts with other projects, it's a good idea to deactivate your virtual environment when you're done working in it.
+
+            To delete the virtual environment, type `rm -rf VENV_NAME`.
+            This completely removes the virtual environment directory and its contents.
+
+        </TabItem>
+        <TabItem value="Windows" label="Windows">
+
+        1. Navigate to where you want your virtual environment to be created, and create it with `uv`.
+
+            ```shell
+            uv venv VENV_NAME
+            ```
+
+            Replace `VENV_NAME` with a name for your virtual environment.
+
+        2. Start the virtual environment:
+
+            ```shell
+            VENV_NAME\Scripts\activate
+            ```
+
+            Your shell's prompt changes to display that you're currently working in a virtual environment:
+
+            ```text
+            (VENV_NAME) PS C:/users/username/primeagent-dir>
+            ```
+
+        3. To deactivate the virtual environment and return to your regular shell, type `deactivate`.
+
+            When activated, the virtual environment temporarily modifies your `PATH` variable to prioritize packages installed within the virtual environment.
+            To avoid conflicts with other projects, it's a good idea to deactivate your virtual environment when you're done working in it.
+
+            To delete the virtual environment, type `Remove-Item VENV_NAME`.
+            This completely removes the virtual environment directory and its contents.
+
+        </TabItem>
+        </Tabs>
+
+    </details>
+
+3. In your virtual environment, install Primeagent:
+
+    ```bash
+    uv pip install primeagent
+    ```
+
+    This installs the runnable Primeagent application and its curated provider
+    extensions. To install the same UI and API without provider extensions,
+    install `primeagent-base` instead:
+
+    ```bash
+    uv pip install primeagent-base
+    ```
+
+    Both packages use the `primeagent` command. In Primeagent 1.12,
+    `primeagent-base` does not provide a `primeagent-base` executable.
+
+4. Start Primeagent:
+
+    ```bash
+    uv run primeagent run
+    ```
+
+    It can take a few minutes for Primeagent to start.
+
+5. To confirm that a local Primeagent instance is running, navigate to the default Primeagent URL `http://127.0.0.1:7860`.
+
+6. Create your first flow with the [Quickstart](/get-started-quickstart).
+
+### Manage the Primeagent OSS version
+
+To upgrade Primeagent to the latest version, run `uv pip install primeagent -U`.
+However, the Primeagent team recommends taking steps to backup your existing installation before you upgrade Primeagent.
+For more information, see [Prepare to upgrade](/release-notes#prepare-to-upgrade).
+
+To install a specific version of the Primeagent package, add the required version to the command, such as `uv pip install primeagent==1.4.22`.
+
+To reinstall Primeagent and all of its dependencies, run `uv pip install primeagent --force-reinstall`.
+
+:::note Primeagent 1.12 package migration
+The new runnable `primeagent-base` package starts at version `1.12.0` and stays
+version-aligned with `primeagent`. Requirements such as
+`primeagent-base~=0.12` remain on the previous package line and don't select the
+1.12 application.
+:::
+
+## Next steps
+
+* [Quickstart](/get-started-quickstart): Build and run your first flow in minutes.
+* [Build flows](/concepts-flows): Learn about building flows.
+* [Troubleshoot Primeagent](/troubleshoot): Get help with common Primeagent install and startup issues.

@@ -11,8 +11,8 @@ import { Button } from "@/components/ui/button";
 import { DotBackgroundDemo } from "@/components/ui/dot-background";
 import { DISCORD_URL, GITHUB_URL } from "@/constants/constants";
 import { useGetUserData, useUpdateUser } from "@/controllers/API/queries/auth";
+import { useCommunityCounts } from "@/hooks/use-community-counts";
 import useAuthStore from "@/stores/authStore";
-import { useDarkStore } from "@/stores/darkStore";
 import { useFolderStore } from "@/stores/foldersStore";
 import { formatNumber } from "@/utils/utils";
 import useFileDrop from "../hooks/use-on-file-drop";
@@ -29,8 +29,7 @@ export const EmptyPageCommunity = ({
   const handleFileDrop = useFileDrop(undefined);
   const folders = useFolderStore((state) => state.folders);
   const userData = useAuthStore(useShallow((state) => state.userData));
-  const stars: number | undefined = useDarkStore((state) => state.stars);
-  const discordCount: number = useDarkStore((state) => state.discordCount);
+  const { stars, discordCount } = useCommunityCounts();
   const { mutate: updateUser } = useUpdateUser();
   const { mutate: mutateLoggedUser } = useGetUserData();
   const startNewFlow = useStartNewFlow();
@@ -106,7 +105,7 @@ export const EmptyPageCommunity = ({
                 <div className="relative flex flex-col rounded-lg border-[1px] bg-background p-4 transition-all duration-300 hover:border-accent-pink-foreground">
                   <div className="grid w-full items-center justify-between gap-2">
                     <div className="flex gap-3">
-                      <FaGithub className="h-6 w-6" />
+                      <FaGithub className="h-6 w-6" aria-hidden="true" />
                       <div>
                         <span className="font-semibold">GitHub</span>
                         <span className="ml-2 font-mono text-muted-foreground">
@@ -136,7 +135,10 @@ export const EmptyPageCommunity = ({
                 <div className="relative flex flex-col rounded-lg border-[1px] bg-background p-4 transition-all duration-300 hover:border-discord-color">
                   <div className="grid w-full items-center justify-between gap-2">
                     <div className="flex gap-3">
-                      <FaDiscord className="h-6 w-6 text-discord-color" />
+                      <FaDiscord
+                        className="h-6 w-6 text-discord-color"
+                        aria-hidden="true"
+                      />
                       <div>
                         <span className="font-semibold">Discord</span>
                         <span className="ml-2 font-mono text-muted-foreground">

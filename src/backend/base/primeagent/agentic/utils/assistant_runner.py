@@ -11,23 +11,35 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
+from wfx.log.logger import logger
 from wfx.mcp.flow_builder_tools import get_working_flow
 
+from primeagent.agentic.api.deps import enforce_agentic_component_admin
 from primeagent.agentic.api.router import _resolve_assistant_context
 from primeagent.agentic.api.schemas import AssistantRequest
 from primeagent.agentic.services.assistant_service import execute_flow_with_validation_streaming
 from primeagent.agentic.services.flow_types import PRIMEAGENT_ASSISTANT_FLOW
-from primeagent.api.v1.flows import _new_flow, _save_flow_to_fs
+from primeagent.api.utils.core import release_db_transaction
+from primeagent.api.v1.flow_conflict import claim_version_token
+from primeagent.api.v1.flows import _new_flow, _save_flow_to_fs, _validate_catalog_policy_for_write
 from primeagent.initial_setup.setup import get_or_create_default_folder
+from primeagent.services.database.models.flow.guards import ensure_flow_unlocked, lock_flow_for_update
 from primeagent.services.database.models.flow.model import Flow, FlowCreate
-from primeagent.services.deps import get_storage_service
+from primeagent.services.database.models.user.model import User
+from primeagent.services.deps import get_catalog_policy_service, get_storage_service
+from primeagent.services.model_provider_policy_scope import scoped_model_provider_policy_for_flow
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from sqlmodel.ext.asyncio.session import AsyncSession
+
+    ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 DEFAULT_FLOW_NAME = "Assistant Flow"
 
@@ -124,7 +136,7 @@ def _apply_field_edit(flow_data: dict[str, Any], edit: dict[str, Any]) -> None:
 
 
 async def _consume_stream(
-    stream, initial_data: dict[str, Any] | None
+    stream, initial_data: dict[str, Any] | None, on_progress: ProgressCallback | None = None
 ) -> tuple[_CanvasState, dict[str, Any] | None, str | None, str | None, list[dict[str, Any]]]:
     """Drain the SSE stream into (canvas_state, working_snapshot, result_text, error_text, field_edits).
 
@@ -147,7 +159,14 @@ async def _consume_stream(
             except json.JSONDecodeError:
                 continue
             event_type = event.get("event")
-            if event_type == "flow_update":
+            if event_type == "progress" and on_progress is not None:
+                # Forwarding is best-effort: a broken notification channel must
+                # never abort the assistant run itself.
+                try:
+                    await on_progress(event)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"Assistant progress forwarding failed; continuing the run: {exc}")
+            elif event_type == "flow_update":
                 canvas.apply(event)
                 if event.get("action") == "edit_field":
                     field_edits.append(event)
@@ -155,7 +174,8 @@ async def _consume_stream(
                 data = event.get("data") or {}
                 result_text = data.get("result")
                 working = get_working_flow()
-                if isinstance(working, dict) and working.get("data", {}).get("nodes"):
+                working_data = working.get("data") if isinstance(working, dict) else None
+                if isinstance(working_data, dict) and isinstance(working_data.get("nodes"), list):
                     working_snapshot = copy.deepcopy(working)
             elif event_type == "error":
                 error_text = event.get("message")
@@ -171,14 +191,29 @@ async def run_assistant_and_persist(
     provider: str | None = None,
     model_name: str | None = None,
     session_id: str | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run the assistant against a flow and persist any canvas changes.
 
-    Returns a dict with: ``flow_id``, ``link``, ``result`` (assistant
-    reply text), ``flow_changed``, ``session_id``, ``provider`` and
-    ``model_name``.
+    ``on_progress`` (optional) is awaited with each raw ``progress`` SSE event
+    so callers (e.g. the MCP tool) can stream step updates; failures there are
+    swallowed so they never break the run. Returns a dict with: ``flow_id``,
+    ``link``, ``result`` (assistant reply text), ``flow_changed``,
+    ``session_id``, ``provider`` and ``model_name``.
     """
+    # The legacy standalone MCP server calls this runner directly, without the
+    # HTTP assistant route's caller-aware dependency. Check before _ensure_flow
+    # creates a row or the assistant loads any provider credentials.
+    acting_user = await session.get(User, user_id)
+    is_superuser = bool(getattr(acting_user, "is_superuser", False))
+    enforce_agentic_component_admin(is_superuser=is_superuser)
+
     flow, created_new = await _ensure_flow(session, user_id, flow_id)
+    reviewed_version_token = None if created_new else flow.version_token
+    if not created_new:
+        # Fail before invoking the model. Locked flows are read-only to the
+        # headless assistant just as they are to direct MCP edit tools.
+        ensure_flow_unlocked(flow)
 
     request = AssistantRequest(
         flow_id=str(flow.id),
@@ -188,29 +223,82 @@ async def run_assistant_and_persist(
         session_id=session_id,
         max_retries=None,
     )
-    ctx = await _resolve_assistant_context(request, user_id, session)
+    # raw_cause on SSE error details is superuser-only; use the authenticated
+    # actor's DB role read above before the long-running stream releases this transaction.
+    with scoped_model_provider_policy_for_flow(
+        flow,
+        user_id=user_id,
+        is_superuser=is_superuser,
+    ):
+        # Resolve provider authorization before credential reads, then retain
+        # the same trusted scope while the Assistant builds and verifies the
+        # working graph.
+        ctx = await _resolve_assistant_context(request, user_id, session)
 
-    stream = execute_flow_with_validation_streaming(
-        flow_filename=PRIMEAGENT_ASSISTANT_FLOW,
-        input_value=instruction,
-        global_variables=ctx.global_vars,
-        max_retries=ctx.max_retries,
-        user_id=str(user_id),
-        session_id=ctx.session_id,
-        provider=ctx.provider,
-        model_name=ctx.model_name,
-        api_key_var=ctx.api_key_name,
-        apply_edits_immediately=True,
-    )
-    canvas, working_snapshot, result_text, error_text, field_edits = await _consume_stream(stream, flow.data)
+        # The agent loop below can run for minutes; end the read transaction now
+        # so it doesn't pin a pooled connection (Postgres: idle-in-transaction)
+        # for the whole run (#14445). Persistence re-reads under a fresh short
+        # transaction (the FOR UPDATE below), so the lock ordering is preserved.
+        await release_db_transaction(session)
+
+        stream = execute_flow_with_validation_streaming(
+            flow_filename=PRIMEAGENT_ASSISTANT_FLOW,
+            input_value=instruction,
+            global_variables=ctx.global_vars,
+            max_retries=ctx.max_retries,
+            user_id=str(user_id),
+            session_id=ctx.session_id,
+            provider=ctx.provider,
+            model_name=ctx.model_name,
+            api_key_var=ctx.api_key_name,
+            apply_edits_immediately=True,
+            is_superuser=is_superuser,
+        )
+        canvas, working_snapshot, result_text, error_text, field_edits = await _consume_stream(
+            stream, flow.data, on_progress
+        )
 
     if canvas.changed:
+        if not created_new:
+            # The assistant can run for a while. Re-read under a row lock so a
+            # concurrent lock toggle and this write are ordered atomically.
+            await lock_flow_for_update(session, flow)
+            ensure_flow_unlocked(flow)
+            # Take the writer's turn against the version this run started from.
+            # A run can take minutes, and without this the assistant wrote over
+            # whatever a person saved in the meantime and told nobody -- measured:
+            # a human saved, the run finished, and the human's edit was simply
+            # gone. Refusing instead turns silent loss into something the caller
+            # can see and re-run.
+            claimed = await claim_version_token(session, flow, reviewed_version_token)
         flow_data = working_snapshot["data"] if working_snapshot else canvas.data
         # Headless MCP has no UI to apply an edit_field review proposal, so apply
         # each to the working flow here or the text edit is dropped (Bug #13641).
         for edit in field_edits:
             _apply_field_edit(flow_data, edit)
+        try:
+            _validate_catalog_policy_for_write(
+                flow_data,
+                snapshot=get_catalog_policy_service().snapshot,
+            )
+        except HTTPException:
+            if created_new:
+                # The assistant needs a committed flow id while it runs. Do not
+                # leave that provisional row behind when its generated graph is
+                # rejected before the caller ever receives the id or link.
+                await session.delete(flow)
+                await session.commit()
+            raise
         flow.data = flow_data
+        flow.updated_at = datetime.now(timezone.utc)
+        # Take the writer's turn like any other graph write. Persisting without
+        # rotating leaves every open editor holding a token that still matches,
+        # so their next save silently overwrites what the assistant just wrote
+        # and no one is told -- the lost update the token exists to prevent.
+        # ``claimed`` is None for a flow this run created, or a legacy row with no
+        # token to compare; either way a fresh one is what the editors need.
+        flow.version_token = claimed if not created_new and claimed else uuid4()
+        flow.last_modified_by = user_id
         if created_new and canvas.name:
             flow.name = canvas.name
         session.add(flow)

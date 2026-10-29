@@ -48,7 +48,7 @@ KNOWN_COMPONENTS: dict[str, KnownComponent] = {
         module="wfx.components.models.language_model.LanguageModelComponent",
         description="Language Model component",
     ),
-    # Note: PromptComponent (primeagent.components.prompts.prompt) is NOT included
+    # Note: PromptComponent (prime.khulnasoft.components.prompts.prompt) is NOT included
     # because the module doesn't exist in the wfx package - it must be compiled
     # from custom code.
     #

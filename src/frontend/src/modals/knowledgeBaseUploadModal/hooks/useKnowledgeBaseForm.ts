@@ -1,23 +1,26 @@
 import { type AxiosError } from "axios";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ModelOption } from "@/components/core/parameterRenderComponent/components/modelInputComponent/types";
+import type { ModelOption } from "@/components/core/parameterRenderComponent/components/modelInputComponent";
 import {
-  type AvailableDBProviderId,
   type DBProviderConfigValue,
   getDBProviderOption,
   getDefaultDBProviderConfig,
   isDBProviderConfigured,
   resolveUIBackendType,
+  type StoredDBProviderId,
   toAPIBackendType,
 } from "@/constants/dbProviderConstants";
 import { api } from "@/controllers/API/api";
 import { getURL } from "@/controllers/API/helpers/constants";
+import { isModelEnabledForType } from "@/controllers/API/helpers/enabled-model-policy";
 import { useCreateKnowledgeBase } from "@/controllers/API/queries/knowledge-bases/use-create-knowledge-base";
 import { useGetIngestionJobStatus } from "@/controllers/API/queries/knowledge-bases/use-get-ingestion-job-status";
+import { useGetEnabledModels } from "@/controllers/API/queries/models/use-get-enabled-models";
 import { useGetModelProviders } from "@/controllers/API/queries/models/use-get-model-providers";
 import { useGetGlobalVariables } from "@/controllers/API/queries/variables";
 import useAlertStore from "@/stores/alertStore";
+import { useUtilityStore } from "@/stores/utilityStore";
 import {
   type MetadataPair,
   metadataPairsToFormValue,
@@ -46,25 +49,24 @@ import { formatFileSize } from "../utils";
  * server-side validation in each backend's ``_build_vector_store`` so
  * the user sees the problem inline before the request ever lands.
  *
- * Only the actively-registered providers (Chroma + OpenSearch) are
- * validated here — see ``DBProviderInput`` for the UI side. Stubbed
- * providers (mongodb / astra / postgres) are rejected up front by the
+ * Only providers with UI-entered config need validation here (OpenSearch's
+ * index name) — see ``DBProviderInput`` for the UI side. Postgres (pgvector)
+ * is environment-driven with no UI fields, so it needs no client validation;
+ * remaining stubbed providers (mongodb / astra) are rejected up front by the
  * server schema validator.
  */
 function validateBackendConfig(
-  backendType: AvailableDBProviderId,
-  config: Record<string, DBProviderConfigValue>,
+  backendType: StoredDBProviderId,
+  _config: Record<string, DBProviderConfigValue>,
 ): string | null {
-  if (backendType === "chroma_cloud") {
-    // API key is validated by isDBProviderConfigured; no literal fields here.
-    return null;
+  if (backendType === "chroma" || backendType === "chroma_cloud") {
+    return "This Chroma store requires migration before it can be used.";
   }
-  if (backendType === "opensearch") {
-    const indexName = config.index_name;
-    if (typeof indexName !== "string" || !indexName.trim()) {
-      return "OpenSearch requires an index_name";
-    }
-  }
+  // OpenSearch no longer requires an ``index_name``: the backend derives a
+  // unique index per Knowledge Base from its owner and name when one isn't
+  // supplied, so each KB is isolated in its own index instead of sharing a
+  // single global one. An explicitly-set ``index_name`` is still honored downstream as an
+  // external-index override.
   return null;
 }
 
@@ -91,20 +93,65 @@ export function useKnowledgeBaseForm({
 
   // Fetch embedding model data from API. Include deprecated entries so the
   // picker can surface them with a "Deprecated" badge instead of dropping them.
-  const { data: modelProviders = [] } = useGetModelProviders({
+  const modelProvidersQuery = useGetModelProviders({
     includeDeprecated: true,
+    purpose: "use",
   });
-  const { data: globalVariables = [], isFetched: areGlobalVariablesFetched } =
-    useGetGlobalVariables();
+  const enabledModelsQuery = useGetEnabledModels({ purpose: "use" });
+  const globalVariablesQuery = useGetGlobalVariables({
+    refetchOnWindowFocus: true,
+  });
+  const globalVariables = globalVariablesQuery.data ?? [];
+  const modelCatalogReady = Boolean(
+    modelProvidersQuery.isSuccess &&
+      enabledModelsQuery.isSuccess &&
+      modelProvidersQuery.fetchStatus === "idle" &&
+      enabledModelsQuery.fetchStatus === "idle" &&
+      !modelProvidersQuery.isFetching &&
+      !enabledModelsQuery.isFetching &&
+      !modelProvidersQuery.isError &&
+      !enabledModelsQuery.isError,
+  );
+  const globalVariablesReady = Boolean(
+    globalVariablesQuery.isSuccess &&
+      globalVariablesQuery.fetchStatus === "idle" &&
+      !globalVariablesQuery.isFetching &&
+      !globalVariablesQuery.isError,
+  );
+  const localVectorStoreAvailable = useUtilityStore(
+    (state) => state.localVectorStoreAvailable,
+  );
+  const defaultVectorStoreBackend = useUtilityStore(
+    (state) => state.defaultVectorStoreBackend,
+  );
+  const configuredVectorStoreBackends = useUtilityStore(
+    (state) => state.configuredVectorStoreBackends,
+  );
+  const vectorStoreConfigLoaded = useUtilityStore(
+    (state) => state.vectorStoreConfigLoaded,
+  );
   const hasAppliedBackendDefaults = useRef(false);
 
   // Transform provider data into ModelOption[] for embedding models only
   const embeddingModelOptions = useMemo<ModelOption[]>(() => {
+    if (!modelCatalogReady) return [];
     const options: ModelOption[] = [];
-    for (const provider of modelProviders) {
+    const enabledModelsData = enabledModelsQuery.data;
+    if (!enabledModelsData) return [];
+    for (const provider of modelProvidersQuery.data ?? []) {
       if (!provider.is_enabled) continue;
       for (const model of provider.models) {
         if (model.metadata?.model_type !== "embeddings") continue;
+        if (
+          !isModelEnabledForType(
+            enabledModelsData,
+            provider.provider,
+            model.model_name,
+            "embeddings",
+          )
+        ) {
+          continue;
+        }
         options.push({
           id: model.model_name,
           name: model.model_name,
@@ -115,7 +162,7 @@ export function useKnowledgeBaseForm({
       }
     }
     return options;
-  }, [modelProviders]);
+  }, [enabledModelsQuery.data, modelCatalogReady, modelProvidersQuery.data]);
 
   // Form state - Step 1
   const [sourceName, setSourceName] = useState("");
@@ -140,26 +187,46 @@ export function useKnowledgeBaseForm({
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<
     ModelOption[]
   >([]);
-  // Defaults keep existing KBs on the local Chroma store. Backend is immutable
+  const selectedEmbeddingModelAuthorized = useMemo(() => {
+    const selected = selectedEmbeddingModel[0];
+    return (
+      modelCatalogReady &&
+      selected !== undefined &&
+      embeddingModelOptions.some(
+        (option) =>
+          option.provider === selected.provider &&
+          option.name === selected.name,
+      )
+    );
+  }, [embeddingModelOptions, modelCatalogReady, selectedEmbeddingModel]);
+  // Defaults keep existing KBs on the local SQLite store. Backend is immutable
   // after create, so add-sources mode displays the existing backend read-only.
-  const [backendType, setBackendType] =
-    useState<AvailableDBProviderId>("chroma");
+  const [backendType, setBackendType] = useState<StoredDBProviderId>("sqlite");
   const [backendConfig, setBackendConfig] = useState<
     Record<string, DBProviderConfigValue>
   >({});
   // Persists per-provider configs across provider switches within the modal
   // so that switching away and back restores the config seen on first entry.
   const perProviderConfigsRef = useRef<
-    Partial<
-      Record<AvailableDBProviderId, Record<string, DBProviderConfigValue>>
-    >
+    Partial<Record<StoredDBProviderId, Record<string, DBProviderConfigValue>>>
   >({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(!hideAdvanced);
 
   const defaultBackendSelection = useMemo(
-    () => getDefaultDBProviderConfig(globalVariables),
-    [globalVariables],
+    () =>
+      getDefaultDBProviderConfig(
+        globalVariables,
+        localVectorStoreAvailable,
+        defaultVectorStoreBackend,
+        configuredVectorStoreBackends,
+      ),
+    [
+      globalVariables,
+      localVectorStoreAvailable,
+      defaultVectorStoreBackend,
+      configuredVectorStoreBackends,
+    ],
   );
   const [isFilePanelOpen, setIsFilePanelOpen] = useState(false);
 
@@ -169,7 +236,7 @@ export function useKnowledgeBaseForm({
   // dropdown when no prior selection exists.
   const handleBackendProviderChange = useCallback(
     (
-      newType: AvailableDBProviderId,
+      newType: StoredDBProviderId,
       freshConfig: Record<string, DBProviderConfigValue>,
     ) => {
       perProviderConfigsRef.current[backendType] = backendConfig;
@@ -183,6 +250,9 @@ export function useKnowledgeBaseForm({
   // Preview state
   const [chunkPreviews, setChunkPreviews] = useState<ChunkPreview[]>([]);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  // True when the last chunk-preview request errored (e.g. overlap > size). Gates
+  // the create button so a config the backend already rejected can't be submitted.
+  const [chunkPreviewFailed, setChunkPreviewFailed] = useState(false);
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
   const [selectedPreviewFileIndex, setSelectedPreviewFileIndex] = useState(0);
 
@@ -219,12 +289,18 @@ export function useKnowledgeBaseForm({
     if (existingKnowledgeBase && open) {
       setSourceName(existingKnowledgeBase.name);
       if (existingKnowledgeBase.embeddingModel) {
-        const matchingModel = embeddingModelOptions.find(
-          (opt) => opt.id === existingKnowledgeBase.embeddingModel,
+        const matchingModels = embeddingModelOptions.filter(
+          (option) => option.id === existingKnowledgeBase.embeddingModel,
         );
-        if (matchingModel) {
-          setSelectedEmbeddingModel([matchingModel]);
-        }
+        const savedProvider = existingKnowledgeBase.embeddingProvider?.trim();
+        const providerIsUnknown =
+          !savedProvider || savedProvider.toLowerCase() === "unknown";
+        const matchingModel = providerIsUnknown
+          ? matchingModels.length === 1
+            ? matchingModels[0]
+            : undefined
+          : matchingModels.find((option) => option.provider === savedProvider);
+        setSelectedEmbeddingModel(matchingModel ? [matchingModel] : []);
       }
       if (existingKnowledgeBase.chunkSize != null) {
         setChunkSize(existingKnowledgeBase.chunkSize);
@@ -242,8 +318,14 @@ export function useKnowledgeBaseForm({
         setSeparator(DEFAULT_SEPARATOR);
       }
       // Always enable advanced mode in add-sources mode so the file
-      // upload section is visible.
-      if (!hideAdvanced) {
+      // upload section is visible. Also enable when the KB already has
+      // advanced chunking config.
+      const hasAdvancedConfig =
+        isAddSourcesMode ||
+        existingKnowledgeBase.chunkSize != null ||
+        existingKnowledgeBase.chunkOverlap != null ||
+        existingKnowledgeBase.separator != null;
+      if (hasAdvancedConfig && !hideAdvanced) {
         setShowAdvanced(true);
       }
       if (
@@ -277,7 +359,8 @@ export function useKnowledgeBaseForm({
     if (
       existingKnowledgeBase ||
       hasAppliedBackendDefaults.current ||
-      !areGlobalVariablesFetched
+      !globalVariablesReady ||
+      !vectorStoreConfigLoaded
     ) {
       return;
     }
@@ -286,10 +369,11 @@ export function useKnowledgeBaseForm({
     setBackendConfig(defaultBackendSelection.backendConfig);
     hasAppliedBackendDefaults.current = true;
   }, [
-    areGlobalVariablesFetched,
     defaultBackendSelection,
     existingKnowledgeBase,
+    globalVariablesReady,
     open,
+    vectorStoreConfigLoaded,
   ]);
 
   const resetForm = useCallback(() => {
@@ -302,12 +386,13 @@ export function useKnowledgeBaseForm({
       { column_name: "text", vectorize: true, identifier: true },
     ]);
     setSelectedEmbeddingModel([]);
-    setBackendType("chroma");
+    setBackendType("sqlite");
     setBackendConfig({});
     perProviderConfigsRef.current = {};
     setMetadataPairs([]);
     setPerFileMetadata({});
     setChunkPreviews([]);
+    setChunkPreviewFailed(false);
     setCurrentChunkIndex(0);
     setSelectedPreviewFileIndex(0);
     setCurrentStep(1);
@@ -322,10 +407,12 @@ export function useKnowledgeBaseForm({
   const generateChunkPreviews = useCallback(async () => {
     if (files.length === 0) {
       setChunkPreviews([]);
+      setChunkPreviewFailed(false);
       return;
     }
 
     setIsGeneratingPreview(true);
+    setChunkPreviewFailed(false);
     try {
       const selectedFile = files[selectedPreviewFileIndex] || files[0];
       const formData = new FormData();
@@ -369,6 +456,7 @@ export function useKnowledgeBaseForm({
         list: [err?.response?.data?.detail || err?.message || "Unknown error"],
       });
       setChunkPreviews([]);
+      setChunkPreviewFailed(true);
     } finally {
       setIsGeneratingPreview(false);
     }
@@ -383,27 +471,43 @@ export function useKnowledgeBaseForm({
 
   const getValidationErrors = useCallback((): Record<string, string> => {
     const errors: Record<string, string> = {};
-    const trimmedName = sourceName.trim().replace(/\s+/g, "_");
-    if (!trimmedName) {
-      errors.sourceName = t("knowledge.validationNameRequired");
-    } else if (trimmedName.length < 3 || trimmedName.length > 512) {
-      errors.sourceName = t("knowledge.validationNameLength");
-    } else if (!KB_NAME_REGEX.test(trimmedName)) {
-      errors.sourceName = t("knowledge.validationNameFormat");
-    } else if (
-      !isAddSourcesMode &&
-      existingKnowledgeBaseNames?.some(
-        (name) => name.toLowerCase() === trimmedName.toLowerCase(),
-      )
-    ) {
-      errors.sourceName = t("knowledge.validationNameDuplicate");
+    if (!isAddSourcesMode) {
+      const trimmedName = sourceName.trim().replace(/\s+/g, "_");
+      if (!trimmedName) {
+        errors.sourceName = t("knowledge.validationNameRequired");
+      } else if (trimmedName.length < 3 || trimmedName.length > 512) {
+        errors.sourceName = t("knowledge.validationNameLength");
+      } else if (!KB_NAME_REGEX.test(trimmedName)) {
+        errors.sourceName = t("knowledge.validationNameFormat");
+      } else if (
+        existingKnowledgeBaseNames?.some(
+          (name) => name.toLowerCase() === trimmedName.toLowerCase(),
+        )
+      ) {
+        errors.sourceName = t("knowledge.validationNameDuplicate");
+      }
     }
-    if (!isAddSourcesMode && selectedEmbeddingModel.length === 0) {
+    if (!modelCatalogReady) {
+      errors.embeddingModel = t("errors.failedToLoadModels");
+    } else if (!selectedEmbeddingModelAuthorized) {
       errors.embeddingModel = t("knowledge.validationEmbeddingRequired");
     }
-    if (!isAddSourcesMode) {
+    if (
+      !globalVariablesReady ||
+      (!isAddSourcesMode && !vectorStoreConfigLoaded)
+    ) {
+      errors.backend = t("modelProviders.errorUnexpected");
+    } else if (!isAddSourcesMode) {
       const selectedProvider = getDBProviderOption(backendType);
-      if (!isDBProviderConfigured(backendType, globalVariables)) {
+      if (
+        !isDBProviderConfigured(
+          backendType,
+          globalVariables,
+          localVectorStoreAvailable,
+          defaultVectorStoreBackend,
+          configuredVectorStoreBackends,
+        )
+      ) {
         errors.backend = `${selectedProvider.label} must be configured in DB Providers settings before it can be used.`;
       } else {
         const backendErrors = validateBackendConfig(backendType, backendConfig);
@@ -434,9 +538,16 @@ export function useKnowledgeBaseForm({
     sourceName,
     isAddSourcesMode,
     selectedEmbeddingModel,
+    selectedEmbeddingModelAuthorized,
+    modelCatalogReady,
     backendType,
     backendConfig,
     globalVariables,
+    globalVariablesReady,
+    localVectorStoreAvailable,
+    defaultVectorStoreBackend,
+    configuredVectorStoreBackends,
+    vectorStoreConfigLoaded,
     files,
     existingKnowledgeBaseNames,
     metadataPairs,
@@ -455,12 +566,15 @@ export function useKnowledgeBaseForm({
     }
 
     const selectedModel = selectedEmbeddingModel[0];
-    const kbName = sourceName.trim().replace(/\s+/g, "_");
+    const kbName =
+      existingKnowledgeBase?.name ?? sourceName.trim().replace(/\s+/g, "_");
     setIsSubmitting(true);
 
     try {
       // Create the knowledge base (skip if adding to existing)
       if (!isAddSourcesMode) {
+        // Defaults are already resolved when the form opens. Send the provider
+        // shown in the review, including SQLite on remote-default deployments.
         await createKnowledgeBase.mutateAsync({
           name: kbName,
           embedding_provider: selectedModel.provider || "Unknown",
@@ -476,6 +590,7 @@ export function useKnowledgeBaseForm({
       if (!showAdvanced && !isAddSourcesMode) {
         const callbackData: KnowledgeBaseFormData = {
           sourceName,
+          dirName: kbName,
           files: [],
           embeddingModel: selectedEmbeddingModel,
           columnConfig,
@@ -532,9 +647,11 @@ export function useKnowledgeBaseForm({
 
         // Don't await — fire and forget. Polling will track status.
         api
-          .post(`${getURL("KNOWLEDGE_BASES")}/${kbName}/ingest`, formData, {
-            headers: { "Content-Type": "multipart/form-data" },
-          })
+          .post(
+            `${getURL("KNOWLEDGE_BASES")}/${encodeURIComponent(kbName)}/ingest`,
+            formData,
+            { headers: { "Content-Type": "multipart/form-data" } },
+          )
           .catch((ingestError: unknown) => {
             const err = ingestError as AxiosError<{ detail?: string }>;
             setErrorData({
@@ -548,6 +665,7 @@ export function useKnowledgeBaseForm({
 
       const callbackData: KnowledgeBaseFormData = {
         sourceName,
+        dirName: kbName,
         files,
         embeddingModel: selectedEmbeddingModel,
         chunkSize,
@@ -647,10 +765,6 @@ export function useKnowledgeBaseForm({
 
   const totalFileSize = useMemo(() => formatFileSize(files), [files]);
 
-  const toggleAdvanced = useCallback(() => {
-    setShowAdvanced((prev) => !prev);
-  }, []);
-
   return {
     // Mode
     isAddSourcesMode,
@@ -673,6 +787,9 @@ export function useKnowledgeBaseForm({
     selectedEmbeddingModel,
     setSelectedEmbeddingModel,
     embeddingModelOptions,
+    selectedEmbeddingModelAuthorized,
+    modelCatalogReady,
+    globalVariablesReady,
     backendType,
     setBackendType,
     backendConfig,
@@ -702,6 +819,7 @@ export function useKnowledgeBaseForm({
     // Preview
     chunkPreviews,
     isGeneratingPreview,
+    chunkPreviewFailed,
     currentChunkIndex,
     setCurrentChunkIndex,
     selectedPreviewFileIndex,

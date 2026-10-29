@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { BuildStatus } from "@/constants/enums";
+import { BASE_URL_API } from "@/customization/config-constants";
 import useAuthStore from "@/stores/authStore";
 import useFlowStore from "@/stores/flowStore";
 import useFlowsManagerStore from "@/stores/flowsManagerStore";
@@ -118,7 +119,7 @@ function handleError(eventOrError: Event): void {
 }
 
 function hasWebhookComponent(
-  flow: { data?: { nodes?: Array<{ id: string }> } | null } | null | undefined,
+  flow: { data?: { nodes?: Array<{ id: string }> } } | null,
 ): boolean {
   if (!flow?.data?.nodes) {
     return false;
@@ -144,7 +145,7 @@ export function useWebhookEvents() {
     }
 
     const flowIdentifier = currentFlow.endpoint_name || currentFlow.id;
-    let sseUrl = `/api/v1/webhook-events/${flowIdentifier}`;
+    let sseUrl = `${BASE_URL_API}webhook-events/${flowIdentifier}`;
 
     if (apiKey) {
       sseUrl += `?x-api-key=${encodeURIComponent(apiKey)}`;

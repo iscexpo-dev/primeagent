@@ -4,11 +4,13 @@ import ast
 import asyncio
 import inspect
 import logging
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from copy import deepcopy
+from functools import WRAPPER_ASSIGNMENTS, update_wrapper
 from pathlib import Path
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, get_type_hints
+from types import FunctionType
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 from uuid import UUID
 
 import nanoid
@@ -23,14 +25,16 @@ from wfx.base.tools.constants import (
     TOOLS_METADATA_INFO,
     TOOLS_METADATA_INPUT_NAME,
 )
+from wfx.custom.annotation_validation import (
+    resolve_method_return_annotation,
+)
+from wfx.custom.custom_component.input_names import ensure_inputs_not_shadowed_by_methods
 from wfx.custom.tree_visitor import RequiredInputsVisitor
 from wfx.exceptions.component import StreamingError
 from wfx.field_typing import Tool  # noqa: TC001
 
-# Lazy import to avoid circular dependency
-# from wfx.graph.state.model import create_state_model
-# Lazy import to avoid circular dependency
-# from wfx.graph.utils import has_chat_output
+# Lazy imports avoid circular deps: create_state_model (wfx.graph.state.model),
+# has_chat_output (wfx.graph.utils).
 from wfx.helpers.custom import format_type
 from wfx.memory import astore_message, aupdate_messages, delete_message
 from wfx.schema.artifact import get_artifact_type, post_process_raw
@@ -42,22 +46,24 @@ from wfx.schema.token_usage import accumulate_usage, extract_usage_from_chunk
 from wfx.serialization.serialization import serialize
 from wfx.template.field.base import UNDEFINED, Input, Output
 from wfx.template.frontend_node.custom_components import ComponentFrontendNode
-from wfx.utils.async_helpers import run_until_complete
+from wfx.utils.async_helpers import async_delegate_target, run_until_complete
 from wfx.utils.secrets import is_secret_value, unwrap_secret_value
 from wfx.utils.util import find_closest_match
 
 from .custom_component import CustomComponent
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from wfx.base.tools.component_tool import ComponentToolkit
     from wfx.events.event_manager import EventManager
     from wfx.graph.edge.schema import EdgeData
     from wfx.graph.vertex.base import Vertex
     from wfx.inputs.inputs import InputTypes
+    from wfx.integrations.models import CredentialLease
     from wfx.schema.dataframe import DataFrame
     from wfx.schema.log import LoggableType
+    from wfx.services.model_provider_policy import ModelProviderPolicyPurpose
 
 
 logger = logging.getLogger(__name__)
@@ -104,8 +110,52 @@ def _get_secret_text(input_obj: Any, value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _fallback_default(input_obj: Any) -> Any:
+    """Return the value an input carries when the stored template omits it.
+
+    A falsy value only survives when the component author declared it. Inputs that never
+    got an explicit value inherit ``BaseInputMixin.value = ""``, which is a placeholder and
+    not a real default: an unconnected HandleInput/DataFrameInput must stay ``None`` so
+    consumers keep reading it as "nothing supplied".
+    """
+    if "value" in getattr(input_obj, "model_fields_set", ()):
+        return input_obj.value
+    return input_obj.value or None
+
+
 def _copy_component_template(items: list[Any]) -> list[Any]:
     return [item.model_copy(deep=True) if isinstance(item, BaseModel) else deepcopy(item) for item in items]
+
+
+def check_model_provider_policy(method):
+    """Apply the shared standalone gate to direct model-builder calls."""
+    from wfx.services.model_provider_policy import ModelProviderPolicyPurpose
+
+    if inspect.iscoroutinefunction(method):
+
+        async def checked_async(self, *args, **kwargs):
+            await self.arequire_model_provider_policy(ModelProviderPolicyPurpose.USE)
+            return await method(self, *args, **kwargs)
+
+        wrapper = checked_async
+
+    else:
+
+        def checked(self, *args, **kwargs):
+            self.require_model_provider_policy(ModelProviderPolicyPurpose.USE)
+            return method(self, *args, **kwargs)
+
+        wrapper = checked
+
+    # Return annotations resolve against the original provider module. Keep
+    # deferred annotations lazy so wrapping a builder cannot execute them.
+    wrapper = FunctionType(wrapper.__code__, method.__globals__, closure=wrapper.__closure__)
+    update_wrapper(wrapper, method, assigned=tuple(name for name in WRAPPER_ASSIGNMENTS if name != "__annotations__"))
+    if annotator := getattr(method, "__annotate__", None):
+        wrapper.__annotate__ = annotator
+    else:
+        wrapper.__annotations__ = method.__annotations__
+    return wrapper
 
 
 class PlaceholderGraph(NamedTuple):
@@ -153,6 +203,13 @@ class Component(CustomComponent):
     selected_output: str | None = None
     code_class_base_inheritance: ClassVar[str] = "Component"
 
+    def __init_subclass__(cls, **kwargs):
+        """Protect direct builders, including saved nodes with explicit provider IDs."""
+        super().__init_subclass__(**kwargs)
+        for name in ("build_model", "build_embeddings"):
+            if method := cls.__dict__.get(name):
+                setattr(cls, name, check_model_provider_policy(method))
+
     def __init__(self, **kwargs) -> None:
         self.inputs = _copy_component_template(getattr(self.__class__, "inputs", []))
         self.outputs = _copy_component_template(getattr(self.__class__, "outputs", []))
@@ -161,6 +218,7 @@ class Component(CustomComponent):
         if overlap := self._there_is_overlap_in_inputs_and_outputs():
             msg = f"Inputs and outputs have overlapping names: {overlap}"
             raise ValueError(msg)
+        ensure_inputs_not_shadowed_by_methods(type(self), self.inputs)
         self._output_logs: dict[str, list[Log]] = {}
         self._current_output: str = ""
         self._metadata: dict = {}
@@ -428,25 +486,44 @@ class Component(CustomComponent):
     def __deepcopy__(self, memo: dict) -> Component:
         if id(self) in memo:
             return memo[id(self)]
-        # Shallow-copy config/inputs: they may contain non-picklable services
-        # (e.g. _tracing_service holds ServiceManager with threading.RLock).
-        # use the mangled names to access the private attributes
+        # Shallow-copy config/inputs (mangled names) — they may hold non-picklable services
+        # (e.g. _tracing_service's ServiceManager with a threading.RLock).
         config = getattr(self, "_Component__config", {})
         inputs_raw = getattr(self, "_Component__inputs", {})
 
         kwargs = dict(config)
         kwargs.update(inputs_raw)
         new_component = type(self)(**kwargs)
-        # Register in memo before the recursive deepcopy calls below so reference
-        # cycles (e.g. components linked through _components) resolve to this same
-        # copy instead of producing a duplicate.
+        # Register in memo before the recursive deepcopy calls so reference cycles
+        # (e.g. components linked through _components) resolve to this same copy.
         memo[id(self)] = new_component
         new_component._code = self._code
-        # Must deep-copy so each graph_copy has independent Output objects.
-        # Output.cache=True by default, and output.value is set during execution.
-        # A shallow copy causes all concurrent requests to share the same Output objects,
-        # so the first request's cached output.value is returned to all subsequent requests.
-        new_component._outputs_map = deepcopy(self._outputs_map, memo)
+        # Deep-copy so each graph_copy has independent Output objects; a shallow copy
+        # shares cached output.value across concurrent requests (first result leaks to all).
+        try:
+            new_component._outputs_map = deepcopy(self._outputs_map, memo)
+        except Exception:  # noqa: BLE001
+            # Why: an output.value can hold a non-deepcopyable object (e.g. a Langfuse
+            # handler whose __new__ needs kw-only args); without this every tool call fails.
+            logger.warning(
+                "deepcopy failed for _outputs_map on %s — falling back to per-output safe copy",
+                type(self).__name__,
+                exc_info=True,
+            )
+            new_outputs_map = {}
+            for k, output in self._outputs_map.items():
+                # Fresh memo per output: the failed outer deepcopy poisoned the shared memo with a
+                # partial copy of output.__dict__, so reusing it would return an Output missing ``value``.
+                try:
+                    copied = deepcopy(output)
+                except Exception:  # noqa: BLE001
+                    copied = output.model_copy()
+                    try:
+                        copied.value = deepcopy(output.value)
+                    except Exception:  # noqa: BLE001
+                        copied.value = output.value
+                new_outputs_map[k] = copied
+            new_component._outputs_map = new_outputs_map
 
         # Safe deepcopy of inputs
         new_inputs = {}
@@ -479,10 +556,8 @@ class Component(CustomComponent):
                 new_inputs[k] = input_copy
 
         new_component._inputs = new_inputs
-        # Must deep-copy so each graph_copy has independent component instances.
-        # Shallow copies here caused all concurrent requests to share the same
-        # intermediate component objects (e.g. the LLM node), producing identical
-        # responses for different inputs under concurrent load.
+        # Deep-copy so each graph_copy has independent component instances; shallow copies
+        # shared intermediate components (e.g. the LLM node) and crossed concurrent responses.
         new_component._edges = deepcopy(self._edges, memo)
         new_component._components = deepcopy(self._components, memo)
         new_component._parameters = dict(self._parameters)
@@ -498,12 +573,8 @@ class Component(CustomComponent):
         try:
             module = inspect.getmodule(self.__class__)
             if module is None:
-                # Fallback: ``inspect.getmodule`` returns None when
-                # ``cls.__module__`` points to a ``sys.modules`` key that has
-                # been swapped or dropped (e.g. mid-reload, when the staging
-                # namespace was just collapsed back into the production
-                # namespace).  Read the file directly so cache rebuilds and
-                # template construction survive a transient inconsistency.
+                # Fallback when ``inspect.getmodule`` returns None (swapped/dropped
+                # ``sys.modules`` key, e.g. mid-reload): read the class file directly.
                 try:
                     class_code = Path(inspect.getfile(self.__class__)).read_text(encoding="utf-8")
                 except (OSError, TypeError) as inner:
@@ -575,6 +646,49 @@ class Component(CustomComponent):
             return self._inputs[name]
         msg = f"Input {name} not found in {self.__class__.__name__}"
         raise ValueError(msg)
+
+    def resolve_connection(self, field_name: str) -> CredentialLease:
+        """Create a lazy credential lease for a declared connection-reference input."""
+        from wfx.inputs.inputs import ConnectionRefInput
+        from wfx.integrations.models import ConnectionRef, ConnectionResolutionRequest, CredentialLease
+        from wfx.services.authorization.base import ExecutionPrincipal
+        from wfx.services.deps import get_connection_resolver
+
+        input_model = self._inputs.get(field_name)
+        if not isinstance(input_model, ConnectionRefInput):
+            msg = f"Input {field_name!r} is not a ConnectionRefInput"
+            raise TypeError(msg)
+        value = getattr(self, field_name, input_model.value)
+        ref = ConnectionRef.parse(value)
+        if ref.provider != input_model.provider:
+            msg = (
+                f"Connection reference provider {ref.provider!r} does not match "
+                f"declared provider {input_model.provider!r}"
+            )
+            raise ValueError(msg)
+        graph = getattr(self, "graph", None)
+        principal = getattr(graph, "execution_principal", ExecutionPrincipal.unknown())
+        # Refuse before a lease exists: no credential is minted, decrypted, or
+        # refreshed for a provider or action the deployment policy denies.
+        capability_ids = self._require_integration_policy_for_input(input_model)
+        required_scopes = set(input_model.required_scopes)
+        inputs = {name: getattr(self, name, model.value) for name, model in self._inputs.items()}
+        required_scopes.update(
+            requirement.scope
+            for requirement in input_model.conditional_scopes
+            if requirement.condition.is_active(inputs)
+        )
+        run_id = getattr(graph, "_run_id", None)
+        request = ConnectionResolutionRequest(
+            ref=ref,
+            principal=principal,
+            required_scopes=frozenset(required_scopes),
+            capability_ids=frozenset(capability_ids),
+            component_id=self.get_id(),
+            flow_id=str(graph.flow_id) if graph is not None and graph.flow_id is not None else None,
+            run_id=str(run_id) if run_id else None,
+        )
+        return CredentialLease(get_connection_resolver(), request)
 
     def get_output(self, name: str) -> Any:
         """Retrieves the output with the specified name.
@@ -1116,11 +1230,11 @@ class Component(CustomComponent):
                 raise ValueError(msg) from e
 
     def _get_method_return_type(self, method_name: str) -> list[str]:
-        method = getattr(self, method_name)
-        try:
-            return_type = get_type_hints(method).get("return")
-        except TypeError:
-            return []
+        return_type = resolve_method_return_annotation(
+            component_class=type(self),
+            method_name=method_name,
+            method_getter=lambda: getattr(self, method_name),
+        )
         if return_type is None:
             return []
         extracted_return_types = self._extract_return_type(return_type)
@@ -1223,7 +1337,7 @@ class Component(CustomComponent):
             if key not in attributes and key not in self._attributes:
                 if secret_text := _get_secret_text(input_obj, input_obj.value):
                     self._secret_values.add(secret_text)
-                attributes[key] = _wrap_if_secret(input_obj, input_obj.value or None)
+                attributes[key] = _wrap_if_secret(input_obj, _fallback_default(input_obj))
 
         self._attributes.update(attributes)
 
@@ -1233,19 +1347,28 @@ class Component(CustomComponent):
             setattr(self, output.name, output)
             self._outputs_map[output.name] = output
 
+    @staticmethod
+    def _get_trace_value(input_: Any) -> Any:
+        """Return an input value safe to send to tracing providers."""
+        if getattr(input_, "password", False):
+            return "**********"
+        return _mask_secret_value(input_.value)
+
     def get_trace_as_inputs(self):
         predefined_inputs = {
-            input_.name: input_.value
+            input_.name: self._get_trace_value(input_)
             for input_ in self.inputs
             if hasattr(input_, "trace_as_input") and input_.trace_as_input
         }
         # Runtime inputs
-        runtime_inputs = {name: input_.value for name, input_ in self._inputs.items() if hasattr(input_, "value")}
+        runtime_inputs = {
+            name: self._get_trace_value(input_) for name, input_ in self._inputs.items() if hasattr(input_, "value")
+        }
         return {**predefined_inputs, **runtime_inputs}
 
     def get_trace_as_metadata(self):
         return {
-            input_.name: input_.value
+            input_.name: self._get_trace_value(input_)
             for input_ in self.inputs
             if hasattr(input_, "trace_as_metadata") and input_.trace_as_metadata
         }
@@ -1262,8 +1385,301 @@ class Component(CustomComponent):
     async def _build_without_tracing(self):
         return await self._build_results()
 
+    def _model_provider_policy_id(self) -> str | None:
+        """Return the stable policy identity for a standalone model component."""
+        # Enforce provider policy before tracing, input setup, output methods,
+        # credential lookup, or provider imports. This closes the legacy saved
+        # standalone-node path that does not use unified_models.get_llm().
+        from wfx.base.embeddings.model import LCEmbeddingsModel
+        from wfx.base.models.model import LCModelComponent
+
+        if not isinstance(self, LCModelComponent | LCEmbeddingsModel):
+            explicit_id = getattr(self, "model_provider_id", None)
+            if not isinstance(explicit_id, str) or not explicit_id.strip():
+                return None
+            if not any(output.method in {"build_model", "build_embeddings"} for output in self.outputs):
+                return None
+
+        from wfx.base.models.provider_registry import (
+            model_component_provider_id,
+            uses_standalone_model_provider_policy,
+        )
+
+        if not uses_standalone_model_provider_policy(self):
+            return None
+        return model_component_provider_id(self)
+
+    def _selected_model_provider_policy_ids(self, parameters: Mapping[str, Any] | None = None) -> tuple[str, ...]:
+        """Return providers from every raw ModelInput selection before input hydration."""
+        from wfx.base.models.provider_registry import model_component_policy_mode, resolve_provider_id
+        from wfx.inputs.inputs import ModelInput
+
+        if model_component_policy_mode(self) == "none":
+            return ()
+        effective_parameters = parameters if parameters is not None else getattr(self, "_parameters", None)
+        if not isinstance(effective_parameters, Mapping):
+            return ()
+
+        provider_ids: list[str] = []
+        for input_ in getattr(self, "_inputs", {}).values():
+            if not isinstance(input_, ModelInput) or not isinstance(input_.name, str):
+                continue
+            model_selection = effective_parameters.get(input_.name)
+            if isinstance(model_selection, Mapping):
+                model_selection = [model_selection]
+            if (
+                not isinstance(model_selection, list)
+                or not model_selection
+                or not isinstance(model_selection[0], Mapping)
+            ):
+                continue
+
+            provider = ""
+            if input_.name == "model":
+                # This mirrors apply_model_overrides: a non-empty raw provider
+                # override applies to the canonical ``model`` selector only.
+                # StrInput overrides are never load_from_db, so this identity is
+                # safe to inspect before secrets.
+                provider_override = effective_parameters.get("provider")
+                provider = provider_override.strip() if isinstance(provider_override, str) else ""
+            if not provider:
+                selected_provider = model_selection[0].get("provider")
+                provider = selected_provider.strip() if isinstance(selected_provider, str) else ""
+            if provider:
+                provider_id = resolve_provider_id(provider)
+                if provider_id not in provider_ids:
+                    provider_ids.append(provider_id)
+
+        # Historical Agent/ALTK nodes used a plain DropdownInput named
+        # ``agent_llm`` instead of ModelInput. Saved flows execute their
+        # embedded component source, so they do not inherit a newer Agent
+        # override; recognize the stable legacy selector in the shared base.
+        legacy_provider = effective_parameters.get("agent_llm")
+        if isinstance(legacy_provider, str):
+            legacy_provider = legacy_provider.strip()
+            if legacy_provider and legacy_provider != "Custom":
+                provider_id = resolve_provider_id(legacy_provider)
+                if provider_id not in provider_ids:
+                    provider_ids.append(provider_id)
+        return tuple(provider_ids)
+
+    def _selected_model_provider_policy_id(self, parameters: Mapping[str, Any] | None = None) -> str | None:
+        """Return the first selected ModelInput provider for compatibility."""
+        return next(iter(self._selected_model_provider_policy_ids(parameters)), None)
+
+    def _standalone_model_policy_selection(
+        self, parameters: Mapping[str, Any] | None = None
+    ) -> tuple[tuple[str, ...], str | None]:
+        """Read a standalone model's public identity without hydrating its inputs."""
+        from wfx.base.embeddings.model import LCEmbeddingsModel
+
+        methods = {output.method for output in self.outputs}
+        # Historical embedding nodes also inherit LCModelComponent. Their
+        # declared builder, rather than their base class alone, identifies the
+        # model type. Mixed outputs check both typed identities.
+        model_type: str | None = (
+            "embeddings" if isinstance(self, LCEmbeddingsModel) or "build_embeddings" in methods else "llm"
+        )
+        if {"build_model", "build_embeddings"}.issubset(methods):
+            model_type = None
+
+        model_names: list[str] = []
+
+        def read_input(name):
+            return parameters[name] if parameters is not None and name in parameters else getattr(self, name, None)
+
+        for name in ("model_name", "model", "model_id"):
+            input_ = self._inputs.get(name)
+            if input_ is None:
+                continue
+            # Explicit vertex parameters win over the component's saved default.
+            # An unresolved upstream value is checked again by the builder after
+            # hydration; it must never be reinterpreted as a default model.
+            value = read_input(name)
+            if isinstance(value, str) and value:
+                model_names.append(value)
+                if name == "model_id" and value == "custom" and "custom_model" in self._inputs:
+                    custom_model = read_input("custom_model")
+                    if isinstance(custom_model, str) and custom_model:
+                        model_names.append(custom_model)
+
+        # SDK kwargs can override the serialized request model even when the
+        # visible selector is allowed (OpenAI's extra_body is merged last).
+        # Check every configured identity rather than replacing the selector.
+        kwargs = read_input("model_kwargs") if "model_kwargs" in self._inputs else None
+        if isinstance(kwargs, Mapping):
+            extra_body = kwargs.get("extra_body")
+            for overrides in (kwargs, extra_body):
+                if not isinstance(overrides, Mapping):
+                    continue
+                for name in ("model", "model_name", "model_id"):
+                    value = overrides.get(name)
+                    if isinstance(value, str) and value and value not in model_names:
+                        model_names.append(value)
+        return tuple(model_names), model_type
+
+    async def _additional_model_provider_policy_ids(
+        self,
+        purpose: ModelProviderPolicyPurpose,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> tuple[str, ...]:
+        """Resolve provider identities not represented by top-level ModelInputs.
+
+        Components with legacy provider selectors or provider metadata stored
+        behind another resource can override this hook. It runs before input
+        hydration, so implementations must only inspect raw parameters or
+        non-secret metadata.
+        """
+        _ = purpose, parameters
+        return ()
+
+    def require_model_provider_policy(self, purpose: ModelProviderPolicyPurpose) -> None:
+        """Gate standalone model/embedding components before sensitive work."""
+        provider_id = self._model_provider_policy_id()
+        if provider_id is None:
+            return
+
+        from wfx.services.model_provider_policy import require_model_provider
+
+        snapshot = require_model_provider(
+            user_id=self.user_id,
+            provider=provider_id,
+            purpose=purpose,
+        )
+        model_names, model_type = self._standalone_model_policy_selection()
+        for model_name in model_names:
+            snapshot.require_model(provider_id, model_name, model_type=model_type)
+
+    async def arequire_model_provider_policy(
+        self,
+        purpose: ModelProviderPolicyPurpose,
+        *,
+        user_id: UUID | str | None = None,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Gate runtime use through the hierarchy-refreshing async policy hook."""
+        provider_ids = list(self._selected_model_provider_policy_ids(parameters))
+        for provider_id in await self._additional_model_provider_policy_ids(purpose, parameters):
+            if provider_id not in provider_ids:
+                provider_ids.append(provider_id)
+        if (standalone_provider_id := self._model_provider_policy_id()) and standalone_provider_id not in provider_ids:
+            provider_ids.insert(0, standalone_provider_id)
+        if not provider_ids:
+            return
+
+        from wfx.services.model_provider_policy import aresolve_model_provider_policy
+
+        snapshot = await aresolve_model_provider_policy(
+            user_id=self.user_id if user_id is None else user_id,
+            providers=provider_ids,
+            purpose=purpose,
+        )
+        for provider_id in provider_ids:
+            snapshot.require(provider_id)
+        if standalone_provider_id:
+            model_names, model_type = self._standalone_model_policy_selection(parameters)
+            for model_name in model_names:
+                snapshot.require_model(standalone_provider_id, model_name, model_type=model_type)
+
+    def _integration_policy_inputs(self):
+        """Return every connection-reference input this component declares."""
+        from wfx.inputs.inputs import ConnectionRefInput
+
+        return [input_model for input_model in self._inputs.values() if isinstance(input_model, ConnectionRefInput)]
+
+    def select_integration_capabilities(self, capability_ids: tuple[str, ...]) -> tuple[str, ...]:
+        """Select the declared capabilities this invocation will execute.
+
+        Action-picker bundles override this pure hook using their current input
+        values. Return a non-empty subset of the supplied capability IDs, never
+        policy keys. The default requires every declared capability. This hook
+        runs before the output method, and again before credential resolution;
+        it must not perform I/O or mutate the component's inputs.
+        """
+        return capability_ids
+
+    def _selected_integration_capabilities(self, provider_id: str, capability_ids: Iterable[str]) -> tuple[str, ...]:
+        """Validate bundle selection before it can narrow an execution gate."""
+        from wfx.integrations.errors import ActionUnsupportedError
+
+        declared = tuple(capability_ids)
+        if not declared:
+            return ()
+        if type(self)._get_tools is not Component._get_tools or type(self).to_toolkit is not Component.to_toolkit:
+            # A custom toolset can return arbitrary callables, independently of
+            # the picker's current value. Its leases and construction must cover
+            # every action until it supplies a per-tool capability contract.
+            return declared
+        selected = tuple(self.select_integration_capabilities(declared))
+        if not selected or not set(selected).issubset(declared):
+            raise ActionUnsupportedError(provider=provider_id, http_status=422)
+        return selected
+
+    def _require_integration_policy_for_input(self, input_model, purpose=None) -> tuple[str, ...]:
+        """Gate a connection's selected actions and return their capability IDs."""
+        from wfx.services.integration_policy import (
+            IntegrationPolicyPurpose,
+            require_integration_actions,
+        )
+
+        effective_purpose = purpose or IntegrationPolicyPurpose.USE
+        capability_ids = self._selected_integration_capabilities(input_model.provider, input_model.capabilities)
+        require_integration_actions(
+            user_id=self.user_id,
+            provider_id=input_model.provider,
+            policy_keys=(),
+            capability_ids=capability_ids,
+            purpose=effective_purpose,
+        )
+        return capability_ids
+
+    def require_integration_policy(self, purpose=None) -> None:
+        """Gate the selected integration actions before any adapter can run.
+
+        A blocked action must fail before the component body executes, not only
+        when a credential is resolved. Two declarations are checked, for the
+        same reason discovery reads both: a connection-backed component names
+        its actions on its ``ConnectionRefInput``, while an API-key-mode action
+        component names none and is identified by the bundle capability whose
+        ``component_ref`` is this class.
+        """
+        from wfx.services.integration_policy import (
+            IntegrationPolicyPurpose,
+            require_integration_actions,
+        )
+        from wfx.services.integration_policy.utils import integration_capabilities_for_component_class
+
+        effective_purpose = purpose or IntegrationPolicyPurpose.USE
+        for input_model in self._integration_policy_inputs():
+            self._require_integration_policy_for_input(input_model, effective_purpose)
+
+        for provider_id, capabilities in integration_capabilities_for_component_class(type(self).__name__).items():
+            selected = self._selected_integration_capabilities(provider_id, capabilities)
+            require_integration_actions(
+                user_id=self.user_id,
+                provider_id=provider_id,
+                policy_keys=(),
+                capability_ids=selected,
+                purpose=effective_purpose,
+            )
+
+    def _require_integration_providers_for_toolkit(self) -> None:
+        """Gate tool construction before invocation arguments are available."""
+        from wfx.services.integration_policy import require_integration_provider
+        from wfx.services.integration_policy.utils import integration_capabilities_for_component_class
+
+        providers = {input_model.provider for input_model in self._integration_policy_inputs()}
+        providers.update(integration_capabilities_for_component_class(type(self).__name__))
+        for provider_id in providers:
+            require_integration_provider(user_id=self.user_id, provider_id=provider_id)
+
     async def build_results(self):
         """Build the results of the component."""
+        from wfx.services.integration_policy import IntegrationPolicyPurpose
+        from wfx.services.model_provider_policy import ModelProviderPolicyPurpose
+
+        self.require_model_provider_policy(ModelProviderPolicyPurpose.USE)
+
         if hasattr(self, "graph"):
             session_id = self.graph.session_id
         elif hasattr(self, "_session_id"):
@@ -1271,6 +1687,18 @@ class Component(CustomComponent):
         else:
             session_id = None
         try:
+            outputs = self._get_outputs_to_process()
+            if (
+                outputs
+                and all(output.method == "to_toolkit" for output in outputs)
+                and type(self)._get_tools is Component._get_tools
+                and type(self).to_toolkit is Component.to_toolkit
+            ):
+                # A tool's action can be an argument supplied later by the
+                # agent. Its invocation wrapper gates that selection after set().
+                self._require_integration_providers_for_toolkit()
+            else:
+                self.require_integration_policy(IntegrationPolicyPurpose.USE)
             if self.tracing_service:
                 return await self._build_with_tracing()
             return await self._build_without_tracing()
@@ -1294,18 +1722,30 @@ class Component(CustomComponent):
     async def _build_results(self) -> tuple[dict, dict]:
         results, artifacts = {}, {}
 
+        self._ensure_code_execution_policy()
         self._pre_run_setup_if_needed()
         self._handle_tool_mode()
 
         for output in self._get_outputs_to_process():
             self._current_output = output.name
             result = await self._get_output_result(output)
-            results[output.name] = result
+            # Output.value is the private graph-edge cache; results are display-facing copies.
+            results[output.name] = self._sanitize_secret_values(result)
             artifacts[output.name] = self._build_artifact(result)
             self._log_output(output)
 
         self._finalize_results(results, artifacts)
         return results, artifacts
+
+    def _ensure_code_execution_policy(self) -> None:
+        """Enforce server policy before a registered code-execution component runs."""
+        # Keep these imports local because Component is foundational and flow validation
+        # imports component-loading helpers that eventually depend on this module.
+        from wfx.utils.flow_validation import is_code_execution_component
+        from wfx.utils.python_repl_security import ensure_code_execution_enabled
+
+        if is_code_execution_component(type(self).__name__, self.name, self.display_name):
+            ensure_code_execution_enabled()
 
     def _pre_run_setup_if_needed(self):
         if hasattr(self, "_pre_run_setup"):
@@ -1373,8 +1813,16 @@ class Component(CustomComponent):
             raise ValueError(msg)
 
         method = getattr(self, output.method)
+        # A sync output method that merely wraps a coroutine (``delegates_to``) is awaited
+        # directly instead of running in a thread that would spin up its own event loop.
+        async_method = async_delegate_target(self, output.method)
         try:
-            result = await method() if inspect.iscoroutinefunction(method) else await asyncio.to_thread(method)
+            if async_method is not None:
+                result = await async_method()
+            elif inspect.iscoroutinefunction(method):
+                result = await method()
+            else:
+                result = await asyncio.to_thread(method)
         except TypeError as e:
             msg = f'Error running method "{output.method}": {e}'
             raise TypeError(msg) from e
@@ -1387,7 +1835,7 @@ class Component(CustomComponent):
         ):
             result.set_flow_id(self._vertex.graph.flow_id)
         result = output.apply_options(result)
-        result = self._sanitize_secret_values(result)
+        # Keep the edge value usable. Human-facing copies are sanitized in _build_results.
         output.value = result
 
         return result
@@ -1434,21 +1882,29 @@ class Component(CustomComponent):
         return value
 
     def _sanitize_secret_values(self, value):
+        """Return a sanitized value without mutating caller-owned Message or Data objects."""
         if not self._secret_values:
             return _mask_secret_value(value)
         value = _mask_secret_value(value)
         if isinstance(value, str):
             return self._sanitize_secret_string(value)
         if isinstance(value, Message):
+            sanitized = value.model_copy(
+                update={
+                    "data": self._sanitize_secret_values(value.data),
+                    "content_blocks": list(value.content_blocks),
+                }
+            )
             if isinstance(value.text, str):
-                value.text = self._sanitize_secret_string(value.text)
-            value.data = self._sanitize_secret_values(value.data)
-            return value
+                sanitized.text = self._sanitize_secret_string(value.text)
+            return sanitized
         if isinstance(value, Data):
-            value.data = self._sanitize_secret_values(value.data)
-            if isinstance(value.default_value, str):
-                value.default_value = self._sanitize_secret_string(value.default_value)
-            return value
+            default_value = value.default_value
+            if isinstance(default_value, str):
+                default_value = self._sanitize_secret_string(default_value)
+            return value.model_copy(
+                update={"data": self._sanitize_secret_values(value.data), "default_value": default_value}
+            )
         if isinstance(value, dict):
             return {key: self._sanitize_secret_values(item) for key, item in value.items()}
         if isinstance(value, list):
@@ -1497,15 +1953,14 @@ class Component(CustomComponent):
             self.tracing_service.set_outputs(self.trace_name, results)
 
     def custom_repr(self):
-        if self.repr_value == "":
-            self.repr_value = self.status
-        if isinstance(self.repr_value, dict):
-            return yaml.dump(self.repr_value)
-        if isinstance(self.repr_value, str):
-            return self.repr_value
-        if isinstance(self.repr_value, BaseModel) and not isinstance(self.repr_value, Data):
-            return str(self.repr_value)
-        return self.repr_value
+        repr_value = self.status if self.repr_value == "" else self.repr_value
+        if isinstance(repr_value, dict):
+            return yaml.dump(repr_value)
+        if isinstance(repr_value, str):
+            return repr_value
+        if isinstance(repr_value, BaseModel) and not isinstance(repr_value, Data):
+            return str(repr_value)
+        return repr_value
 
     def build_inputs(self):
         """Builds the inputs for the custom component.
@@ -1548,6 +2003,8 @@ class Component(CustomComponent):
         """
         # Get tools from subclass implementation
         # Handle both sync and async _get_tools methods
+        if type(self)._get_tools is not Component._get_tools:
+            self.require_integration_policy()
         if asyncio.iscoroutinefunction(self._get_tools):
             tools = await self._get_tools()
         else:
@@ -1630,6 +2087,7 @@ class Component(CustomComponent):
             "description": tool.description,
             "tags": tool.tags if hasattr(tool, "tags") and tool.tags else [tool.name],
             "status": True,  # Initialize all tools with status True
+            "approval_actions": tool.metadata.get("approval_actions") or [],  # HITL decisions per action (LE-1447)
             "display_name": tool.metadata.get("display_name", tool.name),
             "display_description": tool.metadata.get("display_description", tool.description),
             "readonly": tool.metadata.get("readonly", False),
@@ -1686,6 +2144,7 @@ class Component(CustomComponent):
                     old = old_by_tag.get(tags[0]) if tags else None
                     if old:
                         item["status"] = old.get("status", True)
+                        item["approval_actions"] = old.get("approval_actions") or []
                         item["name"] = old.get("name", item["name"])
                         # Preserve description only if user customized it
                         old_desc = old.get("description", "")
@@ -1837,7 +2296,8 @@ class Component(CustomComponent):
         - Error handling and cleanup
 
         Message ID Rules:
-        - Messages only have an ID after being stored in the database
+        - Persisted messages get an ID from storage; ephemeral messages get an
+          in-memory ID so streaming events can be correlated
         - If _should_skip_message() returns True, the message is not stored and will not have an ID
         - Always use message.get_id() or message.has_id() to safely check for ID existence
         - Never access message.id directly without checking if it exists first
@@ -1847,8 +2307,8 @@ class Component(CustomComponent):
             id_: Optional message ID (used for event emission, not database storage)
             skip_db_update: If True, only update in-memory and send event, skip DB write.
                            Useful during streaming to avoid excessive DB round-trips.
-                           Note: When skip_db_update=True, the message must already have an ID
-                           (i.e., it must have been stored previously).
+                           Persistent messages must already have a stored ID;
+                           ephemeral messages use their in-memory ID.
 
         Returns:
             Message: The stored message (with ID if stored in database, without ID if skipped)
@@ -1865,17 +2325,25 @@ class Component(CustomComponent):
         # Ensure required fields for message storage are set
         self._ensure_message_required_fields(message)
 
-        # If skip_db_update is True and message already has an ID, skip the DB write
-        # This path is used during agent streaming to avoid excessive DB round-trips
-        # When skip_db_update=True, we require the message to already have an ID
-        # because we're updating an existing message, not creating a new one
+        from wfx.memory.flow_context import should_persist_messages
+
+        # Ephemeral runs still need a stable ID to correlate streamed message
+        # events. This ID stays in memory; astore_message skips the DB write.
+        persist_messages = should_persist_messages()
+        if not persist_messages and not message.has_id():
+            message.id = nanoid.generate()
+
+        # This path avoids DB round-trips during agent streaming. Persisting
+        # runs require an existing stored ID; ephemeral runs use the ID above.
         if skip_db_update:
-            if not message.has_id():
+            if not message.has_id() and persist_messages:
                 msg = (
                     "skip_db_update=True requires the message to already have an ID. "
                     "The message must have been stored in the database previously."
                 )
                 raise ValueError(msg)
+            # Ephemeral runs use the in-memory ID assigned above, so their
+            # streaming events remain correlated without a DB row.
 
             # Create a fresh Message instance for consistency with normal flow
             stored_message = await Message.create(**message.model_dump())
@@ -1895,9 +2363,9 @@ class Component(CustomComponent):
                 if (
                     self._should_stream_message(stored_message, message)
                     and message is not None
-                    and isinstance(message.text, AsyncIterator | Iterator)
+                    and message.text_stream is not None
                 ):
-                    complete_message, usage_data = await self._stream_message(message.text, stored_message)
+                    complete_message, usage_data = await self._stream_message(message.text_stream, stored_message)
                     stored_message.text = complete_message
                     if complete_message:
                         stored_message.properties.state = "complete"
@@ -1924,12 +2392,22 @@ class Component(CustomComponent):
     async def _store_message(self, message: Message) -> Message:
         flow_id: str | None = None
         run_id: str | None = None
+        user_id: str | None = None
         session_metadata = dict(message.session_metadata or {})
         if hasattr(self, "graph"):
+            from wfx.memory.flow_context import resolve_message_owner_id
+
             # Convert UUID to str if needed
             flow_id = str(self.graph.flow_id) if self.graph.flow_id else None
             graph_run_id = str(self.graph.run_id) if self.graph.run_id else None
             run_id = graph_run_id
+            # Stamp the message owner so chat-history retrieval can be scoped to it,
+            # closing cross-user disclosure via session_id collision. On the serving
+            # plane this is the end user (graph.end_user_id); otherwise the executing
+            # user. The read path (_safe_graph_user_id) resolves identically so the
+            # stored owner and the retrieval predicate always agree.
+            owner_id = resolve_message_owner_id(self.graph)
+            user_id = str(owner_id) if owner_id is not None else None
             if self.tracing_service:
                 langfuse_tracer = self.tracing_service.get_tracer("langfuse")
                 langfuse_trace_id = getattr(langfuse_tracer, "langfuse_trace_id", None)
@@ -1941,7 +2419,7 @@ class Component(CustomComponent):
             message.session_metadata = session_metadata
         if run_id and not getattr(message, "run_id", None):
             message.run_id = run_id
-        stored_messages = await astore_message(message, flow_id=flow_id, run_id=run_id)
+        stored_messages = await astore_message(message, flow_id=flow_id, run_id=run_id, user_id=user_id)
         if len(stored_messages) != 1:
             msg = "Only one message can be stored at a time."
             raise ValueError(msg)
@@ -1980,11 +2458,16 @@ class Component(CustomComponent):
             await asyncio.to_thread(_send_event)
 
     def _should_stream_message(self, stored_message: Message, original_message: Message) -> bool:
+        from wfx.memory.flow_context import should_persist_messages
+
+        # An ephemeral (anonymous serving) run never stores messages, so the
+        # stored message has no ID by design — that must not silently downgrade
+        # the caller from token streaming to a single final message.
         return bool(
             hasattr(self, "_event_manager")
             and self._event_manager
-            and stored_message.has_id()
-            and not isinstance(original_message.text, str)
+            and (stored_message.has_id() or not should_persist_messages())
+            and original_message.text_stream is not None
         )
 
     async def _update_stored_message(self, message: Message) -> Message:
@@ -1997,6 +2480,13 @@ class Component(CustomComponent):
             )
 
             message.flow_id = flow_id
+
+        from wfx.memory.flow_context import should_persist_messages
+
+        if not should_persist_messages():
+            # Ephemeral (anonymous serving) run: nothing was stored, so there is
+            # no row to update — return the in-memory message unchanged.
+            return message
 
         message_tables = await aupdate_messages(message)
         if not message_tables:
@@ -2061,8 +2551,9 @@ class Component(CustomComponent):
         if self._event_manager:
             if first_chunk:
                 # Send the initial message only on the first chunk
-                msg_copy = message.model_copy()
+                msg_copy = message.model_copy(update={"properties": message.properties.model_copy(deep=True)})
                 msg_copy.text = complete_message
+                msg_copy.properties.state = "partial"
                 await self._send_message_event(msg_copy, id_=message_id)
             await asyncio.to_thread(
                 self._event_manager.on_token,
@@ -2081,16 +2572,63 @@ class Component(CustomComponent):
         source: Source,
     ) -> Message | None:
         """Send an error message to the frontend."""
+        from wfx.integrations.errors import IntegrationError, _iter_errors
+
         flow_id = self.graph.flow_id if hasattr(self, "graph") else None
         if not session_id:
             return None
+        # AG-UI treats this first error event as terminal, before Vertex can enrich
+        # the raised exception. Include the same diagnosis on the emitted message.
+        from wfx.utils.flow_validation import explain_restricted_component_mismatch
+
+        vertex_data = getattr(self._vertex, "data", None)
+        context_note = (
+            explain_restricted_component_mismatch(vertex_data.get("type"), vertex_data.get("node"))
+            if isinstance(vertex_data, Mapping)
+            else None
+        )
         error_message = ErrorMessage(
             flow_id=flow_id,
             exception=exception,
             session_id=session_id,
             trace_name=trace_name,
             source=source,
+            context_note=context_note,
         )
+        integration_error = next(
+            (error for error in _iter_errors(exception) if isinstance(error, IntegrationError)), None
+        )
+        if (
+            integration_error is not None
+            and self._event_manager is not None
+            and not getattr(getattr(self, "graph", None), "expose_error_details", False)
+        ):
+            # Keep the durable owner diagnostic, but never send its policy keys,
+            # connection handles or traceback to delegated/public consumers.
+            if self._should_skip_message(error_message):
+                return None
+            self._ensure_message_required_fields(error_message)
+            stored_message = await self._store_message(error_message)
+            self._stored_message_id = stored_message.get_id()
+            client_error = IntegrationError(
+                "This flow could not use one of its connections.",
+                hint=integration_error.hint,
+                provider=integration_error.provider,
+                http_status=integration_error.http_status,
+                retryable=integration_error.retryable,
+            )
+            client_error.code = integration_error.code
+            client_message = ErrorMessage(
+                flow_id=flow_id,
+                exception=client_error,
+                session_id=session_id,
+                trace_name=trace_name,
+                source=source,
+                include_traceback=False,
+            )
+            await self._send_message_event(client_message, id_=self._stored_message_id)
+            self.status = stored_message
+            return stored_message
         await self.send_message(error_message)
         return error_message
 

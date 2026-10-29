@@ -10,6 +10,7 @@ import typer
 
 from wfx.upgrade.applier import apply_safe_upgrades
 from wfx.upgrade.checker import CompatibilityReport, build_registry_lookup, check_flow_compatibility
+from wfx.upgrade.registry import UpgradeRegistryError, load_upgrade_registry
 from wfx.utils.flow_envelope import merge_flow_envelope, split_flow_envelope
 
 # ASCII status markers (no Unicode glyphs) so output is safe on Windows cp1252 consoles,
@@ -23,27 +24,18 @@ _STATUS_MARKERS = {
 
 
 def load_registry_from_index() -> dict[str, Any]:
-    """Load the bundled component index and return a flat all_types_dict.
+    """Load core and installed bundle templates for CLI compatibility checks.
 
     Raises:
         typer.Exit: if the bundled registry is empty or missing. Running the checker against
             an empty registry would silently classify *every* node as ``blocked``: a
             tooling-level failure masquerading as a flow-level problem. Fail loudly instead.
     """
-    from wfx.interface.components import _read_component_index
-
-    blob = _read_component_index(None)
-    if not blob or "entries" not in blob:
-        typer.echo(
-            "Error: the bundled component registry is empty or missing, so compatibility "
-            "cannot be checked. Try reinstalling wfx (e.g. `pip install --force-reinstall wfx`).",
-            err=True,
-        )
-        raise typer.Exit(1)
-    all_types: dict[str, Any] = {}
-    for category, components in blob["entries"]:
-        all_types.setdefault(category, {}).update(components)
-    return all_types
+    try:
+        return load_upgrade_registry()
+    except UpgradeRegistryError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
 
 
 def _print_report(report: CompatibilityReport) -> None:

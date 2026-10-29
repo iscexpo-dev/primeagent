@@ -161,7 +161,7 @@ class TestMCPTimeoutConfiguration:
         """Test that update_tools passes timeout when creating MCPStdioClient."""
         server_config = {
             "mode": "Stdio",
-            "command": "test-command",
+            "command": "uvx",
             "args": [],
         }
 
@@ -181,8 +181,11 @@ class TestMCPTimeoutConfiguration:
             mock_client_class.assert_called_once_with(tool_execution_timeout=250)
 
     @pytest.mark.asyncio
-    async def test_update_tools_passes_timeout_to_http_client(self):
+    async def test_update_tools_passes_timeout_to_http_client(self, monkeypatch):
         """Test that update_tools passes timeout when creating MCPStreamableHttpClient."""
+        # The placeholder host is not resolvable; this test exercises timeout plumbing, not URL
+        # safety (which has its own SSRF tests), so disable SSRF validation here.
+        monkeypatch.setenv("PRIMEAGENT_SSRF_PROTECTION_ENABLED", "false")
         server_config = {
             "mode": "Streamable_HTTP",
             "url": "http://test-server",
@@ -208,29 +211,26 @@ class TestMCPTimeoutBehavior:
     """Test timeout behavior and error handling."""
 
     @pytest.mark.asyncio
-    async def test_timeout_error_is_caught_and_retried(self):
-        """Test that timeout errors trigger retry logic."""
+    async def test_timeout_error_is_surfaced_without_retry(self):
+        """A timed-out call may have run on the server, so it is reported instead of sent again."""
         client = MCPStdioClient(tool_execution_timeout=1)
         client._connected = True
         client._connection_params = {"command": "test"}
         client._session_context = "test_context"
 
         mock_session = AsyncMock()
-        # First call times out, second succeeds
         mock_session.call_tool = AsyncMock(side_effect=[asyncio.TimeoutError(), {"result": "success"}])
 
         with (
             patch.object(client, "_get_or_create_session", return_value=mock_session),
             patch("asyncio.wait_for") as mock_wait_for,
         ):
-            # First call times out, second succeeds
             mock_wait_for.side_effect = [asyncio.TimeoutError(), {"result": "success"}]
 
-            result = await client.run_tool("test_tool", {"arg": "value"})
+            with pytest.raises(ValueError, match="not retried"):
+                await client.run_tool("test_tool", {"arg": "value"})
 
-            # Verify retry happened
-            assert mock_wait_for.call_count == 2
-            assert result == {"result": "success"}
+            assert mock_wait_for.call_count == 1
 
     @pytest.mark.asyncio
     async def test_zero_timeout_uses_global_default(self):
@@ -316,7 +316,7 @@ class TestMCPTimeoutBehavior:
 
         server_config = {
             "mode": "Stdio",
-            "command": "test-command",
+            "command": "uvx",
             "args": [],
         }
 
@@ -336,9 +336,13 @@ class TestMCPTimeoutBehavior:
             assert initial_client._tool_execution_timeout == 250
 
     @pytest.mark.asyncio
-    async def test_mcp_sse_client_receives_timeout(self):
+    async def test_mcp_sse_client_receives_timeout(self, monkeypatch):
         """Test that mcp_sse_client (backward compatibility alias) receives timeout."""
         from wfx.base.mcp.util import update_tools
+
+        # The placeholder host is not resolvable; this test exercises timeout plumbing, not URL
+        # safety (which has its own SSRF tests), so disable SSRF validation here.
+        monkeypatch.setenv("PRIMEAGENT_SSRF_PROTECTION_ENABLED", "false")
 
         # Create an SSE client (which is actually a StreamableHttpClient)
         sse_client = MCPStreamableHttpClient(tool_execution_timeout=100)

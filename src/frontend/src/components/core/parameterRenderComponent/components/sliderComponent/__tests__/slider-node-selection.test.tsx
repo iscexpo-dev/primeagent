@@ -24,12 +24,8 @@ beforeAll(() => {
   // during the test without throwing. MouseEvent is a constructible, bubbling
   // stand-in for PointerEvent; the handlers only read event.pointerId, which is
   // harmlessly undefined here.
-  const windowWithPointerEvent = window as unknown as {
-    PointerEvent?: typeof PointerEvent;
-  };
-  if (!windowWithPointerEvent.PointerEvent) {
-    windowWithPointerEvent.PointerEvent =
-      window.MouseEvent as unknown as typeof PointerEvent;
+  if (!("PointerEvent" in window)) {
+    window.PointerEvent = window.MouseEvent as unknown as typeof PointerEvent;
   }
   if (!Element.prototype.setPointerCapture) {
     Element.prototype.setPointerCapture = jest.fn();

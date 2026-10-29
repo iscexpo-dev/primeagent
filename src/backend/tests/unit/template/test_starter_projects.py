@@ -14,6 +14,7 @@ from importlib import import_module
 from pathlib import Path
 
 import pytest
+from primeagent import components
 
 # Import primeagent validation utilities
 from primeagent.utils.template_validation import (
@@ -21,6 +22,61 @@ from primeagent.utils.template_validation import (
     validate_flow_execution,
     validate_template_structure,
 )
+
+# Component modules that ship in optional bundle distributions. A template that
+# wires one of these cannot be built while its bundle is absent, so the
+# build/execute tests skip it instead of failing. The check imports the live
+# distribution, so it turns back into a no-op whenever the bundle is installed.
+_OPTIONAL_BUNDLE_MODULES = {
+    "wfx_arxiv": "wfx_arxiv",
+    "wfx_duckduckgo": "wfx_duckduckgo",
+    "wfx_empiriolabs": "wfx_empiriolabs",
+    "wfx_exa": "wfx_exa",
+    "wfx_firecrawl": "wfx_firecrawl",
+    "wfx_nextplaid": "wfx_nextplaid",
+    "wfx_paddle": "wfx_paddle",
+    "wfx_valkey": "wfx_valkey",
+    "wfx.components.datastax": "wfx_datastax",
+    "wfx.components.openai": "wfx_openai",
+    "wfx.components.oracle": "wfx_oracle",
+}
+
+
+def _wfx_bundles_shim_categories() -> tuple[str, ...]:
+    components_dir = Path(components.__file__).parent
+    return tuple(
+        sorted(
+            init_file.parent.name
+            for init_file in components_dir.glob("*/__init__.py")
+            if 'importlib.import_module("wfx_bundles.' in init_file.read_text(encoding="utf-8")
+        )
+    )
+
+
+_OPTIONAL_BUNDLE_MODULES.update(
+    {f"wfx.components.{category}": "wfx_bundles" for category in _wfx_bundles_shim_categories()}
+)
+
+
+def _template_required_bundles(template_data: dict) -> set[str]:
+    """Return distributions required by optional-bundle nodes in a template."""
+    required = set()
+    for node in template_data.get("data", {}).get("nodes", []):
+        module_path = node.get("data", {}).get("node", {}).get("metadata", {}).get("module", "")
+        for prefix, distribution in _OPTIONAL_BUNDLE_MODULES.items():
+            if module_path.startswith(prefix):
+                required.add(distribution)
+    return required
+
+
+def _template_unavailable_bundle(template_data: dict) -> str | None:
+    """Return the missing distribution if the template needs an absent bundle, else None."""
+    for distribution in sorted(_template_required_bundles(template_data)):
+        try:
+            import_module(distribution)
+        except ImportError:
+            return distribution
+    return None
 
 
 def get_starter_projects_path() -> Path:
@@ -30,14 +86,50 @@ def get_starter_projects_path() -> Path:
 
 def get_template_files():
     """Get all template files for parameterization."""
-    return list(get_starter_projects_path().glob("*.json"))
+    core_templates = get_starter_projects_path().glob("*.json")
+    bundle_templates = Path("src/bundles").glob("**/starter_projects/*.json")
+    return sorted([*core_templates, *bundle_templates])
 
 
 def get_basic_template_files():
     """Get basic template files for parameterization."""
     path = get_starter_projects_path()
-    basic_templates = ["Basic Prompting.json", "Basic Prompt Chaining.json"]
+    basic_templates = ["Basic Prompting.json"]
     return [path / name for name in basic_templates if (path / name).exists()]
+
+
+@pytest.mark.parametrize(
+    "bundle_module",
+    [
+        "wfx_arxiv",
+        "wfx_duckduckgo",
+        "wfx_empiriolabs",
+        "wfx_exa",
+        "wfx_firecrawl",
+        "wfx_nextplaid",
+        "wfx_paddle",
+        "wfx_valkey",
+    ],
+)
+def test_direct_optional_bundle_detection(bundle_module):
+    """Detect standalone bundle module paths in starter project metadata."""
+    template_data = {
+        "data": {
+            "nodes": [
+                {
+                    "data": {
+                        "node": {
+                            "metadata": {
+                                "module": f"{bundle_module}.components.example.ExampleComponent",
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+    assert _template_required_bundles(template_data) == {bundle_module}
 
 
 @pytest.fixture(autouse=True)
@@ -78,10 +170,26 @@ class TestStarterProjects:
             pytest.fail(f"Template structure errors in {template_file.name}:\n{error_msg}")
 
     @pytest.mark.parametrize("template_file", get_template_files(), ids=lambda x: x.name)
+    def test_wfx_bundle_templates_include_install_guidance(self, template_file):
+        """Default-shipped templates that need wfx-bundles must explain how to install it."""
+        with template_file.open(encoding="utf-8") as f:
+            template_data = json.load(f)
+
+        if "wfx_bundles" in _template_required_bundles(template_data):
+            assert "pip install wfx-bundles" in template_data.get("description", ""), (
+                f"{template_file.name} uses optional wfx-bundles components but its description "
+                "does not tell users how to install them"
+            )
+
+    @pytest.mark.parametrize("template_file", get_template_files(), ids=lambda x: x.name)
     def test_template_can_build_flow(self, template_file):
         """Test template can be built into working flow."""
         with template_file.open(encoding="utf-8") as f:
             template_data = json.load(f)
+
+        unavailable = _template_unavailable_bundle(template_data)
+        if unavailable:
+            pytest.skip(f"{template_file.name} needs the optional {unavailable} bundle")
 
         errors = validate_flow_can_build(template_data, template_file.name)
         if errors:
@@ -94,6 +202,10 @@ class TestStarterProjects:
         """Test template using the validate endpoint."""
         with template_file.open(encoding="utf-8") as f:
             template_data = json.load(f)
+
+        unavailable = _template_unavailable_bundle(template_data)
+        if unavailable:
+            pytest.skip(f"{template_file.name} needs the optional {unavailable} bundle")
 
         errors = await validate_flow_execution(client, template_data, template_file.name, logged_in_headers)
         if errors:
@@ -108,6 +220,10 @@ class TestStarterProjects:
             with template_file.open(encoding="utf-8") as f:
                 template_data = json.load(f)
 
+            unavailable = _template_unavailable_bundle(template_data)
+            if unavailable:
+                pytest.skip(f"{template_file.name} needs the optional {unavailable} bundle")
+
             errors = await validate_flow_execution(client, template_data, template_file.name, logged_in_headers)
             if errors:
                 error_msg = "\n".join(errors)
@@ -121,6 +237,10 @@ class TestStarterProjects:
         """Test that field_order in starter project JSON matches the actual component's input order."""
         with template_file.open(encoding="utf-8") as f:
             template_data = json.load(f)
+
+        unavailable = _template_unavailable_bundle(template_data)
+        if unavailable:
+            pytest.skip(f"{template_file.name} needs the optional {unavailable} bundle")
 
         errors = []
         for node in template_data.get("data", {}).get("nodes", []):

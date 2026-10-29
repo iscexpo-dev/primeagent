@@ -1,11 +1,15 @@
 import { expect, test } from "../../fixtures";
 import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
 import { TEXTS } from "../../utils/constants/texts";
+import { openFlowCard } from "../../utils/flow/open-flow-card";
+import { selectStarterTemplate } from "../../utils/flow/select-starter-template";
 import { renameFlow } from "../../utils/rename-flow";
 
 test(
   "user should be able to edit flow name by clicking on the header or on the main page",
-  { tag: ["@release", "@workspace", "@components"] },
+  {
+    tag: ["@release", "@workspace", "@components"],
+  },
   async ({ page }) => {
     const randomName = Math.random().toString(36).substring(2, 15);
     const randomName2 = Math.random().toString(36).substring(2, 15);
@@ -14,9 +18,7 @@ test(
 
     await awaitBootstrapTest(page);
 
-    await page
-      .getByRole("heading", { name: TEXTS.templateBasicPrompting })
-      .click();
+    await selectStarterTemplate(page, TEXTS.templateBasicPrompting);
 
     await renameFlow(page, { flowName: randomName });
 
@@ -37,7 +39,7 @@ test(
 
     expect(await page.getByText(randomName).count()).toBe(1);
 
-    await page.getByText(randomName).click();
+    await openFlowCard(page, randomName);
 
     await renameFlow(page, { flowName: randomName2 });
 
@@ -58,7 +60,7 @@ test(
 
     expect(await page.getByText(randomName2).count()).toBe(1);
 
-    await page.getByText(randomName2).click();
+    await openFlowCard(page, randomName2);
 
     await renameFlow(page, { flowName: randomName3 });
 
@@ -79,7 +81,7 @@ test(
 
     expect(await page.getByText(randomName3).count()).toBe(1);
 
-    await page.getByText(randomName3).click();
+    await openFlowCard(page, randomName3);
 
     await renameFlow(page, { flowName: randomName4 });
 

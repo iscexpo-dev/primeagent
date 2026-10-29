@@ -13,9 +13,9 @@ if TYPE_CHECKING:
 
 @pytest.mark.xfail(reason="These components trigger aiohttp import. Should refactor LLMRouter")
 def test_graph_state_model():
-    from wfx.components.openai.openai_chat_model import OpenAIModelComponent
     from wfx.components.processing import PromptComponent
     from wfx.components.processing.converter import TypeConverterComponent
+    from wfx_openai.components.openai.openai_chat_model import OpenAIModelComponent
 
     session_id = "test_session_id"
     template = """{context}

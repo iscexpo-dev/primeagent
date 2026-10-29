@@ -4,22 +4,31 @@ This module provides the HTTP endpoints for the Primeagent Assistant.
 All business logic is delegated to service modules.
 """
 
+import asyncio
+import contextlib
+import json
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from wfx.base.models.unified_models import (
     get_all_variables_for_provider,
-    get_model_provider_variable_mapping,
     get_provider_required_variable_keys,
+    get_provider_secret_variable_key,
     get_unified_models_detailed,
+    is_known_model_provider,
 )
 from wfx.log.logger import logger
+from wfx.services.deps import get_settings_service, session_scope
+from wfx.services.model_provider_policy import ModelProviderPolicyPurpose
 
-from primeagent.agentic.api.schemas import AssistantRequest
+from primeagent.agentic.api.deps import require_agentic_component_admin, require_agentic_experience
+from primeagent.agentic.api.schemas import AssistantRequest, HeadlessAssistantRequest
+from primeagent.agentic.helpers.sse import format_complete_event, format_error_event
 from primeagent.agentic.services.assistant_service import (
     execute_flow_with_validation,
     execute_flow_with_validation_streaming,
@@ -31,13 +40,18 @@ from primeagent.agentic.services.flow_types import (
 )
 from primeagent.agentic.services.provider_service import (
     PREFERRED_PROVIDERS,
+    build_live_only_provider_entries,
     get_default_model,
     get_enabled_providers_for_user,
     list_installed_tool_calling_models,
 )
-from primeagent.api.utils.core import CurrentActiveUser, DbSession
+from primeagent.api.utils.core import CurrentActiveUser, DbSession, release_db_transaction
+from primeagent.services.model_provider_policy_scope import scoped_model_provider_policy_for_flow
 
-router = APIRouter(prefix="/agentic", tags=["Agentic"])
+router = APIRouter(prefix="/agentic", tags=["Agentic"], include_in_schema=False)
+
+
+_ASSISTANT_EXECUTION_DEPENDENCIES = [Depends(require_agentic_experience), Depends(require_agentic_component_admin)]
 
 
 @dataclass(frozen=True)
@@ -46,7 +60,7 @@ class _AssistantContext:
 
     provider: str
     model_name: str
-    api_key_name: str
+    api_key_name: str | None
     session_id: str
     global_vars: dict[str, str]
     max_retries: int
@@ -62,8 +76,11 @@ async def _resolve_assistant_context(
     Raises:
         HTTPException: If provider is not configured or API key is missing.
     """
-    provider_variable_map = get_model_provider_variable_mapping()
-    enabled_providers, _ = await get_enabled_providers_for_user(user_id, session)
+    enabled_providers, _ = await get_enabled_providers_for_user(
+        user_id,
+        session,
+        purpose=ModelProviderPolicyPurpose.USE,
+    )
 
     if not enabled_providers:
         raise HTTPException(
@@ -86,8 +103,12 @@ async def _resolve_assistant_context(
             detail=f"Provider '{provider}' is not configured. Available providers: {enabled_providers}",
         )
 
-    api_key_name = provider_variable_map.get(provider)
-    if not api_key_name:
+    # A provider configured by connection settings alone (Ollama's base URL, a local
+    # OpenAI-compatible server) declares no secret, so an absent key name is expected
+    # and says nothing about recognition. Only a name the model catalog does not know
+    # is genuinely unknown here.
+    api_key_name = get_provider_secret_variable_key(provider)
+    if not api_key_name and not is_known_model_provider(provider):
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
     model_name = request.model_name or get_default_model(provider, user_id=user_id) or ""
@@ -115,6 +136,11 @@ async def _resolve_assistant_context(
         "PROVIDER": provider,
     }
 
+    # Seeded here (not per-endpoint) so /assist and /execute/{flow_name}
+    # honor the budget the same way /assist/stream does.
+    if request.iterations_limit is not None:
+        global_vars["ITERATIONS_LIMIT"] = str(request.iterations_limit)
+
     # Inject all provider variables into the global context
     global_vars.update(provider_vars)
 
@@ -131,7 +157,7 @@ async def _resolve_assistant_context(
     )
 
 
-async def _validate_flow_access(flow_id: str | None, user_id: UUID, session: AsyncSession) -> None:
+async def _validate_flow_access(flow_id: str | None, user_id: UUID, session: AsyncSession):
     """Reject an unknown or not-owned flow_id before the model is invoked.
 
     A missing flow_id is allowed (the assistant runs with no canvas context).
@@ -139,8 +165,8 @@ async def _validate_flow_access(flow_id: str | None, user_id: UUID, session: Asy
     per-user 404 of the /run and webhook endpoints; not-found and cross-user
     both surface 404 so a flow's existence is not leaked by id.
     """
-    if not flow_id:
-        return
+    if flow_id is None:
+        return None
 
     from primeagent.services.database.models.flow import Flow
 
@@ -152,9 +178,10 @@ async def _validate_flow_access(flow_id: str | None, user_id: UUID, session: Asy
     flow = await session.get(Flow, flow_uuid)
     if flow is None or (flow.user_id is not None and str(flow.user_id) != str(user_id)):
         raise HTTPException(status_code=404, detail="Flow not found.")
+    return flow
 
 
-@router.post("/execute/{flow_name}")
+@router.post("/execute/{flow_name}", dependencies=_ASSISTANT_EXECUTION_DEPENDENCIES)
 async def execute_named_flow(
     flow_name: str,
     request: AssistantRequest,
@@ -167,25 +194,35 @@ async def execute_named_flow(
     context. Resolving it here (instead of running the raw file) turns a
     silent 500 into a successful run, or a clear 4xx when no provider is set.
     """
-    ctx = await _resolve_assistant_context(request, current_user.id, session)
+    flow = await _validate_flow_access(request.flow_id, current_user.id, session)
+    with scoped_model_provider_policy_for_flow(
+        flow,
+        user_id=current_user.id,
+        is_superuser=bool(current_user.is_superuser),
+    ):
+        ctx = await _resolve_assistant_context(request, current_user.id, session)
 
-    global_vars = dict(ctx.global_vars)
-    if request.component_id:
-        global_vars["COMPONENT_ID"] = request.component_id
-    if request.field_name:
-        global_vars["FIELD_NAME"] = request.field_name
+        # The flow run below can wait on a model for minutes; don't hold the
+        # request transaction (and its pooled connection) open across it (#14445).
+        await release_db_transaction(session)
 
-    return await execute_flow_file(
-        flow_filename=f"{flow_name}.json",
-        input_value=request.input_value,
-        global_variables=global_vars,
-        verbose=True,
-        user_id=str(current_user.id),
-        session_id=ctx.session_id,
-        provider=ctx.provider,
-        model_name=ctx.model_name,
-        api_key_var=ctx.api_key_name,
-    )
+        global_vars = dict(ctx.global_vars)
+        if request.component_id:
+            global_vars["COMPONENT_ID"] = request.component_id
+        if request.field_name:
+            global_vars["FIELD_NAME"] = request.field_name
+
+        return await execute_flow_file(
+            flow_filename=f"{flow_name}.json",
+            input_value=request.input_value,
+            global_variables=global_vars,
+            verbose=True,
+            user_id=str(current_user.id),
+            session_id=ctx.session_id,
+            provider=ctx.provider,
+            model_name=ctx.model_name,
+            api_key_var=ctx.api_key_name,
+        )
 
 
 @router.get("/check-config")
@@ -195,10 +232,19 @@ async def check_assistant_config(
 ) -> dict:
     """Check if the Primeagent Assistant is properly configured.
 
-    Returns available providers with their configured status and available models.
+    Returns available providers with their configured status and available models, plus
+    ``enabled``: whether ``agentic_experience`` gates the assistant off. Provider config and
+    the feature gate are independent failure modes -- without ``enabled`` a caller cannot tell
+    "no provider connected" from "feature disabled", and every /assist call 404s with no way
+    to explain why. This probe stays ungated so that distinction survives the gate.
     """
     user_id = current_user.id
-    enabled_providers, _ = await get_enabled_providers_for_user(user_id, session)
+    enabled = get_settings_service().settings.agentic_experience
+    enabled_providers, _ = await get_enabled_providers_for_user(
+        user_id,
+        session,
+        purpose=ModelProviderPolicyPurpose.CONFIGURE,
+    )
 
     all_providers = []
 
@@ -249,6 +295,17 @@ async def check_assistant_config(
                     }
                 )
 
+    # Live providers with an all-deprecated static catalog (e.g. IBM WatsonX) are dropped above
+    # before their live fetch runs; re-add them from live tool-calling models.
+    if enabled_providers:
+        all_providers.extend(
+            build_live_only_provider_entries(
+                enabled_providers,
+                {p["name"] for p in all_providers},
+                user_id,
+            )
+        )
+
     default_provider = None
     default_model = None
 
@@ -268,6 +325,7 @@ async def check_assistant_config(
         default_model = all_providers[0]["default_model"]
 
     return {
+        "enabled": enabled,
         "configured": len(enabled_providers) > 0,
         "configured_providers": enabled_providers,
         "providers": all_providers,
@@ -276,44 +334,30 @@ async def check_assistant_config(
     }
 
 
-@router.post("/assist")
+@router.post("/assist", dependencies=_ASSISTANT_EXECUTION_DEPENDENCIES)
 async def assist(
     request: AssistantRequest,
     current_user: CurrentActiveUser,
     session: DbSession,
 ) -> dict:
     """Chat with the Primeagent Assistant."""
-    await _validate_flow_access(request.flow_id, current_user.id, session)
-    ctx = await _resolve_assistant_context(request, current_user.id, session)
+    flow = await _validate_flow_access(request.flow_id, current_user.id, session)
+    with scoped_model_provider_policy_for_flow(
+        flow,
+        user_id=current_user.id,
+        is_superuser=bool(current_user.is_superuser),
+    ):
+        # Scope is bound before provider discovery so a denial cannot inspect
+        # provider variables, load credentials, or probe a live catalog.
+        ctx = await _resolve_assistant_context(request, current_user.id, session)
 
-    logger.info(f"Executing {PRIMEAGENT_ASSISTANT_FLOW} with {ctx.provider}/{ctx.model_name}")
+        logger.info(f"Executing {PRIMEAGENT_ASSISTANT_FLOW} with {ctx.provider}/{ctx.model_name}")
 
-    return await execute_flow_with_validation(
-        flow_filename=PRIMEAGENT_ASSISTANT_FLOW,
-        input_value=request.input_value or "",
-        global_variables=ctx.global_vars,
-        max_retries=ctx.max_retries,
-        user_id=str(current_user.id),
-        session_id=ctx.session_id,
-        provider=ctx.provider,
-        model_name=ctx.model_name,
-        api_key_var=ctx.api_key_name,
-    )
+        # The assistant run below can wait on a model for minutes; don't hold the
+        # request transaction (and its pooled connection) open across it (#14445).
+        await release_db_transaction(session)
 
-
-@router.post("/assist/stream")
-async def assist_stream(
-    request: AssistantRequest,
-    http_request: Request,
-    current_user: CurrentActiveUser,
-    session: DbSession,
-) -> StreamingResponse:
-    """Chat with the Primeagent Assistant with streaming progress updates."""
-    await _validate_flow_access(request.flow_id, current_user.id, session)
-    ctx = await _resolve_assistant_context(request, current_user.id, session)
-
-    return StreamingResponse(
-        execute_flow_with_validation_streaming(
+        return await execute_flow_with_validation(
             flow_filename=PRIMEAGENT_ASSISTANT_FLOW,
             input_value=request.input_value or "",
             global_variables=ctx.global_vars,
@@ -323,11 +367,137 @@ async def assist_stream(
             provider=ctx.provider,
             model_name=ctx.model_name,
             api_key_var=ctx.api_key_name,
-            is_disconnected=http_request.is_disconnected,
-        ),
+        )
+
+
+@router.post("/assist/stream", dependencies=_ASSISTANT_EXECUTION_DEPENDENCIES)
+async def assist_stream(
+    request: AssistantRequest,
+    http_request: Request,
+    current_user: CurrentActiveUser,
+    session: DbSession,
+) -> StreamingResponse:
+    """Chat with the Primeagent Assistant with streaming progress updates."""
+    flow = await _validate_flow_access(request.flow_id, current_user.id, session)
+    with scoped_model_provider_policy_for_flow(
+        flow,
+        user_id=current_user.id,
+        is_superuser=bool(current_user.is_superuser),
+    ):
+        ctx = await _resolve_assistant_context(request, current_user.id, session)
+
+    # Dependency teardown only runs after the SSE stream finishes, so without
+    # this commit the request transaction (and its pooled connection) would
+    # stay open for the assistant's whole streaming run (#14445).
+    await release_db_transaction(session)
+
+    async def _scoped_stream() -> AsyncIterator[str]:
+        with scoped_model_provider_policy_for_flow(
+            flow,
+            user_id=current_user.id,
+            is_superuser=bool(current_user.is_superuser),
+        ):
+            async for event in execute_flow_with_validation_streaming(
+                flow_filename=PRIMEAGENT_ASSISTANT_FLOW,
+                input_value=request.input_value or "",
+                global_variables=ctx.global_vars,
+                max_retries=ctx.max_retries,
+                user_id=str(current_user.id),
+                session_id=ctx.session_id,
+                provider=ctx.provider,
+                model_name=ctx.model_name,
+                api_key_var=ctx.api_key_name,
+                is_disconnected=http_request.is_disconnected,
+                is_superuser=bool(current_user.is_superuser),
+                history_limit=request.history_limit,
+                iterations_limit=request.iterations_limit,
+            ):
+                yield event
+
+    return StreamingResponse(
+        _scoped_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         },
+    )
+
+
+@router.post("/assist/run", dependencies=_ASSISTANT_EXECUTION_DEPENDENCIES, include_in_schema=False)
+async def assist_headless(
+    request: HeadlessAssistantRequest,
+    current_user: CurrentActiveUser,
+    session: DbSession,
+) -> StreamingResponse:
+    """Run the assistant headlessly: canvas changes are applied, not proposed.
+
+    ``/assist/stream`` leaves a canvas change as a proposal the user approves in
+    a UI card. A headless caller (the MCP ``run_assistant`` tool) has no card, so
+    its edits would be silently dropped — this route persists them through
+    ``run_assistant_and_persist`` and streams the same ``progress`` events,
+    ending in ``complete`` (or ``error``).
+    """
+    # Local import: assistant_runner imports this module's helpers, so a top-level
+    # import here would close the cycle at startup.
+    from primeagent.agentic.utils.assistant_runner import run_assistant_and_persist
+
+    if request.flow_id:
+        await _validate_flow_access(request.flow_id, current_user.id, session)
+
+    async def _stream() -> AsyncIterator[str]:
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+        async def on_progress(event: dict) -> None:
+            await queue.put(event)
+
+        async def _drive() -> dict:
+            try:
+                # ``session`` is function-scoped: FastAPI closes it when the
+                # handler returns, which is before this generator runs. Reusing
+                # it here would silently re-acquire a connection outside the
+                # request's transaction, with no teardown commit behind the
+                # writes. Own the scope explicitly instead.
+                async with session_scope() as stream_session:
+                    return await run_assistant_and_persist(
+                        session=stream_session,
+                        user_id=current_user.id,
+                        instruction=request.instruction,
+                        flow_id=request.flow_id,
+                        provider=request.provider,
+                        model_name=request.model_name,
+                        session_id=request.session_id,
+                        on_progress=on_progress,
+                    )
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(_drive())
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                # Re-emit the assistant's own progress event verbatim: it already carries
+                # the step/attempt shape the SSE formatter would rebuild.
+                yield f"data: {json.dumps(event)}\n\n"
+            try:
+                result = await task
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Headless assistant run failed")
+                yield format_error_event(str(exc))
+                return
+            yield format_complete_event(result)
+        finally:
+            # Client disconnect cancels this generator mid-yield; without this the
+            # orphaned task keeps writing to the DB on a tearing-down session.
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )

@@ -44,7 +44,7 @@ export const useDeleteMCPServer: useMutationFunctionType<
 
   const mutation: UseMutationResult<
     DeleteMCPServerResponse,
-    any,
+    unknown,
     MCPServerType
   > = mutate(["useDeleteMCPServer"], deleteMCPServer, {
     ...options,

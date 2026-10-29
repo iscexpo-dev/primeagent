@@ -2,7 +2,7 @@
 
 Wraps an :class:`asyncio.Task` so callers can start a flow run and poll or
 await it without blocking the event loop.  Mirrors the ``BackgroundJob`` API
-from khulnasoft/sdk PR #1 (Janardan Singh Kavia, IBM Corp., Apache 2.0)
+from khulnasoft-bot/sdk PR #1 (Janardan Singh Kavia, IBM Corp., Apache 2.0)
 adapted for the Primeagent V1 ``/api/v1/run/{id}`` endpoint.
 
 Typical usage::
@@ -38,7 +38,7 @@ class BackgroundJob:
     network request runs in an :class:`asyncio.Task` so the caller's event
     loop remains free.
 
-    Adapted from ``BackgroundJob`` in khulnasoft/sdk PR #1
+    Adapted from ``BackgroundJob`` in khulnasoft-bot/sdk PR #1
     (Janardan Singh Kavia, IBM Corp., Apache 2.0).
     """
 

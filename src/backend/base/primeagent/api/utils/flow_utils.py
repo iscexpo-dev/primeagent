@@ -2,32 +2,43 @@
 
 from __future__ import annotations
 
+import re
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import HTTPException
 from sqlalchemy import delete
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from wfx.graph.graph.base import Graph
-from wfx.log.logger import logger
 from wfx.services.deps import session_scope
 
+from primeagent.api.utils.execution_principal import stamp_execution_principal
+from primeagent.services.authorization.public_access import (
+    PublicResourceAction,
+    authorize_public_flow_access,
+    public_execution_user,
+)
 from primeagent.services.database.models.auth.authz import AuthzShare
 from primeagent.services.database.models.deployment.exceptions import (
     araise_if_deployment_guard_error_or_skip,
 )
 from primeagent.services.database.models.deployment.guards import check_flow_has_deployed_versions
-from primeagent.services.database.models.flow.model import Flow
+from primeagent.services.database.models.flow.model import Flow, is_virtual_flow_id
 from primeagent.services.database.models.flow_version.model import FlowVersion
 from primeagent.services.database.models.message.model import MessageTable
 from primeagent.services.database.models.traces.model import SpanTable, TraceTable
 from primeagent.services.database.models.transactions.model import TransactionTable
-from primeagent.services.database.models.user.model import User
+from primeagent.services.database.models.trigger.model import Trigger
+from primeagent.services.database.models.user.model import UserRead
 from primeagent.services.database.models.vertex_builds.model import VertexBuildTable
+from primeagent.services.triggers.cleanup import delete_triggers
 
 if TYPE_CHECKING:
+    from wfx.services.authorization.base import ExecutionPrincipal
+
     from primeagent.services.chat.service import ChatService
+    from primeagent.services.memory_base.flow_cleanup import FlowMemoryBaseCleanup
 
 
 async def _get_flow_name(flow_id: uuid.UUID) -> str:
@@ -40,7 +51,12 @@ async def _get_flow_name(flow_id: uuid.UUID) -> str:
 
 
 async def build_graph_from_data(flow_id: uuid.UUID | str, payload: dict, **kwargs):
-    """Build and cache the graph."""
+    """Build and cache the graph.
+
+    ``execution_principal`` (keyword) is the per-family identity that governs
+    dependency/connection resolution. Callers that omit it leave the graph on
+    ``ExecutionPrincipal.unknown()``, which fails closed for every connection.
+    """
     # Get flow name
     if "flow_name" not in kwargs:
         flow_name = await _get_flow_name(flow_id if isinstance(flow_id, uuid.UUID) else uuid.UUID(flow_id))
@@ -50,6 +66,8 @@ async def build_graph_from_data(flow_id: uuid.UUID | str, payload: dict, **kwarg
     session_id = kwargs.get("session_id") or str_flow_id
 
     graph = Graph.from_payload(payload, str_flow_id, flow_name, kwargs.get("user_id"))
+    if (execution_principal := kwargs.get("execution_principal")) is not None:
+        stamp_execution_principal(graph, execution_principal)
     for vertex_id in graph.has_session_id_vertices:
         vertex = graph.get_vertex(vertex_id)
         if vertex is None:
@@ -59,6 +77,9 @@ async def build_graph_from_data(flow_id: uuid.UUID | str, payload: dict, **kwarg
             vertex.update_raw_params({"session_id": session_id}, overwrite=True)
 
     graph.session_id = session_id
+    # Pin the caller's run_id before initialize_run so HITL resume reuses the pre-pause trace.
+    if (caller_run_id := kwargs.get("run_id")) is not None:
+        graph.set_run_id(caller_run_id)
     await graph.initialize_run()
     return graph
 
@@ -83,18 +104,55 @@ async def build_and_cache_graph_from_data(
     flow_id: uuid.UUID | str,
     chat_service: ChatService,
     graph_data: dict,
+    *,
+    execution_principal: ExecutionPrincipal | None = None,
 ):  # -> Graph | Any:
-    """Build and cache the graph."""
+    """Build and cache the graph.
+
+    This is the Playground's primary build seam, so it carries the same
+    ``execution_principal`` contract as ``build_graph_from_data``.
+    """
     # Convert flow_id to str if it's UUID
     str_flow_id = str(flow_id) if isinstance(flow_id, uuid.UUID) else flow_id
     graph = Graph.from_payload(graph_data, str_flow_id)
+    if execution_principal is not None:
+        stamp_execution_principal(graph, execution_principal)
     await chat_service.set_cache(str_flow_id, graph)
     return graph
 
 
-async def cascade_delete_flow(session: AsyncSession, flow_id: uuid.UUID) -> None:
+async def cascade_delete_flow(
+    session: AsyncSession,
+    flow_id: uuid.UUID,
+    *,
+    memory_base_cleanups: list[FlowMemoryBaseCleanup] | None = None,
+) -> bool:
+    """Delete a flow and its related rows, returning whether the flow was removed.
+
+    When supplied, ``memory_base_cleanups`` collects the external-resource handles
+    for the flow's Memory Bases. The caller must pass those handles to
+    :func:`~primeagent.services.memory_base.flow_cleanup.finalize_flow_memory_base_cleanup`
+    only after the transaction commits, and discard them if it rolls back.
+    """
+    if is_virtual_flow_id(flow_id):
+        # Deleting a colliding Flow would also cascade through database foreign keys.
+        raise HTTPException(status_code=400, detail="UUID5 flow IDs are reserved for public execution histories.")
+    # Imported lazily so this module (loaded early, via ``api.utils``) stays free
+    # of the memory-base service import chain.
+    from primeagent.services.knowledge_base_storage.runtime import StorageUnavailableError
+    from primeagent.services.memory_base.flow_cleanup import purge_flow_memory_bases
+
     try:
         await check_flow_has_deployed_versions(session, flow_id=flow_id)
+        # Reclaim the flow's Memory Bases first: this drops the message_ingestion_record
+        # rows that reference this flow's messages, so the MessageTable delete below
+        # cannot trip an FK constraint. Returns handles for the post-commit external
+        # teardown of remote collections + local KB directories.
+        flow_memory_base_cleanups = await purge_flow_memory_bases(session, flow_id)
+        # Remove trigger pins before versions, and payloads even when SQLite
+        # foreign-key enforcement is disabled.
+        trigger_ids = (await session.exec(select(Trigger.id).where(Trigger.flow_id == flow_id))).all()
+        await delete_triggers(session, trigger_ids=trigger_ids)
         # TODO: Verify if deleting messages is safe in terms of session id relevance
         # If we delete messages directly, rather than setting flow_id to null,
         # it might cause unexpected behaviors because the session id could still be
@@ -106,9 +164,7 @@ async def cascade_delete_flow(session: AsyncSession, flow_id: uuid.UUID) -> None
         # by default (requires PRAGMA foreign_keys = ON), and this function follows
         # the existing pattern of explicitly deleting all child records.
         await session.exec(delete(FlowVersion).where(FlowVersion.flow_id == flow_id))
-        # span.trace_id FK lacks ON DELETE CASCADE in the DDL, so spans must
-        # be removed before traces to avoid an FK violation under
-        # PRAGMA foreign_keys=ON.
+        # span.trace_id lacks ON DELETE CASCADE, so remove spans first.
         trace_ids = (await session.exec(select(TraceTable.id).where(TraceTable.flow_id == flow_id))).all()
         if trace_ids:
             await session.exec(delete(SpanTable).where(col(SpanTable.trace_id).in_(trace_ids)))
@@ -121,7 +177,9 @@ async def cascade_delete_flow(session: AsyncSession, flow_id: uuid.UUID) -> None
         await session.exec(
             delete(AuthzShare).where(AuthzShare.resource_type == "flow").where(AuthzShare.resource_id == flow_id)
         )
-        await session.exec(delete(Flow).where(Flow.id == flow_id))
+        result = await session.exec(delete(Flow).where(Flow.id == flow_id))
+    except StorageUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as e:
         await araise_if_deployment_guard_error_or_skip(
             e,
@@ -129,19 +187,66 @@ async def cascade_delete_flow(session: AsyncSession, flow_id: uuid.UUID) -> None
         )
         msg = f"Unable to cascade delete flow: {flow_id}"
         raise RuntimeError(msg, e) from e
+    if memory_base_cleanups is not None:
+        memory_base_cleanups.extend(flow_memory_base_cleanups)
+    return result.rowcount == 1
 
 
-def compute_virtual_flow_id(identifier: str | uuid.UUID, flow_id: uuid.UUID) -> uuid.UUID:
+# Public flow file paths must be ``{source_flow_id}/{safe_basename}`` — uploads
+# under that namespace are the only legitimate inputs for an unauthenticated
+# build. Anything else (absolute paths, traversal, foreign flow_ids) is a
+# probe at the arbitrary-file-read class of bug (GHSA-rcjh-r59h-gq37).
+_PUBLIC_FILE_PATH_RE = re.compile(
+    r"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/([^/\\]+)$"
+)
+_PUBLIC_FILE_REJECTED_SUBSTRINGS = ("\x00", "..", "\\")
+
+
+def validate_public_files(files: list[str] | None, source_flow_id: uuid.UUID) -> None:
+    """Reject file references that aren't ``{source_flow_id}/{basename}``.
+
+    Mitigates GHSA-rcjh-r59h-gq37: an unauthenticated build must not be
+    able to address files outside its own flow's storage namespace.
+    Called from any endpoint that accepts caller-supplied file references
+    under a public-access boundary.
+    """
+    if not files:
+        return
+    expected_flow_id = str(source_flow_id).lower()
+    for entry in files:
+        if not isinstance(entry, str) or not entry:
+            raise HTTPException(status_code=400, detail="Invalid file entry")
+        if any(token in entry for token in _PUBLIC_FILE_REJECTED_SUBSTRINGS):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+        match = _PUBLIC_FILE_PATH_RE.match(entry)
+        if not match:
+            raise HTTPException(status_code=400, detail="Invalid file path format")
+        flow_id_segment, basename = match.group(1), match.group(2)
+        if flow_id_segment.lower() != expected_flow_id:
+            raise HTTPException(status_code=400, detail="File not in this flow's namespace")
+        if basename in (".", ".."):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+
+def compute_virtual_flow_id(
+    identifier: str | uuid.UUID,
+    flow_id: uuid.UUID,
+    *,
+    principal_type: Literal["user", "client"] | None = None,
+) -> uuid.UUID:
     """Compute a deterministic virtual flow ID for session/message isolation.
 
     Args:
         identifier: A unique identifier (user_id for authenticated users, client_id for anonymous).
         flow_id: The original flow ID.
+        principal_type: Optional identity domain for public-flow callers. Authenticated
+            user IDs and anonymous client IDs must never share a UUID namespace.
 
     Returns:
         A deterministic UUID v5 derived from the identifier and flow_id.
     """
-    return uuid.uuid5(uuid.NAMESPACE_DNS, f"{identifier}_{flow_id}")
+    namespaced_identifier = f"{principal_type}:{identifier}" if principal_type else str(identifier)
+    return uuid.uuid5(uuid.NAMESPACE_DNS, f"{namespaced_identifier}_{flow_id}")
 
 
 def scope_session_to_namespace(session: str | None, namespace: str) -> str | None:
@@ -168,14 +273,15 @@ async def verify_public_flow_and_get_user(
     flow_id: uuid.UUID,
     client_id: str | None,
     authenticated_user_id: uuid.UUID | None = None,
-) -> tuple[User, uuid.UUID]:
+    request_host: str | None = None,
+) -> tuple[UserRead, uuid.UUID]:
     """Verify a public flow request and generate a deterministic flow ID.
 
     This utility function:
     1. Checks that a client_id cookie or authenticated_user_id is provided
-    2. Verifies the flow exists and is marked as PUBLIC
+    2. Verifies an explicit or compatibility-derived PUBLIC grant
     3. Creates a deterministic UUID based on the identifier and original flow_id
-    4. Retrieves the flow owner user for permission purposes
+    4. Returns the stable non-user execution principal
 
     When an authenticated_user_id is provided, it takes precedence over client_id
     for UUID v5 generation. This enables DB-persisted sessions for logged-in users
@@ -185,45 +291,41 @@ async def verify_public_flow_and_get_user(
         flow_id: The original flow ID to verify
         client_id: The client ID from the request cookie
         authenticated_user_id: The authenticated user's ID (takes precedence over client_id)
+        request_host: Trusted request hostname supplied to the tenant-resolution plugin seam.
 
     Returns:
-        tuple: (flow owner user, deterministic flow ID for tracking)
+        tuple: (anonymous execution principal, deterministic flow ID for tracking)
 
     Raises:
         HTTPException:
             - 400 if neither client_id nor authenticated_user_id is provided
-            - 403 if flow doesn't exist or isn't public
-            - 403 if unable to retrieve the flow owner user
-            - 403 if user is not found for public flow
+            - 404 if the flow or its direct-link grant is unavailable
     """
     if not client_id and not authenticated_user_id:
         raise HTTPException(status_code=400, detail="No client_id cookie found")
 
-    # Check if the flow is public
+    # Load only the exact direct-link resource; this path never enumerates flows.
     async with session_scope() as session:
-        from sqlmodel import select
-
-        from primeagent.services.database.models.flow.model import AccessTypeEnum, Flow
-
         flow = (await session.exec(select(Flow).where(Flow.id == flow_id))).first()
-        if not flow or flow.access_type is not AccessTypeEnum.PUBLIC:
-            raise HTTPException(status_code=403, detail="Flow is not public")
+        if flow is None:
+            raise HTTPException(status_code=404, detail="Flow not found")
+        await authorize_public_flow_access(
+            flow=flow,
+            action=PublicResourceAction.EXECUTE,
+            request_host=request_host,
+            session=session,
+        )
 
-    # Use authenticated user_id for deterministic UUID when available, otherwise client_id
-    identifier = str(authenticated_user_id) if authenticated_user_id else client_id
-    new_flow_id = compute_virtual_flow_id(identifier, flow_id)
+    # Use authenticated user_id for deterministic UUID when available, otherwise client_id.
+    # Keep the branches explicit so identifier is non-optional at the UUID boundary.
+    if authenticated_user_id is not None:
+        identifier = str(authenticated_user_id)
+        principal_type: Literal["user", "client"] = "user"
+    else:
+        if client_id is None:
+            raise HTTPException(status_code=400, detail="No client_id cookie found")
+        identifier = client_id
+        principal_type = "client"
+    new_flow_id = compute_virtual_flow_id(identifier, flow_id, principal_type=principal_type)
 
-    # Get the user associated with the flow
-    try:
-        from primeagent.helpers.user import get_user_by_flow_id_or_endpoint_name
-
-        user = await get_user_by_flow_id_or_endpoint_name(str(flow_id))
-
-    except Exception as exc:
-        await logger.aexception("Error getting user for public flow %s", flow_id)
-        raise HTTPException(status_code=403, detail="Flow is not accessible") from exc
-
-    if not user:
-        raise HTTPException(status_code=403, detail="Flow is not accessible")
-
-    return user, new_flow_id
+    return public_execution_user(), new_flow_id

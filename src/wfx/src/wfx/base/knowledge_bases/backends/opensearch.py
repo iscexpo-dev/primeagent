@@ -18,7 +18,27 @@ secrets — and round-trips cleanly through the UI.
   credential. Optional; defaults to the ``OPENSEARCH_PASSWORD``
   variable name. Only the *variable name* lives in config — never
   the raw credential.
-* ``index_name`` — OpenSearch index this KB writes / reads. Required.
+* ``index_name`` — OpenSearch index this KB writes / reads.
+  Optional. When omitted, the index is owner-scoped (see
+  ``derive_index_name``): the same ``lf_<sha256[:24]>`` name pgvector gives
+  this KB's table. KB names are unique per user, not globally, so an index
+  named from ``kb_name`` alone would let two users' same-named KBs read,
+  count, and delete each other's chunks. Set this explicitly only to point
+  the KB at a pre-existing, externally-managed index; doing so opts out of
+  per-KB isolation (the index is then shared by every KB configured with
+  the same value), so it should name a dedicated index per KB. Names shaped
+  like an owner-scoped index are rejected unless they are this KB's own.
+  Alembic revision ``386662af02e9`` pins KBs created before owner scoping to
+  the ``kb_name``-derived index they already use, recording
+  ``index_name_origin: legacy_kb_name``.
+* ``legacy_shared_index`` — written by that migration instead of a pin
+  when two users' KBs already shared one ``kb_name``-derived index (those
+  chunks cannot be attributed to one owner), or when that index's name is
+  shaped like an owner-scoped name. The KB moves to its own empty index and
+  the old index is left untouched for an operator to resolve. The backend
+  logs a warning while the marker is present.
+* ``index_name`` and the migration markers can only be persisted by a
+  superuser (see ``naming.ensure_storage_routing_allowed``).
 * ``vector_field`` — document field for the embedding vector.
   Defaults to ``vector_field`` — the field LangChain's
   ``OpenSearchVectorSearch`` actually writes to. That wrapper derives
@@ -33,7 +53,9 @@ secrets — and round-trips cleanly through the UI.
   Operators pointing the KB at an externally-populated index can still
   set ``vector_field`` to read embeddings from a custom field.
 * ``text_field`` — document field for the chunk text. Defaults to
-  ``text``.
+  ``text``. Like ``vector_field``, LangChain ignores it and always writes and
+  searches ``text``, so ``iter_documents`` reads the configured field but
+  falls back to ``text``.
 * ``engine`` — k-NN engine (``jvector``, ``nmslib``, ``faiss``,
   ``lucene``). Defaults to ``jvector``.
 * ``space_type`` — distance metric. Defaults to ``l2``.
@@ -50,26 +72,120 @@ from __future__ import annotations
 import asyncio
 import queue as sync_queue
 import threading
+from contextlib import contextmanager
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
 from wfx.base.knowledge_bases.backends.base import (
+    BackendConfigurationError,
     BackendType,
     BaseVectorStoreBackend,
     IngestedDocument,
     TestConnectionResult,
     drain_queue_until_sentinel,
 )
+from wfx.base.knowledge_bases.backends.destination_policy import enforce_kb_destination
+from wfx.base.knowledge_bases.backends.naming import owner_scoped_collection_name, resolve_storage_name
 from wfx.log.logger import logger
+from wfx.utils.ssrf_protection import SSRFProtectionError, validate_connector_url_for_ssrf
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Iterator
+    from uuid import UUID
 
+    from langchain_core.documents import Document
     from langchain_core.vectorstores import VectorStore
+
+
+async def _drained_worker(function, *args, **kwargs):
+    """Keep the storage fence until a synchronous SDK request has returned."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            if not cancelled:
+                raise
+    if cancelled:
+        task.exception()
+        raise asyncio.CancelledError
+    return task.result()
+
+
+def _is_missing_index(exc: Exception) -> bool:
+    """Only an absent index means an empty store, not another endpoint's 404."""
+    return (
+        getattr(exc, "status_code", None) == HTTPStatus.NOT_FOUND
+        and getattr(exc, "error", None) == "index_not_found_exception"
+    )
 
 
 DEFAULT_URL_VARIABLE = "OPENSEARCH_URL"
 DEFAULT_USERNAME_VARIABLE = "OPENSEARCH_USERNAME"
 DEFAULT_PASSWORD_VARIABLE = "OPENSEARCH_PASSWORD"  # noqa: S105 — variable name, not a secret  # pragma: allowlist secret
+
+
+def read_opensearch_url_from_env() -> str | None:
+    """Read the deployment-level OpenSearch URL from the server environment.
+
+    The name is the backend's default URL variable. An unset or blank value
+    means OpenSearch is not provisioned for the deployment.
+    """
+    import os
+
+    return os.getenv(DEFAULT_URL_VARIABLE, "").strip() or None
+
+
+def opensearch_env_configured() -> bool:
+    """Return True when OpenSearch is provisioned via env (an auto-default trigger)."""
+    return bool(read_opensearch_url_from_env())
+
+
+async def validate_opensearch_url(url: str, url_variable: str, url_source: str) -> None:
+    """Check a resolved cluster URL against both destination gates before it is dialed.
+
+    The URL comes from a tenant-controlled Primeagent variable (``backend_config``
+    only names the variable), and the client built from it makes server-side
+    connections whose outcome is echoed back by the test-connection route.
+    Without validation a tenant can probe cloud-metadata (169.254.169.254),
+    RFC1918, or loopback targets from the server's network position. Apply the
+    same connector SSRF policy every other tenant-URL sink uses (vector-store
+    components, MCP, model providers); operators reach legitimate internal
+    clusters via ``PRIMEAGENT_SSRF_ALLOWED_HOSTS``. ``resolve_hostname`` blocks,
+    so the check runs off the event loop.
+
+    This is the *only* place the cluster URL is validated. ``_resolve_secrets``
+    briefly called the validator itself as well, which resolved DNS twice per
+    KB and left the re-raise below unreachable. The production preflight calls
+    it too, so a boot never reports a cluster healthy that the runtime refuses.
+
+    Re-raised as ``SSRFProtectionError`` (which subclasses ``ValueError``, so every
+    existing ``except ValueError`` config path still catches it) rather than flattened
+    to a bare ``ValueError``: ``test_connection`` reports ``type(exc).__name__`` back to
+    the caller, and a blocked destination should not read as a typo in the index name.
+
+    The second gate is ``enforce_kb_destination``: opensearch-py re-resolves DNS when it
+    connects and offers no seam to pin the validated address (langchain's wrapper hands one
+    kwargs dict to both the urllib3 and aiohttp clients), so a tenant-written hostname is
+    additionally required to be one the operator approved. It runs first, and without a DNS
+    lookup, so a refused destination is never resolved on the tenant's behalf.
+    """
+    try:
+        enforce_kb_destination(url, source=url_source, description=f"Primeagent variable {url_variable!r}")
+        await asyncio.to_thread(validate_connector_url_for_ssrf, url)
+    except ValueError as exc:
+        # Both URL parsing and policy errors can contain the resolved value.
+        # A variable may be usable by a tenant without being readable by them.
+        msg = (
+            f"OpenSearch URL from variable {url_variable!r} is not allowed. "
+            "Use an http(s) URL with an approved host and check the server's destination policy."
+        )
+        raise SSRFProtectionError(msg) from exc
+
+
 # LangChain's ``OpenSearchVectorSearch`` resolves ``vector_field`` from
 # per-call kwargs (default ``"vector_field"``) and ignores the value passed to
 # its constructor. This backend never passes a per-call override, so ingestion
@@ -96,6 +212,25 @@ DEFAULT_TEXT_FIELD = "text"
 # JVector latency can still set ``engine`` in ``backend_config``.
 DEFAULT_ENGINE = "faiss"
 DEFAULT_SPACE_TYPE = "l2"
+
+# ``backend_config`` keys written by the migration that moved existing installs
+# to owner-scoped indexes. Kept in sync with alembic revision ``386662af02e9``.
+INDEX_NAME_ORIGIN_KEY = "index_name_origin"
+LEGACY_KB_NAME_ORIGIN = "legacy_kb_name"
+LEGACY_SHARED_INDEX_KEY = "legacy_shared_index"
+
+
+def derive_index_name(kb_name: str, owner_id: UUID) -> str:
+    """Derive the owner-scoped OpenSearch index for ``owner_id``'s ``kb_name``.
+
+    KB names are unique per user, not globally, so the owner is part of the
+    name. The result is the name pgvector uses for the same KB's table:
+    ``lf_`` + 24 lowercase hex chars, which is a valid OpenSearch index name
+    for any ``kb_name`` (lowercase, no reserved characters, far below the
+    255-byte limit). Memory Base names are globally unique already; scoping
+    them too keeps one rule for every base.
+    """
+    return owner_scoped_collection_name(owner_id, kb_name)
 
 
 def _coerce_bool(value: Any, *, default: bool) -> bool:
@@ -124,17 +259,112 @@ def _coerce_bool(value: Any, *, default: bool) -> bool:
     return default
 
 
+@contextmanager
+def _refused_documents_left_out() -> Iterator[None]:
+    """Report a bulk write OpenSearch refused without the documents it refused.
+
+    opensearch-py's ``BulkIndexError`` carries each refused document next to the
+    reason, and its message prints all of it: chunk text, metadata and vector. What
+    is raised instead says how many were refused and the distinct error types.
+    OpenSearch's reason and caused_by can also quote stored values, so omit them.
+    """
+    from opensearchpy.helpers import BulkIndexError
+
+    try:
+        yield
+    except BulkIndexError as exc:
+        error_types: dict[str, None] = {}
+        for refused in exc.errors:
+            error = next(iter(refused.values())).get("error")
+            if not isinstance(error, dict):
+                continue
+            if kind := error.get("type"):
+                error_types.setdefault(str(kind), None)
+        detail = f" Error type(s): {', '.join(error_types)}." if error_types else ""
+        message = f"{len(exc.errors)} document(s) failed to index.{detail}"
+        # ``from None``: the original would print the documents again in a traceback.
+        raise RuntimeError(message) from None
+
+
 class OpenSearchBackend(BaseVectorStoreBackend):
     """OpenSearch k-NN as a Primeagent KB backend."""
 
     backend_type = BackendType.OPENSEARCH
 
-    def _required(self, key: str) -> str:
-        value = self.backend_config.get(key)
-        if not value:
-            msg = f"OpenSearchBackend requires '{key}' in backend_config."
-            raise ValueError(msg)
-        return str(value)
+    def normalize_score(self, score: float) -> float:
+        """Keep OpenSearch relevance scores, which are already higher-is-better."""
+        return float(score)
+
+    @property
+    def store_location(self) -> tuple[Any, ...]:
+        """The resolved cluster URL and index."""
+        return (self._resolved_url, self._resolve_index_name())
+
+    @property
+    def distance_metric(self) -> str:
+        """The metric for a new index; existing indexes require ``get_distance_metric``."""
+        space_type = self._os_space_type
+        return {"cosinesimil": "cosine", "innerproduct": "inner_product"}.get(space_type, space_type)
+
+    async def get_distance_metric(self) -> str:
+        """Read the actual search field's immutable metric before relocating vectors."""
+        await self.ensure_ready()
+        client = getattr(self, "_os_client", None)
+        if client is None:
+            _ = self.vector_store
+            client = self._os_client
+        try:
+            mappings = await asyncio.to_thread(client.indices.get_mapping, index=self._os_index)
+        except Exception as exc:
+            if _is_missing_index(exc):
+                return self.distance_metric
+            raise
+
+        # Old writes ignored the configured space_type. The persisted mapping,
+        # including that of a partially copied target, is the only reliable value.
+        # Similarity search uses LangChain's default field even when config names
+        # a different field for iter_documents, so inspect the field it queries.
+        try:
+            if not isinstance(mappings, dict) or len(mappings) != 1:
+                raise ValueError
+            mapping = next(iter(mappings.values()))
+            field = mapping["mappings"]["properties"][LANGCHAIN_DEFAULT_VECTOR_FIELD]
+            if field.get("type") != "knn_vector":
+                raise ValueError
+            method_space = field.get("method", {}).get("space_type")
+            field_space = field.get("space_type")
+            if method_space and field_space and method_space != field_space:
+                raise ValueError
+            space_type = method_space or field_space
+            if not isinstance(space_type, str) or not space_type:
+                raise ValueError
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            msg = f"Cannot determine the search distance metric for OpenSearch index {self._os_index!r}"
+            raise BackendConfigurationError(msg) from exc
+        return {"cosinesimil": "cosine", "innerproduct": "inner_product"}.get(space_type, space_type)
+
+    @property
+    def _os_space_type(self) -> str:
+        # Read from the config on each write, not kept from building the vector
+        # store: a write must not depend on which code path built the store first.
+        return self.backend_config.get("space_type") or DEFAULT_SPACE_TYPE
+
+    def _resolve_index_name(self) -> str:
+        """Resolve the effective index for this KB.
+
+        An explicit ``index_name`` in ``backend_config`` is honored as an
+        operator override (an externally-managed index, or the pre-scoping
+        index a migration pinned). Otherwise the index is owner-scoped, and a
+        missing owner fails closed instead of falling back to a shared name.
+        """
+        return resolve_storage_name(
+            kb_name=self.kb_name,
+            owner_id=self._coerce_user_uuid(),
+            override=self.backend_config.get("index_name"),
+            override_key="index_name",
+            backend="OpenSearchBackend",
+            storage="index",
+        )
 
     async def _resolve_secrets(self) -> None:
         """Resolve URL + optional basic-auth credentials via variable_service.
@@ -147,13 +377,21 @@ class OpenSearchBackend(BaseVectorStoreBackend):
         invent here.
         """
         url_variable = self.backend_config.get("url_variable") or DEFAULT_URL_VARIABLE
-        url = await self.resolve_secret(url_variable)
+        # The provenance decides whether the destination counts as operator-chosen:
+        # a Primeagent variable is tenant-written, a process env var is not.
+        url, url_source = await self.resolve_secret_with_source(url_variable)
         if not url:
             msg = (
                 f"OpenSearchBackend needs the {url_variable!r} Primeagent variable "
                 "(or env var of the same name) populated with the cluster URL."
             )
             raise ValueError(msg)
+        # The URL comes from a tenant-controlled Primeagent variable, so the server must
+        # not dial it blindly (CWE-918). Running the check here — inside
+        # ensure_ready()'s one-shot hook — covers test_connection, ingestion, and
+        # retrieval alike, so a KB created against a hostile variable stays blocked
+        # after configuration time too.
+        await self._validate_url(url, url_variable, url_source)
         self._resolved_url = url
 
         username_variable = self.backend_config.get("username_variable") or DEFAULT_USERNAME_VARIABLE
@@ -161,15 +399,35 @@ class OpenSearchBackend(BaseVectorStoreBackend):
         self._resolved_username = await self.resolve_secret(username_variable)
         self._resolved_password = await self.resolve_secret(password_variable)
 
+    @staticmethod
+    async def _validate_url(url: str, url_variable: str, url_source: str) -> None:
+        """Check the resolved cluster URL against both destination gates before use.
+
+        See :func:`validate_opensearch_url`; this is the only call site on the
+        runtime path, so ``test_connection``, ingestion and retrieval all share it.
+        """
+        await validate_opensearch_url(url, url_variable, url_source)
+
     def _build_vector_store(self) -> VectorStore:
         # Validate config before touching optional deps so missing
         # fields surface as a clean ``ValueError`` regardless of
         # whether the OpenSearch extras are installed.
-        index_name = self._required("index_name")
+        index_name = self._resolve_index_name()
         url = getattr(self, "_resolved_url", None)
         if not url:
             msg = "OpenSearchBackend.ensure_ready() must be awaited before _build_vector_store."
             raise RuntimeError(msg)
+        shared_legacy_index = self.backend_config.get(LEGACY_SHARED_INDEX_KEY)
+        if shared_legacy_index and index_name != shared_legacy_index:
+            logger.warning(
+                "Knowledge base %s no longer uses OpenSearch index %s: another user's knowledge base used the "
+                "same index, or the name is reserved for owner-scoped indexes. Its earlier chunks were left in "
+                "%s, and it now uses its own index %s. Re-ingest its sources to restore them.",
+                self.kb_name,
+                shared_legacy_index,
+                shared_legacy_index,
+                index_name,
+            )
 
         vector_field = self.backend_config.get("vector_field") or DEFAULT_VECTOR_FIELD
         text_field = self.backend_config.get("text_field") or DEFAULT_TEXT_FIELD
@@ -230,6 +488,38 @@ class OpenSearchBackend(BaseVectorStoreBackend):
             space_type=space_type,
         )
 
+    async def add_documents(self, docs: list[Document]) -> None:
+        # LangChain builds a new index's mapping from per-call kwargs and ignores the
+        # ``space_type`` handed to its constructor, so every write passes it. Without
+        # it the index ranks by l2 whatever the config (and ``distance_metric``) says.
+        if not docs:
+            return
+        await self.ensure_ready()
+        store = self.vector_store
+        with _refused_documents_left_out():
+            await store.aadd_documents(docs, space_type=self._os_space_type)
+
+    async def _write_embedded(self, ids: list[str], docs: list[IngestedDocument]) -> None:
+        # Like ingestion, no per-call field override: LangChain writes vectors to
+        # ``LANGCHAIN_DEFAULT_VECTOR_FIELD``, which is where ``iter_documents``
+        # and similarity search already look. ``add_embeddings`` creates the index
+        # with the right dimension when it does not exist yet, and with
+        # ``space_type`` only when it is passed here (see ``add_documents``).
+        # ``add_embeddings`` refuses more than the store's ``bulk_size`` (500 by
+        # default) per call, so split larger batches rather than fail the write.
+        """Write supplied vectors with stable document identities without invoking an embedder."""
+        bulk_size = self.vector_store.bulk_size  # type: ignore[attr-defined]
+        for start in range(0, len(docs), bulk_size):
+            chunk = docs[start : start + bulk_size]
+            with _refused_documents_left_out():
+                await _drained_worker(
+                    self.vector_store.add_embeddings,  # type: ignore[attr-defined]
+                    [(doc.content, doc.embedding) for doc in chunk],
+                    metadatas=[doc.metadata for doc in chunk],
+                    ids=ids[start : start + bulk_size],
+                    space_type=self._os_space_type,
+                )
+
     async def similarity_search(
         self,
         query: str,
@@ -250,11 +540,19 @@ class OpenSearchBackend(BaseVectorStoreBackend):
         Dropping the kwarg lets the wrapper build the body without the
         key, which is what every Primeagent callsite that doesn't pass a
         filter actually wants.
+
+        Callers hand us the portable flat ``{key: value}`` filter shape
+        (Chroma reads it as ``$eq`` shorthand); we translate it into
+        OpenSearch bool-query DSL here via :meth:`_translate_where`.
+        LangChain injects a non-empty ``filter`` into the k-NN query as an
+        ``efficient_filter`` (faiss/lucene) or ``boolean_filter``, and both
+        require a real query clause — a flat dict would be rejected /
+        silently match nothing.
         """
         await self.ensure_ready()
         kwargs: dict[str, Any] = {"query": query, "k": k}
         if filter:
-            kwargs["filter"] = filter
+            kwargs["filter"] = self._translate_where(filter)
         if with_scores:
             return await self.vector_store.asimilarity_search_with_score(**kwargs)
         docs = await self.vector_store.asimilarity_search(**kwargs)
@@ -269,26 +567,42 @@ class OpenSearchBackend(BaseVectorStoreBackend):
             client = self._os_client
         try:
             result = await asyncio.to_thread(client.count, index=self._os_index)
-            return int(result.get("count") or 0)
-        except Exception as exc:  # noqa: BLE001
-            # ``warning`` (not ``debug``) so an unreachable cluster /
-            # missing index surfaces in default-level server logs and
-            # the user can correlate a 0-chunk count with the real cause.
-            logger.warning("OpenSearch count() failed for %s: %s", self.kb_name, exc)
-            return 0
+        except Exception as exc:
+            if _is_missing_index(exc):
+                return 0
+            raise
+        if result.get("_shards", {}).get("failed"):
+            msg = "OpenSearch count did not complete on all shards."
+            raise RuntimeError(msg)
+        return int(result["count"])
 
     async def test_connection(self) -> TestConnectionResult:
-        """Validate auth + reachability via ``cluster.info()``.
+        """Validate auth + reachability via ``client.info()``.
 
         The LangChain wrapper builds lazily, so the default
         ``test_connection`` would only catch construction-time mistakes.
-        Calling ``cluster.info()`` on the raw ``opensearch-py`` client
+        Calling ``client.info()`` on the raw ``opensearch-py`` client
         exercises the same auth / SSL / DNS path ingestion uses, but
         without requiring the index to exist yet — operators commonly
         configure the backend before creating the index.
+
+        Semantics are liveness-only: ``client.info`` (``GET /``) needs the
+        ``cluster:monitor/main`` permission, which a least-privilege,
+        index-scoped account may not hold. A resulting 403 still proves the
+        cluster is reachable and the credentials authenticated, so it is
+        treated as a *successful* connection rather than a failure — KB
+        create/ingest relies on index-scoped permissions granted separately.
         """
         try:
             await self.ensure_ready()
+        except SSRFProtectionError as exc:
+            # SSRFProtectionError subclasses ValueError, so it must be caught
+            # ahead of the ConfigError branch to keep the reported type honest.
+            return TestConnectionResult(
+                ok=False,
+                message=str(exc),
+                details={"type": type(exc).__name__},
+            )
         except ValueError as exc:
             return TestConnectionResult(
                 ok=False,
@@ -298,7 +612,7 @@ class OpenSearchBackend(BaseVectorStoreBackend):
         except Exception as exc:  # noqa: BLE001
             return TestConnectionResult(
                 ok=False,
-                message=str(exc) or type(exc).__name__,
+                message="OpenSearch credential resolution failed.",
                 details={"type": type(exc).__name__},
             )
 
@@ -307,7 +621,7 @@ class OpenSearchBackend(BaseVectorStoreBackend):
         except Exception as exc:  # noqa: BLE001
             return TestConnectionResult(
                 ok=False,
-                message=str(exc) or type(exc).__name__,
+                message="OpenSearch client setup failed. Check the backend configuration.",
                 details={"type": type(exc).__name__},
             )
 
@@ -345,40 +659,47 @@ class OpenSearchBackend(BaseVectorStoreBackend):
         # to surface.
         try:
             info = await asyncio.to_thread(client.info)
-        except AuthenticationException as exc:
+        except AuthenticationException:
             return TestConnectionResult(
                 ok=False,
                 message="Authentication failed. Check the username and password variables.",
-                details={"type": "AuthenticationException", "error": str(exc)},
+                details={"type": "AuthenticationException"},
             )
-        except AuthorizationException as exc:
+        except AuthorizationException:
+            # A 403 proves liveness: DNS, TLS, the connection, and credential
+            # authentication all succeeded (a bad password raises 401
+            # AuthenticationException instead) — the cluster only declined the
+            # cluster:monitor/main permission that ``client.info`` needs. KB
+            # create/ingest uses separately-granted index-scoped permissions, so
+            # a least-privilege account that lacks cluster-monitor must still
+            # pass the connectivity check rather than fail creation with a 422.
             return TestConnectionResult(
-                ok=False,
-                message="Authorization failed. The user is reachable but lacks cluster permissions.",
-                details={"type": "AuthorizationException", "error": str(exc)},
+                ok=True,
+                message="Connected to OpenSearch (cluster-monitor not permitted; liveness confirmed).",
+                details={"type": "AuthorizationException", "reachable": True},
             )
-        except OpenSearchSSLError as exc:
+        except OpenSearchSSLError:
             return TestConnectionResult(
                 ok=False,
                 message=(
                     "TLS handshake failed. Verify the URL scheme matches the cluster, and "
                     "toggle 'Verify TLS cert' off if you are using a self-signed certificate."
                 ),
-                details={"type": "SSLError", "error": str(exc)},
+                details={"type": "SSLError"},
             )
-        except OpenSearchConnectionError as exc:
+        except OpenSearchConnectionError:
             return TestConnectionResult(
                 ok=False,
                 message=(
                     "Could not reach the cluster. Verify the URL, network access, and that "
                     "the 'Use TLS' toggle matches the cluster's scheme."
                 ),
-                details={"type": "ConnectionError", "error": str(exc)},
+                details={"type": "ConnectionError"},
             )
         except Exception as exc:  # noqa: BLE001
             return TestConnectionResult(
                 ok=False,
-                message=str(exc) or type(exc).__name__,
+                message="OpenSearch connection failed.",
                 details={"type": type(exc).__name__},
             )
 
@@ -434,12 +755,20 @@ class OpenSearchBackend(BaseVectorStoreBackend):
         embedding_fields = [vector_field]
         if LANGCHAIN_DEFAULT_VECTOR_FIELD not in embedding_fields:
             embedding_fields.append(LANGCHAIN_DEFAULT_VECTOR_FIELD)
+        # Chunk text has the same split: LangChain writes and searches it under
+        # ``text`` whatever the config names, so fall back to that field too.
+        text_fields = [text_field]
+        if DEFAULT_TEXT_FIELD not in text_fields:
+            text_fields.append(DEFAULT_TEXT_FIELD)
         # Skip the embedding column(s) in ``_source`` when the caller doesn't
-        # need them — large embedding vectors dominate scroll payloads.
-        source_excludes = None if include_embeddings else list(embedding_fields)
+        # need them — large embedding vectors dominate scroll payloads. When the
+        # caller does, ask for ``_source`` explicitly: OpenSearch 3.8+ can strip
+        # knn_vector fields from every response (the knn_default_excludes
+        # processor) unless the request sets ``_source`` itself.
+        source_params = {"_source": True} if include_embeddings else {"_source_excludes": list(embedding_fields)}
         # Keys that are never chunk metadata when we have to reconstruct it from
         # a flat ``_source`` (the non-LangChain layout fallback below).
-        non_metadata_keys = {text_field, "metadata", *embedding_fields}
+        non_metadata_keys = {*text_fields, "metadata", *embedding_fields}
 
         sentinel = object()
         batch_queue: sync_queue.Queue[Any] = sync_queue.Queue(maxsize=2)
@@ -456,22 +785,24 @@ class OpenSearchBackend(BaseVectorStoreBackend):
 
         def _stream_batches() -> None:
             scanner = None
+            saw_hit = False
             try:
                 scanner = os_helpers.scan(
                     client,
                     index=index,
                     size=batch_size,
-                    _source_excludes=source_excludes,
                     preserve_order=False,
+                    **source_params,
                 )
                 buf: list[IngestedDocument] = []
                 for hit in scanner:
                     if cancel_event.is_set():
                         break
+                    saw_hit = True
                     source = hit.get("_source") if isinstance(hit, dict) else {}
                     if not isinstance(source, dict):
                         source = {}
-                    content = source.get(text_field) or ""
+                    content = next((source[field] for field in text_fields if source.get(field)), "")
                     metadata = source.get("metadata")
                     if not isinstance(metadata, dict):
                         metadata = {k: v for k, v in source.items() if k not in non_metadata_keys}
@@ -488,6 +819,7 @@ class OpenSearchBackend(BaseVectorStoreBackend):
                             content=str(content),
                             metadata=dict(metadata),
                             embedding=embedding,
+                            id=hit.get("_id") if isinstance(hit, dict) else None,
                         )
                     )
                     if len(buf) >= batch_size:
@@ -498,7 +830,9 @@ class OpenSearchBackend(BaseVectorStoreBackend):
                 if buf and not cancel_event.is_set():
                     _put_cancelable(buf)
             except Exception as exc:  # noqa: BLE001
-                if not cancel_event.is_set():
+                # A never-created index is empty. If it disappears during a
+                # scan, the partial read must fail rather than look complete.
+                if not cancel_event.is_set() and (saw_hit or not _is_missing_index(exc)):
                     _put_cancelable(exc)
             finally:
                 # ``helpers.scan`` owns the scroll context and closes it
@@ -520,16 +854,7 @@ class OpenSearchBackend(BaseVectorStoreBackend):
                     sentinel_seen = True
                     break
                 if isinstance(item, Exception):
-                    # Bumped from ``debug`` to ``warning`` so cluster
-                    # auth / connection errors surface during ingestion
-                    # metric refresh instead of silently truncating the
-                    # iterator. Callers that need the exception to
-                    # propagate should rely on ``count`` / ``add_documents``
-                    # which let it bubble.
-                    logger.warning("OpenSearch iter_documents worker failed for %s: %s", self.kb_name, item)
-                    await asyncio.to_thread(batch_queue.get)
-                    sentinel_seen = True
-                    break
+                    raise item
                 yield item
         finally:
             cancel_event.set()
@@ -537,21 +862,19 @@ class OpenSearchBackend(BaseVectorStoreBackend):
                 await asyncio.to_thread(drain_queue_until_sentinel, batch_queue, sentinel)
             await worker
 
-    async def delete_by(self, where: dict[str, Any]) -> None:
-        """Delete documents via ``delete_by_query``.
+    @staticmethod
+    def _translate_where(where: dict[str, Any]) -> dict[str, Any]:
+        """Translate a flat ``{key: value}`` filter into OpenSearch bool DSL.
 
-        ``where`` is translated to a bool-must query. LangChain's
-        OpenSearch adapter stores ``Document.metadata`` under the nested
-        ``metadata`` source key, while older/manual indexes may expose
-        metadata fields at top level, so each key matches either shape.
+        The flat shape is the portable contract every backend accepts (Chroma
+        reads it as ``$eq`` shorthand). For OpenSearch it has to become a real
+        query clause. LangChain's OpenSearch adapter stores ``Document.metadata``
+        under the nested ``metadata`` source key, while older / manually
+        populated indexes expose metadata fields at top level, so each key
+        matches either shape via a ``should``. Used by both the retrieval filter
+        (``similarity_search``) and the rollback path (``delete_by``) so the two
+        can never drift on this translation.
         """
-        await self.ensure_ready()
-        client = getattr(self, "_os_client", None)
-        if client is None:
-            _ = self.vector_store
-            client = self._os_client
-        if not where:
-            return
         must = [
             {
                 "bool": {
@@ -564,19 +887,41 @@ class OpenSearchBackend(BaseVectorStoreBackend):
             }
             for key, value in where.items()
         ]
-        body = {"query": {"bool": {"must": must}}}
+        return {"bool": {"must": must}}
+
+    async def delete_by(self, where: dict[str, Any]) -> None:
+        """Delete documents via ``delete_by_query``.
+
+        ``where`` is translated to a bool-must query via
+        :meth:`_translate_where` — the same translation the retrieval filter
+        uses.
+        """
+        await self.ensure_ready()
+        client = getattr(self, "_os_client", None)
+        if client is None:
+            _ = self.vector_store
+            client = self._os_client
+        if not where:
+            return
+        body = {"query": self._translate_where(where)}
         try:
-            await asyncio.to_thread(
+            result = await _drained_worker(
                 client.delete_by_query,
                 index=self._os_index,
                 body=body,
                 refresh=True,
             )
-        except Exception as exc:  # noqa: BLE001
-            # ``delete_by`` is the rollback path; a silent debug log
-            # would let stale chunks linger after a failed ingestion
-            # without the operator ever knowing.
+            if (
+                not isinstance(result, dict)
+                or result.get("timed_out")
+                or result.get("failures")
+                or result.get("version_conflicts")
+            ):
+                msg = "OpenSearch did not complete the requested document deletion"
+                raise RuntimeError(msg)
+        except Exception as exc:
             logger.warning("OpenSearch delete_by_query failed for %s: %s", self.kb_name, exc)
+            raise
 
     async def storage_size_bytes(self) -> int:
         await self.ensure_ready()
@@ -594,25 +939,53 @@ class OpenSearchBackend(BaseVectorStoreBackend):
             return 0
 
     async def teardown(self) -> None:
+        """Close provider resources while draining outstanding OpenSearch cleanup."""
         client = getattr(self, "_os_client", None)
         if client is not None and hasattr(client, "close"):
             try:
-                await asyncio.to_thread(client.close)
+                await _drained_worker(client.close)
             except Exception as exc:  # noqa: BLE001
                 # ``teardown`` runs in ``finally`` blocks; a leaked
                 # connection during shutdown is worth a default-level
                 # warning so it doesn't silently exhaust pool slots.
                 logger.warning("OpenSearch client.close failed: %s", exc)
+        # Close the clients LangChain's ``OpenSearchVectorSearch`` builds in its
+        # own ``__init__`` — not just our sidecar ``_os_client``. The wrapper
+        # eagerly creates an ``AsyncOpenSearch`` (``async_client``) backed by an
+        # aiohttp session; dropping the reference without awaiting its ``close``
+        # leaks the aiohttp ``TCPConnector`` + socket transport, which surfaces
+        # as ``Unclosed connector`` / ``unclosed transport`` ResourceWarnings at
+        # GC time. Read ``_vector_store`` directly (not the ``vector_store``
+        # property) so teardown never rebuilds the store it's tearing down.
+        vector_store = self._vector_store
+        if vector_store is not None:
+            async_client = getattr(vector_store, "async_client", None)
+            if async_client is not None and hasattr(async_client, "close"):
+                try:
+                    await async_client.close()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("OpenSearch async_client.close failed: %s", exc)
+            wrapper_client = getattr(vector_store, "client", None)
+            if wrapper_client is not None and hasattr(wrapper_client, "close"):
+                try:
+                    await _drained_worker(wrapper_client.close)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("OpenSearch wrapper client.close failed: %s", exc)
         self._os_client = None
         self._vector_store = None
 
     async def delete_collection(self) -> None:
         """Drop the configured index. Used by KB deletion."""
+        await self.ensure_ready()
         client = getattr(self, "_os_client", None)
         if client is None:
             _ = self.vector_store
             client = self._os_client
         try:
-            await asyncio.to_thread(client.indices.delete, index=self._os_index, ignore_unavailable=True)
-        except Exception as exc:  # noqa: BLE001
+            result = await _drained_worker(client.indices.delete, index=self._os_index, ignore_unavailable=True)
+            if not isinstance(result, dict) or result.get("acknowledged") is not True:
+                msg = "OpenSearch did not acknowledge index deletion"
+                raise RuntimeError(msg)
+        except Exception as exc:
             logger.warning("OpenSearch indices.delete failed for %s: %s", self.kb_name, exc)
+            raise

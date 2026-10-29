@@ -3,16 +3,68 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Container, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from wfx.log.logger import logger
-from wfx.utils.component_aliases import get_component_type_aliases
+from wfx.utils.component_aliases import ComponentIdentityIndex, get_component_type_aliases
+from wfx.utils.flow_code import has_code_lines, normalize_code_for_import
+
+if TYPE_CHECKING:
+    from wfx.services.catalog_policy import CatalogPolicySnapshot
 
 INITIALIZING_COMPONENT_TEMPLATES_MESSAGE = (
     "Flow build blocked: component templates are still initializing. Please try again in a few seconds."
 )
 SETTINGS_SERVICE_REQUIRED_MESSAGE = "Settings service must be initialized before validating flows."
+CATALOG_POLICY_IDENTITIES_UNAVAILABLE_MESSAGE = (
+    "Catalog policy component identities are still initializing. Please try again in a few seconds."
+)
+PUBLIC_CATALOG_POLICY_UNAVAILABLE_MESSAGE = "This flow is temporarily unavailable. Please try again."
+
+# Built-in components that execute user- or model-supplied Python from input fields or during
+# runtime, rather than from the validated class ``code`` field. Their class-code hash is valid,
+# so they pass the allow_custom_components policy, yet they are effectively code-authoring
+# surfaces. Identifiers include class names plus their ``name``/``display_name`` aliases so the
+# check matches whatever value the node carries in ``data.type``.
+#
+# This set is used by:
+# - the opt-in ``block_code_interpreter_components`` authenticated-flow gate, and
+# - the unauthenticated public-flow gate for ``/api/v1/build_public_tmp/{flow_id}/flow``, and
+# - the shared component/tool runtime gate.
+#
+# Keeping these enforcement points on the same set prevents code-execution aliases from
+# drifting between the multi-tenant hardening and public-build hardening paths.
+CODE_EXECUTION_COMPONENT_TYPES: frozenset[str] = frozenset(
+    {
+        "CSVAgent",  # LangChain CSV agent can execute Python when allow_dangerous_code is enabled
+        "CodeAct Agent (Smolagents)",
+        "CodeActAgentSmolagents",  # smolagents CodeAgent executes model-generated code
+        "Cuga",  # CUGA agent executes model-generated Python via its built-in executor
+        "LambdaFilterComponent",
+        "OpenDsStar Agent",
+        "OpenDsStarAgent",  # OpenDsStar data-science agent executes model-generated Python
+        "Python Code Structured",
+        "PythonCodeStructuredTool",
+        "Python Function",
+        "PythonFunction",
+        "PythonFunctionComponent",
+        "Python Interpreter",
+        "PythonREPLComponent",
+        "Python REPL",
+        "PythonREPLToolComponent",
+        "PythonREPLTool",
+        "Smart Transform",
+    }
+)
+
+
+def is_code_execution_component(*identifiers: object) -> bool:
+    """Return whether any component identifier is registered as code-executing."""
+    return any(
+        isinstance(identifier, str) and identifier in CODE_EXECUTION_COMPONENT_TYPES for identifier in identifiers
+    )
 
 
 class CustomComponentValidationError(ValueError):
@@ -24,6 +76,14 @@ class CustomComponentValidationError(ValueError):
     """
 
 
+class CatalogPolicyValidationError(CustomComponentValidationError):
+    """Raised when a flow contains a component blocked by catalog policy."""
+
+
+class CatalogPolicyIdentityUnavailableError(RuntimeError):
+    """Raised when an active catalog rule needs an identity index that is not ready."""
+
+
 class PublicFlowValidationError(CustomComponentValidationError):
     """Raised when a public (unauthenticated) flow build is disallowed.
 
@@ -32,46 +92,119 @@ class PublicFlowValidationError(CustomComponentValidationError):
     """
 
 
-# Component node ``type`` values that execute user- or model-supplied code when
-# a flow is built or run. Public flows are buildable without authentication via
-# ``/api/v1/build_public_tmp/{flow_id}/flow``; allowing these components on that
-# path turns any public flow into an unauthenticated server-side code-execution
-# primitive (report H1-3754930). The restriction is enforced ONLY on the
-# unauthenticated public path — authenticated builds are unaffected.
-CODE_EXECUTION_COMPONENT_TYPES: frozenset[str] = frozenset(
-    {
-        "PythonCodeStructuredTool",  # legacy raw exec() (component removed; type retained to block stored code)
-        "PythonREPLComponent",  # "Python Interpreter"
-        "PythonREPLTool",  # legacy "Python REPL" tool
-        "Smart Transform",  # LambdaFilterComponent — eval()s a generated lambda
-    }
-)
-
 # Template field (input) names on CODE_EXECUTION_COMPONENT_TYPES nodes that carry
-# executable code or define the code sandbox boundary. These are plain-text inputs
+# executable code or define the code sandbox boundary. Most are plain-text inputs
 # (StrInput / MultilineInput → template type "str"), so the field-type=="code" guard
-# in apply_tweaks() does NOT catch them; the Tweaks API must additionally refuse to
-# override them by name on a code-execution node. Kept beside
-# CODE_EXECUTION_COMPONENT_TYPES so the two consumers stay in sync — adding a new
-# code-execution component means registering both its type above and its code input
-# here. This sync is enforced by test_every_code_execution_type_has_registered_code_fields
-# in test_process.py, which fails if a new type is added without its code field. The
-# conventional "code" field name is blocked globally in apply_tweaks() and so is
-# intentionally omitted here.
-#   - python_code:        Python Interpreter (PythonREPLComponent) exec input
+# in apply_tweaks() does NOT catch them; function_code is also included by name as
+# defense in depth for legacy or malformed templates. The Tweaks API must refuse to
+# override these fields by name on a code-execution node. Kept beside
+# CODE_EXECUTION_COMPONENT_TYPES so the two consumers stay in sync when a component
+# has tweakable code/sandbox inputs. Components that execute runtime/model-generated
+# code without such a template field still belong in CODE_EXECUTION_COMPONENT_TYPES,
+# but do not need entries here. This sync is enforced by
+# test_every_code_execution_type_has_registered_code_fields in test_process.py.
+# The conventional "code" field name is blocked globally in apply_tweaks() and so
+# is intentionally omitted here.
+#   - python_code:        Python Interpreter (PythonREPLComponent) and Python REPL Tool exec input
+#   - function_code:      Python Function (PythonFunctionComponent) exec input
 #   - tool_code:          removed PythonCodeStructuredTool exec input (type retained)
 #   - filter_instruction: Smart Transform instruction → LLM-generated, eval()'d lambda
 #   - global_imports:     import allow-list that populates the exec() namespace; the
 #                         documented sandbox boundary (powerful modules must be opted
 #                         into here), so it must not be widened via tweaks
+#   - allow_dangerous_code: CSVAgent switch that enables LangChain Python execution
 CODE_EXECUTION_FIELD_NAMES: frozenset[str] = frozenset(
     {
+        "allow_dangerous_code",
+        "function_code",
         "python_code",
         "tool_code",
         "filter_instruction",
         "global_imports",
     }
 )
+
+# Component inputs that cross a privileged sink boundary and therefore must retain
+# the value stored by the flow author. A run caller must not repoint a stored SQL
+# connection or send the flow author's Bing subscription key to another URL.
+# Other component options remain tweakable. Bing identities include the current
+# extension slot and the legacy aliases accepted by extension migration.
+PROTECTED_TWEAK_FIELDS_BY_COMPONENT: Mapping[str, frozenset[str]] = {
+    "SQLComponent": frozenset({"database_url", "query"}),
+    "BingSearchAPI": frozenset({"bing_search_url"}),
+    "BingSearchAPIComponent": frozenset({"bing_search_url"}),
+    "Bing Search API": frozenset({"bing_search_url"}),
+    "ext:bing:BingSearchAPIComponent@official": frozenset({"bing_search_url"}),
+    "ext:bing:BingSearchAPIComponent@official-pre-a": frozenset({"bing_search_url"}),
+    "wfx.components.bing.bing_search_api.BingSearchAPIComponent": frozenset({"bing_search_url"}),
+    "wfx.components.bing.BingSearchAPIComponent": frozenset({"bing_search_url"}),
+}
+
+
+def is_protected_tweak_field(component_type: str | None, field_name: str, field_type: str = "") -> bool:
+    """Return whether a runtime tweak must preserve the flow author's value."""
+    return (
+        field_type == "code"
+        or field_name == "code"
+        or (component_type in CODE_EXECUTION_COMPONENT_TYPES and field_name in CODE_EXECUTION_FIELD_NAMES)
+        or field_name in PROTECTED_TWEAK_FIELDS_BY_COMPONENT.get(component_type or "", ())
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deployment tweak policy
+# ---------------------------------------------------------------------------
+# Two lists with two owners. The deployment owns the floor above
+# (``is_protected_tweak_field``), a denylist nothing can bypass. The flow author
+# owns the allowlist below, the per-field ``api_editable`` flag. The policy
+# setting only chooses which of the two is consulted; it never supplies list
+# content itself, because an operator cannot anticipate every flow.
+
+TWEAK_POLICY_PERMISSIVE = "permissive"
+TWEAK_POLICY_DECLARED = "declared"
+TWEAK_POLICY_OFF = "off"
+TWEAK_POLICIES = frozenset({TWEAK_POLICY_PERMISSIVE, TWEAK_POLICY_DECLARED, TWEAK_POLICY_OFF})
+
+
+def flow_declares_api_editable(nodes: list[dict[str, Any]]) -> bool:
+    """Return whether any node in the flow marks a template field ``api_editable``.
+
+    This is the derived form of the per-flow enforcement opt-in. A flow whose
+    author has toggled at least one field has declared an allowlist, so the
+    remaining fields are closed under ``declared``. A flow with no toggles has
+    declared nothing and keeps permissive behavior, which is what stops a
+    deployment-wide switch from breaking every flow nobody prepared.
+
+    A later release replaces this derived value with a stored flag on the flow.
+    """
+    for node in nodes:
+        template = node.get("data", {}).get("node", {}).get("template")
+        if not isinstance(template, dict):
+            continue
+        for field in template.values():
+            if isinstance(field, dict) and field.get("api_editable") is True:
+                return True
+    return False
+
+
+def is_tweak_refused_by_policy(
+    policy: str,
+    *,
+    flow_declares_allowlist: bool,
+    field_is_api_editable: bool,
+) -> bool:
+    """Return whether the deployment policy refuses a tweak on this field.
+
+    The caller checks ``is_protected_tweak_field`` separately. That floor refuses
+    in every policy, including ``permissive``. This function only decides the
+    policy layer above the floor.
+    """
+    if policy == TWEAK_POLICY_OFF:
+        return True
+    if policy == TWEAK_POLICY_DECLARED and flow_declares_allowlist:
+        return not field_is_api_editable
+    return False
+
 
 # Component node ``type`` values that load and execute *another* saved flow by
 # id or name at build/run time. On the unauthenticated public path these are an
@@ -89,6 +222,25 @@ FLOW_REFERENCE_COMPONENT_TYPES: frozenset[str] = frozenset(
         "FlowTool",  # "Flow as Tool" (legacy) — exposes a selected flow as a tool
     }
 )
+
+# Component node ``type`` values whose only transport is an MCP **stdio** server, i.e. they
+# always spawn an OS subprocess. Unlike ``MCPTools`` — which is legitimate on the public path
+# when it points at a remote HTTP/SSE server — these carry no non-spawning configuration, so
+# the type itself is refused for anonymous visitors.
+MCP_STDIO_COMPONENT_TYPES: frozenset[str] = frozenset(
+    {
+        "MCPStdio",  # "MCP Tools (stdio) [DEPRECATED]" — packed command string input
+        "MCP Tools (stdio) [DEPRECATED]",
+    }
+)
+
+# Template field keys that carry an MCP server *selection* (``McpInput``). The stdio command
+# lives in this field's VALUE, never in the validated ``code`` field, so trusted-code
+# substitution does not touch it.
+MCP_SERVER_FIELD_NAMES: frozenset[str] = frozenset({"mcp_server"})
+
+# ``McpInput``'s serialized template ``type``.
+MCP_SERVER_FIELD_TYPE = "mcp"
 
 
 def _compute_code_hash(code: str) -> str:
@@ -125,11 +277,149 @@ def _extract_graph_payload(graph: Any) -> Mapping[str, Any] | None:
 
 
 def _extract_flow_data(target: Mapping[str, Any] | Any | None) -> dict[str, Any] | None:
-    """Normalize a flow payload or graph-like object to raw graph data."""
-    if isinstance(target, Mapping) or target is None:
-        return _normalize_flow_data(target)
+    """Normalize a flow payload or graph-like object to raw graph data.
 
-    return _normalize_flow_data(_extract_graph_payload(target))
+    Downloaded flows store component code as lists of lines, and ``Graph.from_payload`` joins
+    them before it builds. Join them here as well, on a copy, so policy checks hash and sanitize
+    the source that will run. Lines that cannot be joined stay as they are, and the code checks
+    still block them.
+    """
+    if isinstance(target, Mapping) or target is None:
+        flow_data = _normalize_flow_data(target)
+    else:
+        flow_data = _normalize_flow_data(_extract_graph_payload(target))
+
+    if flow_data is None or not has_code_lines(flow_data):
+        return flow_data
+    try:
+        return normalize_code_for_import(flow_data)
+    except ValueError:
+        return flow_data
+
+
+def _collect_catalog_component_keys(nodes: Any) -> set[str]:
+    """Collect exact component keys from a graph and its inlined nested flows."""
+    component_keys: set[str] = set()
+    if not isinstance(nodes, list):
+        return component_keys
+
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            continue
+        node_data = node.get("data")
+        if not isinstance(node_data, Mapping):
+            continue
+
+        component_type = node_data.get("type")
+        if isinstance(component_type, str):
+            component_keys.add(component_type)
+
+        node_info = node_data.get("node")
+        if not isinstance(node_info, Mapping):
+            continue
+        nested_flow = node_info.get("flow")
+        if not isinstance(nested_flow, Mapping):
+            continue
+        nested_data = nested_flow.get("data")
+        if not isinstance(nested_data, Mapping):
+            continue
+        component_keys.update(_collect_catalog_component_keys(nested_data.get("nodes")))
+
+    return component_keys
+
+
+def collect_catalog_component_keys(target: Mapping[str, Any] | Any | None) -> frozenset[str]:
+    """Return the exact component keys stored in a flow payload or Graph-like object.
+
+    Accepts the same targets as :func:`validate_catalog_policy_for_flow` —
+    a raw graph payload, a wrapped ``{"data": {...}}`` flow payload, or a
+    Graph-like object — and includes keys from inlined nested flows. A target
+    without extractable graph data yields an empty set; callers that must
+    fail closed on unparseable payloads should keep using
+    :func:`validate_catalog_policy_for_flow`.
+    """
+    normalized_flow_data = _extract_flow_data(target)
+    if not normalized_flow_data:
+        return frozenset()
+    return frozenset(_collect_catalog_component_keys(normalized_flow_data.get("nodes")))
+
+
+def get_component_identity_index_for_validation() -> ComponentIdentityIndex | None:
+    """Return the cached canonical identity index when the registry is ready."""
+    from wfx.interface.components import get_component_identity_index
+
+    return get_component_identity_index()
+
+
+def _resolve_catalog_policy_matches(
+    component_keys: set[str],
+    blocked_component_keys: frozenset[str],
+    identity_index: ComponentIdentityIndex,
+) -> frozenset[str]:
+    """Return canonical identities shared by observed and blocked keys."""
+    blocked_identities = identity_index.resolve_many(blocked_component_keys)
+    return frozenset(
+        canonical_identity
+        for component_key in component_keys
+        for canonical_identity in identity_index.resolve(component_key)
+        if canonical_identity in blocked_identities
+    )
+
+
+def validate_catalog_policy_for_flow(
+    target: Mapping[str, Any] | Any | None,
+    *,
+    snapshot: CatalogPolicySnapshot | None = None,
+) -> None:
+    """Reject a flow containing component keys blocked by the current catalog snapshot.
+
+    Exact, case-sensitive keys are enforced before the current registry's
+    canonical alias index is consulted. The immutable policy snapshot is
+    captured once when the caller does not provide one, so every node in a
+    request is evaluated against the same policy view.
+    """
+    if snapshot is None:
+        from wfx.services.deps import get_catalog_policy_service
+
+        snapshot = get_catalog_policy_service().snapshot
+
+    if not snapshot.blocked_component_keys:
+        return
+
+    normalized_flow_data = _extract_flow_data(target)
+    if target is not None and normalized_flow_data is None:
+        msg = (
+            "Flow validation failed: could not extract graph data from the provided target. "
+            "Ensure the flow payload or Graph object contains valid graph data."
+        )
+        raise CatalogPolicyValidationError(msg)
+    if not normalized_flow_data:
+        return
+
+    component_keys = _collect_catalog_component_keys(normalized_flow_data.get("nodes"))
+    if not component_keys:
+        return
+
+    # Preserve exact matching even when the registry cache is still loading.
+    # This keeps synthetic/custom identities backward-compatible and lets an
+    # exact policy denial fail closed without waiting for alias data.
+    blocked = snapshot.blocked_components(component_keys)
+    if not blocked:
+        identity_index = get_component_identity_index_for_validation()
+        if identity_index is None:
+            raise CatalogPolicyIdentityUnavailableError(CATALOG_POLICY_IDENTITIES_UNAVAILABLE_MESSAGE)
+        blocked = _resolve_catalog_policy_matches(
+            component_keys,
+            snapshot.blocked_component_keys,
+            identity_index,
+        )
+    if not blocked:
+        return
+
+    blocked_names = ", ".join(sorted(blocked))
+    logger.warning(f"Flow build blocked by catalog policy: {blocked_names}")
+    message = f"Flow build blocked: catalog policy blocks components: {blocked_names}"
+    raise CatalogPolicyValidationError(message)
 
 
 def collect_component_hash_lookups(
@@ -224,26 +514,53 @@ def collect_code_by_hash(
 
 def _get_invalid_components(
     nodes: list[dict],
-    type_to_current_hash: dict[str, set[str]],
+    type_to_current_hash: Mapping[str, set[str]],
+    substitutable_types: Container[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Walk nodes and classify invalid components."""
+    """Walk nodes and classify invalid components.
+
+    ``substitutable_types`` names the component types whose drifted code this server will
+    replace with its own copy at build time (see
+    :func:`substitute_outdated_component_code_in_place`). A hash mismatch on one of those
+    types is not reported as outdated, because the stored code is never what runs. It only
+    ever suppresses the *outdated* classification — an unrecognized type is still blocked.
+    """
     blocked: list[str] = []
     outdated: list[str] = []
 
-    for node in nodes:
-        node_data = node.get("data", {})
-        node_info = node_data.get("node", {})
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            blocked.append(f"malformed component (index {index})")
+            continue
+
+        node_data = node.get("data")
+        node_id = node.get("id", f"index {index}")
+        if not isinstance(node_data, dict):
+            blocked.append(f"malformed component ({node_id})")
+            continue
+
+        node_info = node_data.get("node")
+        if not isinstance(node_info, dict):
+            blocked.append(f"malformed component ({node_id})")
+            continue
 
         component_type = node_data.get("type")
 
         node_template = node_info.get("template", {})
+        if not isinstance(node_template, dict):
+            blocked.append(f"malformed component ({node_id})")
+            continue
         node_code_field = node_template.get("code", {})
         node_code = node_code_field.get("value") if isinstance(node_code_field, dict) else None
 
         if node_code:
             display_name = node_info.get("display_name") or component_type or "unknown"
-            node_id = node_data.get("id") or node.get("id", "unknown")
+            node_id = node_data.get("id") or node_id
             label = f"{display_name} ({node_id})"
+
+            if not isinstance(node_code, str):
+                blocked.append(label)
+                continue
 
             # A node carrying executable code must resolve to a known component
             # type so its code hash can be checked against the trusted set. If the
@@ -256,27 +573,151 @@ def _get_invalid_components(
             # allow_custom_components gate while its stored code still executed at
             # build time (instantiate_class runs the node's stored code, which
             # does not consult the type).
-            expected_hashes = type_to_current_hash.get(component_type) if component_type else None
+            expected_hashes = type_to_current_hash.get(component_type) if isinstance(component_type, str) else None
             if expected_hashes is None:
                 blocked.append(label)
             else:
                 node_hash = _compute_code_hash(node_code)
-                if node_hash not in expected_hashes:
+                is_substitutable = substitutable_types is not None and component_type in substitutable_types
+                if node_hash not in expected_hashes and not is_substitutable:
                     outdated.append(label)
 
         flow_data = node_info.get("flow", {})
         if isinstance(flow_data, dict):
             nested_data = flow_data.get("data", {})
+            if not isinstance(nested_data, dict):
+                blocked.append(f"malformed nested flow ({node_id})")
+                continue
             nested_nodes = nested_data.get("nodes", [])
+            if not isinstance(nested_nodes, list):
+                blocked.append(f"malformed nested flow ({node_id})")
+                continue
             if nested_nodes:
                 nested_blocked, nested_outdated = _get_invalid_components(
                     nested_nodes,
                     type_to_current_hash,
+                    substitutable_types,
                 )
                 blocked.extend(nested_blocked)
                 outdated.extend(nested_outdated)
+        elif flow_data is not None:
+            blocked.append(f"malformed nested flow ({node_id})")
 
     return blocked, outdated
+
+
+def _contains_component_code(nodes: list[dict]) -> bool:
+    """Whether a graph or one of its inlined groups carries executable source."""
+    for node in nodes:
+        if not isinstance(node, dict) or not isinstance(node.get("data"), dict):
+            continue
+        node_info = node["data"].get("node")
+        if not isinstance(node_info, dict):
+            continue
+        template = node_info.get("template")
+        if isinstance(template, dict):
+            code = template.get("code")
+            if isinstance(code, dict) and code.get("value"):
+                return True
+        flow = node_info.get("flow")
+        flow_data = flow.get("data") if isinstance(flow, dict) else None
+        nested_nodes = flow_data.get("nodes") if isinstance(flow_data, dict) else None
+        if isinstance(nested_nodes, list) and _contains_component_code(nested_nodes):
+            return True
+    return False
+
+
+def _find_code_execution_components(nodes: list[dict], blocked_hashes: frozenset[str]) -> list[str]:
+    """Return labels for nodes with a code-execution type or trusted source hash.
+
+    Recurses into nested/sub-flow node payloads so a code-execution component cannot be
+    hidden inside an embedded flow definition or relabelled with a benign type.
+    """
+    found: list[str] = []
+
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            msg = f"Flow validation failed: malformed component at index {index}."
+            raise CustomComponentValidationError(msg)
+
+        node_data = node.get("data")
+        node_id = node.get("id", f"index {index}")
+        if not isinstance(node_data, dict):
+            msg = f"Flow validation failed: malformed component ({node_id})."
+            raise CustomComponentValidationError(msg)
+
+        node_info = node_data.get("node")
+        if not isinstance(node_info, dict):
+            msg = f"Flow validation failed: malformed component ({node_id})."
+            raise CustomComponentValidationError(msg)
+
+        display_name = node_info.get("display_name")
+
+        component_type = node_data.get("type")
+        if is_code_execution_component(component_type, display_name) or (
+            blocked_hashes and _node_code_hash(node_info) in blocked_hashes
+        ):
+            display_name = display_name or component_type
+            node_id = node_data.get("id") or node_id
+            found.append(f"{display_name} ({node_id})")
+
+        flow_data = node_info.get("flow", {})
+        if isinstance(flow_data, dict):
+            nested_data = flow_data.get("data", {})
+            if not isinstance(nested_data, dict):
+                msg = f"Flow validation failed: malformed nested flow ({node_id})."
+                raise CustomComponentValidationError(msg)
+            nested_nodes = nested_data.get("nodes", [])
+            if not isinstance(nested_nodes, list):
+                msg = f"Flow validation failed: malformed nested flow ({node_id})."
+                raise CustomComponentValidationError(msg)
+            if nested_nodes:
+                found.extend(_find_code_execution_components(nested_nodes, blocked_hashes))
+        elif flow_data is not None:
+            msg = f"Flow validation failed: malformed nested flow ({node_id})."
+            raise CustomComponentValidationError(msg)
+
+    return found
+
+
+def check_code_execution_components_and_raise(
+    flow_data: dict | None,
+    *,
+    type_to_current_hash: Mapping[str, set[str]] | None = None,
+) -> None:
+    """Block flows containing built-in arbitrary-code-execution components.
+
+    Called when interpreters are globally blocked or restricted to administrators. Raises
+    :class:`CustomComponentValidationError` if any code-execution component is present.
+    """
+    if not flow_data:
+        return
+
+    nodes = flow_data.get("nodes", [])
+    if not isinstance(nodes, list):
+        msg = "Flow validation failed: nodes must be a list."
+        raise CustomComponentValidationError(msg)
+    if not nodes:
+        return
+
+    if type_to_current_hash is None:
+        type_to_current_hash = get_component_hash_lookups_for_validation()
+    found = _find_code_execution_components(
+        nodes,
+        _blocked_code_hashes(CODE_EXECUTION_COMPONENT_TYPES, type_to_current_hash=type_to_current_hash or {}),
+    )
+    if found:
+        names = ", ".join(found)
+        logger.warning(f"Flow build blocked: code-execution components are disabled: {names}")
+        message = f"Flow build blocked: code-execution components are not allowed: {names}"
+        raise CustomComponentValidationError(message)
+
+    # A code-bearing node can be relabelled with a benign type while carrying the source of
+    # an interpreter component. Without the registry hashes there is no way to distinguish
+    # that source, so hold execution until the templates are available. Codeless nodes remain
+    # usable while the registry initializes.
+    if not type_to_current_hash and _contains_component_code(nodes):
+        raise CustomComponentValidationError(INITIALIZING_COMPONENT_TEMPLATES_MESSAGE)
 
 
 def code_hash_matches_any_template(code: str, all_known_hashes: set[str]) -> bool:
@@ -299,32 +740,166 @@ def get_trusted_code_for_validation(code: str) -> str | None:
     """
     from wfx.interface.components import component_cache
 
-    # Self-heal: build the lookup lazily if the cache hasn't populated it yet
-    # (e.g. the eager warm-up path didn't run before the first request).
-    if component_cache.code_by_hash is None and component_cache.all_types_dict is not None:
-        component_cache.code_by_hash = collect_code_by_hash(component_cache.all_types_dict)
+    code_hash = _compute_code_hash(code)
+    with component_cache.state_lock:
+        # Self-heal lazily when eager warm-up did not run. Building and
+        # publishing under the same lock as reload prevents an old registry
+        # snapshot from being published after reload invalidates it.
+        if (
+            component_cache.code_by_hash is None
+            and component_cache.all_types_ready
+            and component_cache.all_types_dict is not None
+        ):
+            component_cache.code_by_hash = collect_code_by_hash(component_cache.all_types_dict)
 
-    code_by_hash = component_cache.code_by_hash
-    if not code_by_hash:
-        return None
+        code_by_hash = component_cache.code_by_hash
+        if not code_by_hash:
+            return None
 
-    return code_by_hash.get(_compute_code_hash(code))
+        return code_by_hash.get(code_hash)
+
+
+def get_trusted_code_and_hashes_for_validation(code: str) -> tuple[str | None, dict[str, set[str]] | None]:
+    """Return trusted source and type hashes from one component-registry generation."""
+    from wfx.interface.components import _build_code_hash_lookups, component_cache
+
+    code_hash = _compute_code_hash(code)
+    with component_cache.state_lock:
+        if component_cache.all_types_ready and component_cache.all_types_dict is not None:
+            if component_cache.code_by_hash is None:
+                component_cache.code_by_hash = collect_code_by_hash(component_cache.all_types_dict)
+            if component_cache.type_to_current_hash is None:
+                _build_code_hash_lookups(component_cache)
+        code_by_hash = component_cache.code_by_hash
+        return (code_by_hash.get(code_hash) if code_by_hash else None, component_cache.type_to_current_hash)
+
+
+def _substitute_trusted_code_by_hash(nodes: list[dict]) -> list[str]:
+    """Replace code-bearing nodes with the matching server-trusted source.
+
+    The caller must first validate each node's declared type and code hash with
+    :func:`check_flow_and_raise`. This second pass ensures the build executes
+    the server's copy for that exact hash instead of request bytes, and fails
+    closed if the trusted-source lookup is incomplete. Nested flow payloads are
+    handled recursively.
+    """
+    blocked: list[str] = []
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+
+        node_data = node.get("data")
+        if not isinstance(node_data, dict):
+            continue
+
+        node_info = node_data.get("node")
+        if not isinstance(node_info, dict):
+            continue
+
+        template = node_info.get("template")
+        code_field = template.get("code") if isinstance(template, dict) else None
+        code = code_field.get("value") if isinstance(code_field, dict) else None
+        if isinstance(code, str) and code:
+            trusted = get_trusted_code_for_validation(code)
+            if trusted is None:
+                display_name = node_info.get("display_name") or node_data.get("type") or "unknown"
+                node_id = node_data.get("id") or node.get("id", "unknown")
+                blocked.append(f"{display_name} ({node_id})")
+            else:
+                code_field["value"] = trusted
+
+        nested_flow = node_info.get("flow")
+        if isinstance(nested_flow, dict):
+            nested_data = nested_flow.get("data")
+            nested_nodes = nested_data.get("nodes") if isinstance(nested_data, dict) else None
+            if isinstance(nested_nodes, list) and nested_nodes:
+                blocked.extend(_substitute_trusted_code_by_hash(nested_nodes))
+
+    return blocked
+
+
+def resolve_trusted_code_for_build(code: str, *, public_execution: bool = False) -> str:
+    """Return the component code to ``exec`` for a build, enforcing restricted-mode substitution.
+
+    In permissive mode (``allow_custom_components=True``, the default) the node's own ``code`` is
+    returned unchanged — no behavior change.
+
+    In restricted mode (``allow_custom_components=False``) the node only reached the build because
+    it cleared the truncated-hash gate. Because that gate is a 48-bit prefix, a second-preimage
+    collision could carry attacker bytes whose hash matches a built-in. Substitute the server's
+    trusted source keyed by the same hash so a collision merely re-runs the server's own
+    component. Fail closed (raise) when no trusted source is known for the hash, rather than fall
+    back to the client bytes.
+    """
+    from wfx.services.deps import get_settings_service
+
+    settings_service = get_settings_service()
+    # Missing settings cannot prove permissive mode, but every consumer of allow_custom_components
+    # in this module treats a missing attribute as the True default, so mirror that here.
+    allow_custom_components = True
+    if settings_service is not None:
+        allow_custom_components = getattr(settings_service.settings, "allow_custom_components", True)
+
+    if allow_custom_components:
+        return code
+
+    if public_execution:
+        trusted, type_to_current_hash = get_trusted_code_and_hashes_for_validation(code)
+    else:
+        trusted = get_trusted_code_for_validation(code)
+        type_to_current_hash = None
+    if trusted is None:
+        msg = "Flow build blocked: no trusted server component matches this component's code."
+        raise CustomComponentValidationError(msg)
+    if public_execution:
+        # This is the last lookup before eval_custom_component_code. A hot extension reload may
+        # have replaced the trusted source since Graph.from_payload's public check, so validate
+        # the exact source returned from the current registry generation before executing it.
+        validate_public_flow_no_code_execution(
+            {"nodes": [_validation_node_for_code(trusted)]},
+            type_to_current_hash=type_to_current_hash,
+        )
+    return trusted
+
+
+def _validation_node_for_code(code: str) -> dict[str, Any]:
+    """Build the minimal node shape used by code-hash policy checks."""
+    return {
+        "data": {
+            "id": "runtime-component",
+            "type": "",
+            "node": {
+                "display_name": "Runtime Component",
+                "template": {"code": {"value": code}},
+            },
+        }
+    }
 
 
 def check_flow_and_raise(
     flow_data: dict | None,
     *,
     allow_custom_components: bool,
-    type_to_current_hash: dict[str, set[str]] | None = None,
+    type_to_current_hash: Mapping[str, set[str]] | None = None,
+    substitutable_types: Container[str] | None = None,
 ) -> None:
-    """Validate flow component code against known server templates."""
+    """Validate flow component code against known server templates.
+
+    ``substitutable_types`` (normally :class:`SubstitutableComponentTypes` from
+    :func:`get_outdated_code_substitution_lookups`) exempts drifted built-ins from the outdated
+    check because the build substitutes this server's code for them. Unrecognized component
+    types are still blocked.
+    """
     if allow_custom_components or not flow_data:
         return
 
     nodes = flow_data.get("nodes", [])
+    if not isinstance(nodes, list):
+        msg = "Flow validation failed: nodes must be a list."
+        raise CustomComponentValidationError(msg)
     if not nodes:
         return
-
     if type_to_current_hash is None:
         logger.error(
             "Flow validation requested but component hash lookups are not yet loaded. "
@@ -332,7 +907,7 @@ def check_flow_and_raise(
         )
         raise CustomComponentValidationError(INITIALIZING_COMPONENT_TEMPLATES_MESSAGE)
 
-    blocked, outdated = _get_invalid_components(nodes, type_to_current_hash)
+    blocked, outdated = _get_invalid_components(nodes, type_to_current_hash, substitutable_types)
 
     if blocked:
         blocked_names = ", ".join(blocked)
@@ -349,44 +924,163 @@ def check_flow_and_raise(
 
 def get_component_hash_lookups_for_validation() -> dict[str, set[str]] | None:
     """Return the cached component hashes, building them synchronously if possible."""
-    from wfx.interface.components import component_cache
+    from wfx.interface.components import _build_code_hash_lookups, component_cache
 
-    if component_cache.type_to_current_hash is None and component_cache.all_types_dict is not None:
-        type_to_hash, all_hashes = collect_component_hash_lookups(component_cache.all_types_dict)
-        component_cache.type_to_current_hash = type_to_hash
-        component_cache.all_known_hashes = all_hashes
-        component_cache.code_by_hash = collect_code_by_hash(component_cache.all_types_dict)
+    with component_cache.state_lock:
+        if (
+            component_cache.type_to_current_hash is None
+            and component_cache.all_types_ready
+            and component_cache.all_types_dict is not None
+        ):
+            _build_code_hash_lookups(component_cache)
 
-    return component_cache.type_to_current_hash
+        return component_cache.type_to_current_hash
 
 
-def validate_flow_for_current_settings(target: Mapping[str, Any] | Any | None) -> None:
-    """Enforce custom-component policy for a payload or graph-like object."""
-    from wfx.services.deps import get_settings_service
+def validate_catalog_policy_for_component_code(
+    code: str,
+    *,
+    snapshot: CatalogPolicySnapshot | None = None,
+) -> None:
+    """Reject source that matches a blocked server component template.
+
+    The code hash is checked against every exact catalog key's existing alias
+    lookup before custom-component source is parsed or executed. An active
+    policy fails closed while those trusted template identities are unavailable;
+    an empty snapshot remains the documented default-allow behavior.
+    """
+    if snapshot is None:
+        from wfx.services.deps import get_catalog_policy_service
+
+        snapshot = get_catalog_policy_service().snapshot
+
+    if not snapshot.blocked_component_keys:
+        return
+
+    type_to_current_hash = get_component_hash_lookups_for_validation()
+    if type_to_current_hash is None:
+        raise CatalogPolicyIdentityUnavailableError(CATALOG_POLICY_IDENTITIES_UNAVAILABLE_MESSAGE)
+
+    code_hash = _compute_code_hash(code)
+    # Preserve exact lookup behavior for synthetic/custom identities and
+    # callers that provide a focused hash map in tests.
+    blocked = frozenset(
+        component_type
+        for component_type in snapshot.blocked_component_keys
+        if code_hash in type_to_current_hash.get(component_type, set())
+    )
+    if not blocked:
+        identity_index = get_component_identity_index_for_validation()
+        if identity_index is None:
+            raise CatalogPolicyIdentityUnavailableError(CATALOG_POLICY_IDENTITIES_UNAVAILABLE_MESSAGE)
+        blocked = frozenset(
+            component_type
+            for component_type in identity_index.resolve_many(snapshot.blocked_component_keys)
+            if code_hash in type_to_current_hash.get(component_type, set())
+        )
+    if not blocked:
+        return
+
+    blocked_names = ", ".join(sorted(blocked))
+    logger.warning(f"Component action blocked by catalog policy: {blocked_names}")
+    message = f"Catalog policy blocks components: {blocked_names}"
+    raise CatalogPolicyValidationError(message)
+
+
+def validate_catalog_policy_for_component_type(
+    component_type: str,
+    *,
+    snapshot: CatalogPolicySnapshot | None = None,
+) -> None:
+    """Reject a materialized component whose canonical identity is blocked."""
+    if snapshot is None:
+        from wfx.services.deps import get_catalog_policy_service
+
+        snapshot = get_catalog_policy_service().snapshot
+
+    if not snapshot.blocked_component_keys:
+        return
+
+    # Exact identities remain independently enforceable even before component
+    # template initialization completes.
+    if snapshot.is_component_blocked(component_type):
+        blocked = frozenset({component_type})
+    else:
+        identity_index = get_component_identity_index_for_validation()
+        if identity_index is None:
+            raise CatalogPolicyIdentityUnavailableError(CATALOG_POLICY_IDENTITIES_UNAVAILABLE_MESSAGE)
+        blocked = identity_index.resolve(component_type).intersection(
+            identity_index.resolve_many(snapshot.blocked_component_keys)
+        )
+
+    if not blocked:
+        return
+
+    blocked_names = ", ".join(sorted(blocked))
+    logger.warning(f"Component action blocked by catalog policy: {blocked_names}")
+    message = f"Catalog policy blocks components: {blocked_names}"
+    raise CatalogPolicyValidationError(message)
+
+
+def validate_flow_for_current_settings(
+    target: Mapping[str, Any] | Any | None,
+    *,
+    catalog_policy_snapshot: CatalogPolicySnapshot | None = None,
+) -> None:
+    """Enforce catalog and custom-component policy for a payload or graph-like object."""
+    from wfx.services.deps import get_catalog_policy_service, get_settings_service
 
     settings_service = get_settings_service()
     if settings_service is None:
         raise RuntimeError(SETTINGS_SERVICE_REQUIRED_MESSAGE)
 
-    allow_custom_components = settings_service.settings.allow_custom_components
+    if catalog_policy_snapshot is None:
+        catalog_policy_snapshot = get_catalog_policy_service().snapshot
+    settings = settings_service.settings
+    allow_custom_components = getattr(settings, "allow_custom_components", True)
+    block_code_interpreter_components = getattr(settings, "block_code_interpreter_components", False)
     normalized_flow_data = _extract_flow_data(target)
 
-    # If custom components are disabled and we received a target but couldn't
-    # extract any flow data from it, fail fast rather than silently skipping
-    # validation — the caller passed something we can't verify.
-    if not allow_custom_components and target is not None and normalized_flow_data is None:
+    # If a blocking policy is active and we received a target but couldn't extract any flow
+    # data from it, fail fast rather than silently skipping validation — the caller passed
+    # something we can't verify.
+    if (
+        not allow_custom_components
+        or block_code_interpreter_components
+        or bool(catalog_policy_snapshot.blocked_component_keys)
+    ) and (target is not None and normalized_flow_data is None):
         msg = (
             "Flow validation failed: could not extract graph data from the provided target. "
             "Ensure the flow payload or Graph object contains valid graph data."
         )
         raise CustomComponentValidationError(msg)
 
-    type_to_current_hash = get_component_hash_lookups_for_validation() if not allow_custom_components else None
+    validate_catalog_policy_for_flow(normalized_flow_data, snapshot=catalog_policy_snapshot)
+
+    if block_code_interpreter_components:
+        check_code_execution_components_and_raise(normalized_flow_data)
+
+    # Pre-check call sites (API endpoints, warm-graph reuse) validate a payload they do not own,
+    # so the substitution itself happens later, in Graph.from_payload, on the payload that is
+    # actually built. Here we only need to agree with it about which drifted built-ins are going
+    # to be rebuilt with this server's code, so the pre-check does not refuse a build that will
+    # then succeed. Both sides read the same SubstitutableComponentTypes rule, so an ambiguous
+    # type is neither substituted nor exempted here and stays blocked as outdated.
+    substitution_lookups = None
+    type_to_current_hash = None
+    if not allow_custom_components:
+        substitution_lookups = get_outdated_code_substitution_lookups()
+        type_to_current_hash = (
+            substitution_lookups[1].type_to_current_hash
+            if substitution_lookups
+            else get_component_hash_lookups_for_validation()
+        )
 
     check_flow_and_raise(
         normalized_flow_data,
         allow_custom_components=allow_custom_components,
         type_to_current_hash=type_to_current_hash,
+        substitutable_types=substitution_lookups[1] if substitution_lookups else None,
     )
 
 
@@ -472,21 +1166,438 @@ def _substitute_trusted_node_code(nodes: list, type_to_code: dict[str, str]) -> 
     return blocked
 
 
-async def _ensure_component_code_lookups(settings_service: Any) -> dict[str, str]:
-    """Load the component registry if needed and return the type→trusted-code map (fail closed)."""
+def get_component_code_lookups_for_validation() -> dict[str, str] | None:
+    """Return the cached component type→trusted-code map, building it synchronously if possible.
+
+    ``None`` means the registry is not ready yet, which callers must treat as "no substitution
+    is possible" and fall back to the strict hash check.
+    """
+    from wfx.interface.components import component_cache
+
+    with component_cache.state_lock:
+        # Self-heal lazily when eager warm-up did not run, mirroring
+        # get_trusted_code_for_validation. Only this lookup is (re)built, so a
+        # caller holding another derived index keeps its own consistent view.
+        if (
+            component_cache.type_to_code is None
+            and component_cache.all_types_ready
+            and component_cache.all_types_dict is not None
+        ):
+            component_cache.type_to_code = collect_component_code_lookups(component_cache.all_types_dict)
+
+        return component_cache.type_to_code
+
+
+@dataclass(frozen=True, slots=True)
+class SubstitutableComponentTypes(Container[str]):
+    """The component types whose drifted code this server will rebuild with its own copy.
+
+    A type qualifies only when the registry resolves it to *exactly one* current code hash and
+    this server has trusted code that hashes to that value. Two components can contribute the
+    same type alias — a built-in and a ``components_path`` component of the same name, or an
+    ``XComponent``/``X`` pair across bundles. ``collect_component_hash_lookups`` keeps every such
+    hash, but ``collect_component_code_lookups`` is first-wins by registry iteration order, so for
+    an ambiguous type the trusted code is not necessarily the source the node meant. Stored code
+    that matches neither hash is indistinguishable from "this node is the other component", so
+    those types are excluded and :func:`check_flow_and_raise` blocks them as outdated, exactly as
+    it did before the substitution pass existed.
+
+    Membership is decided on demand rather than materialized, so the substitution pass and the
+    pre-check that must agree with it share one rule without copying the registry per build.
+    """
+
+    type_to_current_hash: Mapping[str, set[str]]
+    type_to_code: Mapping[str, str]
+
+    def __contains__(self, component_type: object) -> bool:
+        if not isinstance(component_type, str):
+            return False
+        current_hashes = self.type_to_current_hash.get(component_type)
+        if current_hashes is None or len(current_hashes) != 1:
+            return False
+        trusted_code = self.type_to_code.get(component_type)
+        return isinstance(trusted_code, str) and _compute_code_hash(trusted_code) == next(iter(current_hashes))
+
+    def current_hash(self, component_type: str) -> str:
+        """Return the single current code hash for a substitutable ``component_type``."""
+        return next(iter(self.type_to_current_hash[component_type]))
+
+
+def get_outdated_code_substitution_lookups() -> tuple[dict[str, str], SubstitutableComponentTypes] | None:
+    """Return ``(type_to_code, substitutable_types)`` when drifted built-ins are substitutable.
+
+    ``None`` — meaning "keep the strict hash check" — is returned when custom components are
+    allowed (nothing is gated, so the node's own code runs as authored), when the operator has
+    turned ``substitute_outdated_component_code`` off, or when the component registry is not
+    loaded yet (fail closed rather than let unverified code through).
+    """
+    from wfx.interface.components import component_cache
+    from wfx.services.deps import get_settings_service
+
+    settings_service = get_settings_service()
+    if settings_service is None:
+        return None
+
+    settings = settings_service.settings
+    if getattr(settings, "allow_custom_components", True):
+        return None
+    if not getattr(settings, "substitute_outdated_component_code", True):
+        return None
+
+    # The cache publishes and invalidates all derived indexes under this lock. Keep it across
+    # both reads so a hot reload cannot pair hashes from one registry snapshot with source from
+    # another. The individual helpers also take this RLock while lazily self-healing an index.
+    with component_cache.state_lock:
+        type_to_current_hash = get_component_hash_lookups_for_validation()
+        type_to_code = get_component_code_lookups_for_validation()
+    if not type_to_current_hash or not type_to_code:
+        return None
+
+    return type_to_code, SubstitutableComponentTypes(type_to_current_hash, type_to_code)
+
+
+def _substitute_outdated_node_code(
+    nodes: list,
+    type_to_code: Mapping[str, str],
+    substitutable_types: SubstitutableComponentTypes,
+) -> list[str]:
+    """Replace drifted built-in code with this server's copy for the node's component type.
+
+    Mutates the given node dicts in place. Only nodes whose ``data.type`` is substitutable (see
+    :class:`SubstitutableComponentTypes`) and whose stored code hash no longer matches that type
+    are touched; every other node — one whose type is unknown, and one whose type is ambiguous
+    across the registry — is left exactly as it was for :func:`check_flow_and_raise` to
+    classify. Recurses into inlined sub-flow definitions. Returns ``display_name (id)`` labels
+    for swapped nodes.
+    """
+    swapped: list[str] = []
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_data = node.get("data")
+        if not isinstance(node_data, dict):
+            continue
+        node_info = node_data.get("node")
+        if not isinstance(node_info, dict):
+            continue
+
+        template = node_info.get("template")
+        code_field = template.get("code") if isinstance(template, dict) else None
+        code = code_field.get("value") if isinstance(code_field, dict) else None
+        component_type = node_data.get("type")
+
+        if (
+            isinstance(code, str)
+            and code
+            and component_type in substitutable_types
+            and _compute_code_hash(code) != substitutable_types.current_hash(component_type)
+        ):
+            trusted = type_to_code[component_type]
+            if trusted != code:
+                code_field["value"] = trusted
+                display_name = node_info.get("display_name") or component_type
+                node_id = node_data.get("id") or node.get("id", "unknown")
+                swapped.append(f"{display_name} ({node_id})")
+
+        nested_flow = node_info.get("flow")
+        if isinstance(nested_flow, dict):
+            nested_data = nested_flow.get("data")
+            nested_nodes = nested_data.get("nodes") if isinstance(nested_data, dict) else None
+            if isinstance(nested_nodes, list) and nested_nodes:
+                swapped.extend(_substitute_outdated_node_code(nested_nodes, type_to_code, substitutable_types))
+
+    return swapped
+
+
+def substitute_outdated_component_code_in_place(
+    flow_data: dict | None,
+    *,
+    validate_public_execution: bool = False,
+) -> list[str]:
+    """Rebuild drifted built-in nodes with this server's code before the flow is validated.
+
+    Only active in restricted mode (``allow_custom_components=False``) with
+    ``substitute_outdated_component_code`` enabled — the default. There, the node's stored code
+    is never what executes: :func:`resolve_trusted_code_for_build` already substitutes the
+    server's copy keyed by code hash. Without this pass, a built-in whose code merely drifted
+    across an upgrade fails the hash check and the whole flow is refused over code that was
+    never going to run.
+
+    Swapping by component *type* is the same rule the unauthenticated public build path applies
+    by default (:func:`prepare_public_flow_build`), and it does not widen what can execute: the
+    code that runs is this server's own, and a node whose type is not a known server component
+    is left untouched for :func:`check_flow_and_raise` to block. A type that two components
+    claim is likewise left untouched, so drift is never resolved into the *wrong* component —
+    see :class:`SubstitutableComponentTypes`.
+
+    Mutates ``flow_data`` in place. ``Graph.from_payload`` passes the normalized copy it builds
+    from, so a stored flow is never changed there. Other callers that must preserve the stored
+    flow, so the editor keeps flagging the node as outdated, pass a copy. Returns
+    ``display_name (id)`` labels for the nodes that were swapped.
+
+    When ``validate_public_execution`` is true, the exact post-substitution bytes are checked
+    against the public code-execution policy using the same registry snapshot that supplied
+    trusted source. This closes the prepare-to-graph hot-reload window on unauthenticated
+    execution paths: a later registry generation cannot replace already-checked source without
+    that replacement being checked before component instantiation.
+    """
+    if not flow_data:
+        return []
+
+    nodes = flow_data.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        return []
+
+    lookups = get_outdated_code_substitution_lookups()
+    if lookups is None:
+        if validate_public_execution:
+            validate_public_flow_no_code_execution(flow_data)
+        return []
+
+    swapped = _substitute_outdated_node_code(nodes, *lookups)
+    _log_outdated_component_code_substitution(swapped)
+    if validate_public_execution:
+        validate_public_flow_no_code_execution(
+            flow_data,
+            type_to_current_hash=lookups[1].type_to_current_hash,
+        )
+    return swapped
+
+
+def _log_outdated_component_code_substitution(swapped: list[str]) -> None:
+    """Warn when a build uses current server code for drifted stored components."""
+    if not swapped:
+        return
+
+    # Substitution is safe but not neutral: a component can behave differently after an
+    # upgrade (e.g. #14236 removed a default value), so never do it silently.
+    logger.warning(
+        f"Flow build: ran this server's component code for {len(swapped)} outdated "
+        f"component(s) instead of the code stored in the flow: {', '.join(swapped)}. "
+        "The stored flow is unchanged and these components remain flagged as outdated. "
+        "Apply the pending component upgrade in the editor to pin the flow to this version, "
+        "or configure PRIMEAGENT_SUBSTITUTE_OUTDATED_COMPONENT_CODE=false to refuse these builds."
+    )
+
+
+def describe_component_code_substitution(flow_data: dict | None, *, include_component_names: bool = True) -> str | None:
+    """Describe the restricted-mode substitutions before sanitization discards the saved code.
+
+    Use the same substitution rule as the build, including nested flows and ambiguous types.
+    Work on a detached copy so collecting a warning never changes the saved flow or logs a build.
+    """
+    from copy import deepcopy
+
+    lookups = get_outdated_code_substitution_lookups()
+    if lookups is None or not flow_data or not isinstance(flow_data.get("nodes"), list):
+        return None
+    swapped = _substitute_outdated_node_code(deepcopy(flow_data["nodes"]), *lookups)
+    if not swapped:
+        return None
+    affected = f" for {', '.join(swapped)}" if include_component_names else ""
+    next_step = (
+        "Review and update the affected components in the flow editor to use the server version."
+        if include_component_names
+        else "Ask the flow owner to review and update the affected components to use the server version."
+    )
+    return (
+        "Custom components are disabled on this server (PRIMEAGENT_ALLOW_CUSTOM_COMPONENTS=false). "
+        f"This run uses the server's component code instead of the code saved in the flow{affected}. "
+        f"The saved flow is unchanged. {next_step}"
+    )
+
+
+RESTRICTED_MODE_MISMATCH_HINT = (
+    "Note: custom components are disabled on this server (PRIMEAGENT_ALLOW_CUSTOM_COMPONENTS=false), so "
+    'the build ran this server\'s "{component_type}" component instead of the component code saved in '
+    "the flow, and the saved component does not match it{missing_clause}. If the error above does not "
+    "match how this component is configured in the flow, that substitution is why: update the component "
+    "in the flow editor, or set PRIMEAGENT_ALLOW_CUSTOM_COMPONENTS=true to run the flow's own code."
+)
+
+
+def _registry_entry_for_component_type(component_type: str) -> Mapping[str, Any] | None:
+    """Return this server's registry entry for ``component_type``, aliases included."""
+    from wfx.interface.components import component_cache
+    from wfx.upgrade.checker import build_registry_lookup
+
+    with component_cache.state_lock:
+        all_types_dict = component_cache.all_types_dict if component_cache.all_types_ready else None
+    if not all_types_dict:
+        return None
+    return build_registry_lookup(all_types_dict).get(component_type)
+
+
+def _unfillable_required_fields(registry_template: Mapping[str, Any], flow_template: Mapping[str, Any]) -> list[str]:
+    """Name the server inputs a saved node cannot supply, using the checker's own rule.
+
+    These are exactly the fields ``_template_keys_compatible`` refuses to introduce silently: a
+    required input the saved node has no key for and whose declared state cannot fill it.
+    """
+    from wfx.upgrade.checker import new_template_field_keys
+
+    missing = []
+    for key in new_template_field_keys(registry_template, flow_template):
+        field = registry_template.get(key)
+        if isinstance(field, Mapping) and field.get("required") and field.get("value") in (None, ""):
+            missing.append(key)
+    return sorted(missing)
+
+
+def describe_restricted_component_mismatch(component_type: Any, node_info: Any) -> str | None:
+    """Explain a build failure caused by restricted mode running server code for a saved component.
+
+    In restricted mode a node's stored code never runs: the build executes this server's
+    component of the same ``data.type`` instead (:func:`substitute_outdated_component_code_in_place`
+    for drifted built-ins, :func:`resolve_trusted_code_for_build` at instantiation). That is what
+    keeps a flow saved before an upgrade runnable, but it is silent — so a node that is a
+    *customized* copy of a built-in is quietly rebuilt as the stock component, and the build fails
+    with whatever that component complains about. A customized Agent surfaces as "No model
+    selected", naming neither the customization nor the policy that discarded it.
+
+    Returns a sentence to append to the build error when the saved component is structurally
+    incompatible with this server's component of the same type -- the same condition the upgrade
+    checker reports as a breaking change, and the frontend as "flow needs review". Returns ``None``
+    in permissive mode, for an unknown type (already refused by :func:`check_flow_and_raise`), when
+    the registry is unavailable, and for a node this server's component can still drive: a legacy
+    Agent carrying ``agent_llm``/``model_name`` runs fine after the swap and must not be blamed.
+    """
+    from wfx.services.deps import get_settings_service
+
+    settings_service = get_settings_service()
+    if settings_service is None or getattr(settings_service.settings, "allow_custom_components", True):
+        return None
+    if not isinstance(component_type, str) or not component_type or not isinstance(node_info, Mapping):
+        return None
+
+    registry_entry = _registry_entry_for_component_type(component_type)
+    if registry_entry is None:
+        return None
+
+    from wfx.upgrade.checker import has_breaking_change
+
+    if not has_breaking_change(registry_entry, node_info):
+        return None
+
+    registry_template = registry_entry.get("template")
+    flow_template = node_info.get("template")
+    missing_clause = ""
+    if isinstance(registry_template, Mapping) and isinstance(flow_template, Mapping):
+        missing = _unfillable_required_fields(registry_template, flow_template)
+        if missing:
+            missing_clause = f" (missing required input: {', '.join(missing)})"
+
+    return RESTRICTED_MODE_MISMATCH_HINT.format(component_type=component_type, missing_clause=missing_clause)
+
+
+def explain_restricted_component_mismatch(component_type: Any, node_info: Any) -> str | None:
+    """Never-raising wrapper for :func:`describe_restricted_component_mismatch`.
+
+    Callers are build-error handlers, where a diagnostic that raises would replace the
+    component's real error with an unrelated one.
+    """
+    try:
+        return describe_restricted_component_mismatch(component_type, node_info)
+    except Exception:  # noqa: BLE001 -- diagnosis is best effort; never mask the original failure
+        logger.debug("Could not diagnose restricted-mode component mismatch", exc_info=True)
+        return None
+
+
+async def _ensure_public_component_lookup_snapshot(
+    settings_service: Any,
+) -> tuple[dict[str, str], Mapping[str, set[str]]]:
+    """Return code and hash indexes from one component-registry snapshot (fail closed)."""
     from wfx.interface.components import component_cache, get_and_cache_all_types_dict
 
-    if component_cache.all_types_dict is None:
+    with component_cache.state_lock:
+        registry_unavailable = component_cache.all_types_dict is None or not component_cache.all_types_ready
+    if registry_unavailable:
         try:
             await get_and_cache_all_types_dict(settings_service)
         except Exception as exc:
             logger.warning("Failed to load component templates for public flow sanitization", exc_info=exc)
             raise
 
-    all_types_dict = component_cache.all_types_dict
-    if not all_types_dict:
-        return {}
-    return collect_component_code_lookups(all_types_dict)
+    # Publication and invalidation replace all derived indexes under this RLock. Keep it across
+    # both reads so trusted source selected for substitution and hashes used by the public
+    # code-execution gate always describe the same registry generation.
+    with component_cache.state_lock:
+        type_to_code = get_component_code_lookups_for_validation()
+        type_to_current_hash = get_component_hash_lookups_for_validation()
+    return type_to_code or {}, type_to_current_hash or {}
+
+
+def _restore_grouped_validated_flow(grouped: dict, executable: dict) -> dict:
+    """Keep group identity while carrying validated code through its proxy fields."""
+    import copy
+
+    from wfx.graph.graph.utils import process_flow
+
+    result = copy.deepcopy(grouped)
+    nodes_by_id: dict[str, dict] = {}
+
+    def collect(nodes: list) -> None:
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = node.get("id")
+            if isinstance(node_id, str):
+                nodes_by_id[node_id] = node
+            node_data = node.get("data")
+            node_info = node_data.get("node") if isinstance(node_data, dict) else None
+            flow = node_info.get("flow") if isinstance(node_info, dict) else None
+            flow_data = flow.get("data") if isinstance(flow, dict) else None
+            nested = flow_data.get("nodes") if isinstance(flow_data, dict) else None
+            if isinstance(nested, list):
+                collect(nested)
+
+    collect(result["nodes"])
+    executable_code = {}
+    for node in executable["nodes"]:
+        code = node.get("data", {}).get("node", {}).get("template", {}).get("code")
+        if isinstance(code, dict) and isinstance(node.get("id"), str):
+            executable_code[node["id"]] = code.get("value")
+
+    def resolved_code(node_id: str, field_name: str) -> Any | None:
+        seen = set()
+        while (node_id, field_name) not in seen:
+            seen.add((node_id, field_name))
+            node = nodes_by_id.get(node_id)
+            if node is None:
+                return None
+            field = node.get("data", {}).get("node", {}).get("template", {}).get(field_name)
+            if not isinstance(field, dict):
+                return None
+            proxy = field.get("proxy")
+            if isinstance(proxy, dict) and isinstance(proxy.get("id"), str) and isinstance(proxy.get("field"), str):
+                node_id, field_name = proxy["id"], proxy["field"]
+            else:
+                return executable_code.get(node_id) if field_name == "code" else None
+        return None
+
+    for node_id, node in nodes_by_id.items():
+        template = node.get("data", {}).get("node", {}).get("template", {})
+        if not isinstance(template, dict):
+            continue
+        code = template.get("code")
+        if isinstance(code, dict) and node_id in executable_code:
+            code["value"] = executable_code[node_id]
+        for field in template.values():
+            if not isinstance(field, dict) or not isinstance(field.get("proxy"), dict):
+                continue
+            proxy = field["proxy"]
+            if isinstance(proxy.get("id"), str) and isinstance(proxy.get("field"), str):
+                safe_code = resolved_code(proxy["id"], proxy["field"])
+                if safe_code is not None:
+                    field["value"] = safe_code
+
+    # A second expansion must be identical to the graph we just checked. This catches proxy
+    # chains or future substitutions that the projection does not cover.
+    if process_flow(result) != executable:
+        msg = "Flow validation failed: grouped graph differs from its validated executable graph."
+        raise CustomComponentValidationError(msg)
+    return result
 
 
 async def prepare_public_flow_build(target: Mapping[str, Any] | Any | None) -> dict | None:
@@ -505,30 +1616,34 @@ async def prepare_public_flow_build(target: Mapping[str, Any] | Any | None) -> d
     still build, while arbitrary / relabelled custom code never executes. Returns the sanitized
     graph dict for the caller to build from.
 
-    Opt-in (``allow_public_custom_components`` is True): preserves the prior behavior — runs the
-    standard custom-component validation and returns ``None`` so the caller builds from the
-    database as before.
+    Opt-in (``allow_public_custom_components`` is True): preserves stored custom code only when
+    both global and admin-only custom-component policies permit anonymous execution.
+    When the global policy is restricted,
+    this helper mirrors its trusted-code substitution. Both paths validate the expanded graph
+    and return its grouped form, preserving group IDs in build status and graph snapshots.
+
+    The code-execution check is intentionally repeated after default-mode substitution. A
+    namespaced extension identity may not itself appear in the public blocklist, while its
+    trusted server source resolves to a blocked component. Validating only the stored bytes would
+    let stale code evade the hash check and become blocked code during trusted substitution.
 
     Returns:
-        The sanitized graph dict to build from, or ``None`` to fall back to the default
-        database-loaded build (opt-in mode, or no flow data to sanitize).
+        The sanitized graph dict to build from, or ``None`` if there is no graph to sanitize.
 
     Raises:
         CustomComponentValidationError: if the flow contains an unrecognized custom component, or
             the component templates cannot be loaded (fail closed).
+        PublicFlowValidationError: if the executable graph contains a code-execution or
+            flow-invoking component.
     """
-    import copy
-
+    from wfx.graph.graph.utils import process_flow
     from wfx.services.deps import get_settings_service
 
     settings_service = get_settings_service()
     if settings_service is None:
         raise RuntimeError(SETTINGS_SERVICE_REQUIRED_MESSAGE)
 
-    # Opt-in: honor the global custom-component policy and build from the database as before.
-    if settings_service.settings.allow_public_custom_components:
-        validate_flow_for_current_settings(target)
-        return None
+    settings = settings_service.settings
 
     normalized_flow_data = _extract_flow_data(target)
     if normalized_flow_data is None:
@@ -545,22 +1660,106 @@ async def prepare_public_flow_build(target: Mapping[str, Any] | Any | None) -> d
     if not isinstance(nodes, list) or not nodes:
         return None
 
-    type_to_code = await _ensure_component_code_lookups(settings_service)
-    if not type_to_code:
+    # Group proxies overwrite child template fields during Graph.add_nodes_and_edges. Expand
+    # those groups first, then validate and sanitize the exact executable graph. Restore the
+    # grouped form afterwards so Graph still knows which children belong to a top-level group.
+    try:
+        sanitized = process_flow(normalized_flow_data)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+        msg = "Flow validation failed: malformed grouped graph."
+        raise CustomComponentValidationError(msg) from exc
+
+    if settings.allow_public_custom_components and _admin_only_build_required(settings, is_superuser=False):
+        # Public execution never carries an administrator entitlement.
+        prepared = await prepare_flow_build_for_user(sanitized, is_superuser=False)
+        if prepared is not None:
+            sanitized = prepared
+
+    if settings.allow_public_custom_components and settings.allow_custom_components:
+        validate_flow_for_current_settings(sanitized)
+        validate_public_flow_no_code_execution(sanitized)
+        return _restore_grouped_validated_flow(normalized_flow_data, sanitized)
+
+    type_to_code, type_to_current_hash = await _ensure_public_component_lookup_snapshot(settings_service)
+    if not type_to_code or not type_to_current_hash:
         # Templates unavailable — do not let unverified code through.
         raise CustomComponentValidationError(INITIALIZING_COMPONENT_TEMPLATES_MESSAGE)
 
-    sanitized = copy.deepcopy(normalized_flow_data)
-    blocked = _substitute_trusted_node_code(sanitized.get("nodes", []), type_to_code)
-    if blocked:
-        blocked_names = ", ".join(blocked)
-        logger.warning(f"Public flow build blocked: unrecognized custom components are not allowed: {blocked_names}")
-        message = (
-            f"Public flows cannot be built without authentication when they contain custom components: {blocked_names}"
+    if settings.allow_public_custom_components:
+        # Public custom-code opt-in does not override the global restricted-mode policy. Mirror
+        # the substitution Graph.from_payload would otherwise perform later, then return this
+        # effective graph so the public code-execution check covers the bytes that will run.
+        validate_flow_for_current_settings(sanitized)
+        if getattr(settings, "substitute_outdated_component_code", True):
+            substitutable_types = SubstitutableComponentTypes(type_to_current_hash, type_to_code)
+            swapped = _substitute_outdated_node_code(sanitized.get("nodes", []), type_to_code, substitutable_types)
+            _log_outdated_component_code_substitution(swapped)
+        check_flow_and_raise(
+            sanitized,
+            allow_custom_components=False,
+            type_to_current_hash=type_to_current_hash,
         )
-        raise CustomComponentValidationError(message)
+    else:
+        blocked = _substitute_trusted_node_code(sanitized.get("nodes", []), type_to_code)
+        if blocked:
+            blocked_names = ", ".join(blocked)
+            logger.warning(
+                f"Public flow build blocked: unrecognized custom components are not allowed: {blocked_names}"
+            )
+            message = (
+                "Public flows cannot be built without authentication when they contain custom components: "
+                f"{blocked_names}"
+            )
+            raise CustomComponentValidationError(message)
 
-    return sanitized
+    # Validate what the executor will actually receive, not only the stale stored bytes checked
+    # by route-level defense in depth. This central guarantee covers v1, v2, A2A start, and A2A
+    # resume callers alike.
+    validate_public_flow_no_code_execution(sanitized, type_to_current_hash=type_to_current_hash)
+    return _restore_grouped_validated_flow(normalized_flow_data, sanitized)
+
+
+def revalidate_public_executable_flow(flow_data: dict[str, Any]) -> None:
+    """Enforce anonymous-build policy on the graph after all group proxies are applied.
+
+    This is the last synchronous gate before Graph.initialize instantiates component code.
+    The route-level preparation rejects bad flows before queuing a job, while this check
+    covers direct Graph construction, extension migration, and registry reloads after that
+    preparation. The default policy replaces any proxy-injected code with a fresh trusted
+    registry copy; explicit public-custom opt-in preserves only what its global policy allows.
+    """
+    from wfx.interface.components import component_cache
+    from wfx.services.deps import get_settings_service
+
+    settings_service = get_settings_service()
+    if settings_service is None:
+        raise RuntimeError(SETTINGS_SERVICE_REQUIRED_MESSAGE)
+    settings = settings_service.settings
+
+    type_to_current_hash = None
+    if not settings.allow_public_custom_components:
+        with component_cache.state_lock:
+            type_to_code = get_component_code_lookups_for_validation()
+            type_to_current_hash = get_component_hash_lookups_for_validation()
+        if not type_to_code or not type_to_current_hash:
+            raise CustomComponentValidationError(INITIALIZING_COMPONENT_TEMPLATES_MESSAGE)
+        blocked = _substitute_trusted_node_code(flow_data.get("nodes", []), type_to_code)
+        if blocked:
+            blocked_names = ", ".join(blocked)
+            message = (
+                "Public flows cannot be built without authentication when they contain custom components: "
+                f"{blocked_names}"
+            )
+            raise CustomComponentValidationError(message)
+    else:
+        prepared = prepare_flow_build_for_user_from_cache(flow_data, is_superuser=False)
+        if prepared is not None:
+            flow_data.clear()
+            flow_data.update(prepared)
+        substitute_outdated_component_code_in_place(flow_data, validate_public_execution=True)
+        validate_flow_for_current_settings(flow_data)
+
+    validate_public_flow_no_code_execution(flow_data, type_to_current_hash=type_to_current_hash)
 
 
 def _node_code_hash(node_info: Any) -> str | None:
@@ -582,7 +1781,11 @@ def _node_code_hash(node_info: Any) -> str | None:
     return None
 
 
-def _blocked_code_hashes(canonical_types: frozenset[str]) -> frozenset[str]:
+def _blocked_code_hashes(
+    canonical_types: frozenset[str],
+    *,
+    type_to_current_hash: Mapping[str, set[str]] | None = None,
+) -> frozenset[str]:
     """Best-effort set of server template code-hashes for ``canonical_types``.
 
     A component's canonical name is always one of its own alias keys in the
@@ -591,7 +1794,8 @@ def _blocked_code_hashes(canonical_types: frozenset[str]) -> frozenset[str]:
     custom components are allowed and the hash gate is inactive) — type-name
     matching still applies in that case.
     """
-    type_to_current_hash = get_component_hash_lookups_for_validation()
+    if type_to_current_hash is None:
+        type_to_current_hash = get_component_hash_lookups_for_validation()
     if not type_to_current_hash:
         return frozenset()
     hashes: set[str] = set()
@@ -629,12 +1833,11 @@ def _collect_blocked_components(
             continue
 
         node_info = node_data.get("node", {})
-        matched_by_type = node_data.get("type") in blocked_types
+        display_name = node_info.get("display_name") if isinstance(node_info, dict) else None
+        matched_by_type = node_data.get("type") in blocked_types or display_name in blocked_types
         matched_by_hash = bool(blocked_hashes) and _node_code_hash(node_info) in blocked_hashes
         if matched_by_type or matched_by_hash:
-            display_name = (node_info.get("display_name") if isinstance(node_info, dict) else None) or node_data.get(
-                "type", "unknown"
-            )
+            display_name = display_name or node_data.get("type", "unknown")
             node_id = node_data.get("id") or node.get("id", "unknown")
             found.append(f"{display_name} ({node_id})")
 
@@ -651,7 +1854,95 @@ def _collect_blocked_components(
     return found
 
 
-def validate_public_flow_no_code_execution(target: Mapping[str, Any] | Any | None) -> None:
+def _selects_mcp_stdio_transport(config: Any) -> bool:
+    """Return whether an MCP server configuration resolves to the subprocess-spawning transport.
+
+    Mirrors the transport selection in ``wfx.base.mcp.util.update_tools``: an explicit
+    ``mode`` of ``Stdio`` wins, otherwise the presence of ``command`` selects stdio. Keeping
+    the two in step means a config this helper passes cannot become a spawn at the sink.
+    """
+    if not isinstance(config, Mapping):
+        return False
+    mode = config.get("mode")
+    if isinstance(mode, str) and mode.strip():
+        return mode.strip().casefold() == "stdio"
+    return bool(config.get("command"))
+
+
+def _mcp_configs_in_field_value(value: Any) -> list[Any]:
+    """Return the MCP server configurations reachable from one template field value."""
+    # A selection can be a raw config, a named ``McpInput`` selection, an imported
+    # ``mcpServers`` map, or a list of selections. Walk each shape so an array cannot
+    # conceal a subprocess-spawning selection from the public-flow gate.
+    if isinstance(value, Mapping):
+        configs = [value]
+        configs.extend(_mcp_configs_in_field_value(value.get("config")))
+        servers = value.get("mcpServers")
+        if isinstance(servers, Mapping):
+            for server in servers.values():
+                configs.extend(_mcp_configs_in_field_value(server))
+        return configs
+    if isinstance(value, list):
+        return [config for item in value for config in _mcp_configs_in_field_value(item)]
+    return []
+
+
+def _is_mcp_server_field(field_name: Any, field: Mapping[str, Any]) -> bool:
+    """Return whether a template entry holds an MCP server selection.
+
+    Matched by the ``McpInput`` field type or name, and by the ``{"name", "config"}`` value
+    shape, so relabelling the field key cannot hide a stdio configuration.
+    """
+    if field.get("type") == MCP_SERVER_FIELD_TYPE:
+        return True
+    if field_name in MCP_SERVER_FIELD_NAMES or field.get("name") in MCP_SERVER_FIELD_NAMES:
+        return True
+    value = field.get("value")
+    return isinstance(value, Mapping) and ("config" in value or "mcpServers" in value)
+
+
+def _collect_mcp_stdio_components(nodes: list[dict]) -> list[str]:
+    """Return ``display_name (id)`` labels for nodes configuring an MCP stdio server.
+
+    Recurses into inlined nested flow definitions for the same reason as
+    ``_collect_blocked_components``.
+    """
+    found: list[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_data = node.get("data", {})
+        if not isinstance(node_data, dict):
+            continue
+        node_info = node_data.get("node", {})
+        if not isinstance(node_info, dict):
+            continue
+
+        template = node_info.get("template", {})
+        if isinstance(template, Mapping):
+            for field_name, field in template.items():
+                if not isinstance(field, Mapping) or not _is_mcp_server_field(field_name, field):
+                    continue
+                if any(
+                    _selects_mcp_stdio_transport(config) for config in _mcp_configs_in_field_value(field.get("value"))
+                ):
+                    display_name = node_info.get("display_name") or node_data.get("type", "unknown")
+                    node_id = node_data.get("id") or node.get("id", "unknown")
+                    found.append(f"{display_name} ({node_id})")
+                    break
+
+        nested_flow = node_info.get("flow", {})
+        nested_nodes = nested_flow.get("data", {}).get("nodes", []) if isinstance(nested_flow, dict) else []
+        if isinstance(nested_nodes, list) and nested_nodes:
+            found.extend(_collect_mcp_stdio_components(nested_nodes))
+    return found
+
+
+def validate_public_flow_no_code_execution(
+    target: Mapping[str, Any] | Any | None,
+    *,
+    type_to_current_hash: Mapping[str, set[str]] | None = None,
+) -> None:
     """Reject unauthenticated public-flow builds that would run arbitrary code.
 
     Public flows are reachable without authentication through
@@ -659,28 +1950,36 @@ def validate_public_flow_no_code_execution(target: Mapping[str, Any] | Any | Non
     Two classes of component are rejected on that path:
 
     * Direct code execution (``CODE_EXECUTION_COMPONENT_TYPES``) — the Python
-      interpreter/REPL components, the legacy Python Code Structured tool and
-      the Smart Transform lambda — which run user- or model-supplied code
-      (report H1-3754930).
+      interpreter/REPL components, the legacy Python Code Structured tool,
+      Smart Transform lambda and code-capable agent components — which run
+      user- or model-supplied code (reports H1-3754930 and H1-3813558).
     * Flow invocation (``FLOW_REFERENCE_COMPONENT_TYPES``) — Run Flow, Sub Flow
       and Flow as Tool — which load and execute *another* saved owner flow by
       id/name at runtime. That referenced flow is read straight from the
       database and never re-validated, so a public wrapper flow with no blocked
       nodes could otherwise invoke a private flow containing a code-execution
       component, bypassing the check above (the transitive case).
+    * MCP **stdio** server configuration — a node that launches an operating-system
+      process to speak MCP over stdin/stdout. The command and arguments live in an
+      ``McpInput`` field's VALUE (``mcp_server``), not in the ``code`` field, so
+      neither the two blocklists above nor ``prepare_public_flow_build``'s
+      trusted-code substitution touches them: the server would run the flow author's
+      chosen command for an anonymous visitor. Remote MCP transports (HTTP/SSE) spawn
+      nothing and remain allowed, so only the stdio selection is refused.
 
-    Each class is matched both by the node's declared ``type`` and by its
+    The first two classes are matched both by the node's declared ``type`` and by its
     ``code``-hash, so relabelling a node's ``type`` to an alias cannot smuggle a
     blocked component past the check (the build runs the stored ``code``, not the
-    ``type`` label).
+    ``type`` label). The MCP check matches the stored configuration's shape rather
+    than the node type, because the same component type is safe over HTTP.
 
     This is enforced only on the unauthenticated public build path; authenticated
     builds (``/api/v1/build/{flow_id}/flow``) are unaffected and may still use
     these components.
 
     Raises:
-        PublicFlowValidationError: if the flow contains a code-execution or
-            flow-invoking component.
+        PublicFlowValidationError: if the flow contains a code-execution component,
+            a flow-invoking component, or an MCP stdio server configuration.
     """
     normalized_flow_data = _extract_flow_data(target)
     if not normalized_flow_data:
@@ -693,7 +1992,10 @@ def validate_public_flow_no_code_execution(target: Mapping[str, Any] | Any | Non
     code_execution = _collect_blocked_components(
         nodes,
         blocked_types=CODE_EXECUTION_COMPONENT_TYPES,
-        blocked_hashes=_blocked_code_hashes(CODE_EXECUTION_COMPONENT_TYPES),
+        blocked_hashes=_blocked_code_hashes(
+            CODE_EXECUTION_COMPONENT_TYPES,
+            type_to_current_hash=type_to_current_hash,
+        ),
     )
     if code_execution:
         blocked_names = ", ".join(code_execution)
@@ -707,7 +2009,10 @@ def validate_public_flow_no_code_execution(target: Mapping[str, Any] | Any | Non
     flow_references = _collect_blocked_components(
         nodes,
         blocked_types=FLOW_REFERENCE_COMPONENT_TYPES,
-        blocked_hashes=_blocked_code_hashes(FLOW_REFERENCE_COMPONENT_TYPES),
+        blocked_hashes=_blocked_code_hashes(
+            FLOW_REFERENCE_COMPONENT_TYPES,
+            type_to_current_hash=type_to_current_hash,
+        ),
     )
     if flow_references:
         blocked_names = ", ".join(flow_references)
@@ -718,21 +2023,263 @@ def validate_public_flow_no_code_execution(target: Mapping[str, Any] | Any | Non
         )
         raise PublicFlowValidationError(message)
 
+    mcp_stdio = _collect_mcp_stdio_components(nodes)
+    mcp_stdio += _collect_blocked_components(
+        nodes,
+        blocked_types=MCP_STDIO_COMPONENT_TYPES,
+        blocked_hashes=_blocked_code_hashes(
+            MCP_STDIO_COMPONENT_TYPES,
+            type_to_current_hash=type_to_current_hash,
+        ),
+    )
+    if mcp_stdio:
+        blocked_names = ", ".join(dict.fromkeys(mcp_stdio))
+        logger.warning(f"Public flow build blocked: MCP stdio servers are not allowed: {blocked_names}")
+        message = (
+            "Public flows cannot be built without authentication when they launch a local "
+            f"MCP server process (stdio transport): {blocked_names}"
+        )
+        raise PublicFlowValidationError(message)
 
-async def ensure_component_hash_lookups_loaded() -> dict[str, str] | None:
-    """Ensure component hash lookups are available for CLI/runtime validation."""
-    from wfx.interface.components import component_cache, get_and_cache_all_types_dict
-    from wfx.services.deps import get_settings_service
+
+async def ensure_component_hash_lookups_loaded(*, force: bool = False) -> dict[str, set[str]] | None:
+    """Ensure component lookups required by active runtime policies are available.
+
+    ``force=True`` also loads them for caller-specific policy, such as the
+    admin-only gate for a non-superuser build request.
+    """
+    from wfx.interface.components import (
+        component_cache,
+        get_and_cache_all_types_dict,
+        get_component_identity_index,
+    )
+    from wfx.services.deps import get_catalog_policy_service, get_settings_service
 
     settings_service = get_settings_service()
     if settings_service is None:
         raise RuntimeError(SETTINGS_SERVICE_REQUIRED_MESSAGE)
 
-    if not settings_service.settings.allow_custom_components and component_cache.type_to_current_hash is None:
+    catalog_policy_active = bool(get_catalog_policy_service().snapshot.blocked_component_keys)
+    policy_lookups_required = force or not settings_service.settings.allow_custom_components or catalog_policy_active
+    with component_cache.state_lock:
+        registry_unavailable = component_cache.all_types_dict is None or not component_cache.all_types_ready
+
+    if policy_lookups_required and registry_unavailable:
         try:
             await get_and_cache_all_types_dict(settings_service)
         except Exception as exc:
             logger.warning("Failed to populate component template hash lookups", exc_info=exc)
             raise
 
-    return component_cache.type_to_current_hash
+    type_to_current_hash = get_component_hash_lookups_for_validation()
+    if catalog_policy_active and get_component_identity_index() is None:
+        raise CatalogPolicyIdentityUnavailableError(CATALOG_POLICY_IDENTITIES_UNAVAILABLE_MESSAGE)
+
+    return type_to_current_hash
+
+
+def _sanitize_admin_only_flow_build(
+    target: Mapping[str, Any] | Any | None,
+    *,
+    type_to_current_hash: Mapping[str, set[str]] | None,
+) -> dict[str, Any] | None:
+    """Return trusted build data after component hashes have been loaded.
+
+    Admin-only mode permits regular users to refresh and run known server
+    component templates that do not execute user- or model-supplied code.
+    When the global restricted-mode policy permits trusted substitution for a
+    drifted built-in, apply it to the detached copy first. Then validate every
+    code-bearing node against the server registry and replace the request bytes
+    with the trusted source for the matching hash before the graph is handed to
+    the build worker.
+    """
+    import copy
+
+    normalized_flow_data = _extract_flow_data(target)
+    if normalized_flow_data is None:
+        if target is not None:
+            msg = (
+                "Flow validation failed: could not extract graph data from the provided target. "
+                "Ensure the flow payload or Graph object contains valid graph data."
+            )
+            raise CustomComponentValidationError(msg)
+        return None
+
+    # A group proxy can replace a child's code during expansion. Validate the stored shape
+    # first, then apply every hash check and trusted-source substitution to the executable
+    # graph. Project the result back onto the grouped payload for later graph construction.
+    from wfx.graph.graph.utils import process_flow
+
+    sanitized_grouped = copy.deepcopy(normalized_flow_data)
+    # ``validate_flow_for_current_settings`` may have admitted known drift because restricted
+    # mode will rebuild it with server code. Preserve that decision when admin-only mode adds its
+    # own sanitizer; otherwise this second, strict hash check restores the very rejection the
+    # substitution policy was designed to avoid. The helper no-ops in permissive mode, so
+    # admin-only remains strict when it is the only active custom-component restriction.
+    substitution_lookups = get_outdated_code_substitution_lookups()
+    validation_hashes = type_to_current_hash
+    if substitution_lookups:
+        nodes = sanitized_grouped.get("nodes", [])
+        swapped = _substitute_outdated_node_code(nodes, *substitution_lookups) if isinstance(nodes, list) else []
+        _log_outdated_component_code_substitution(swapped)
+        validation_hashes = substitution_lookups[1].type_to_current_hash
+    check_flow_and_raise(
+        sanitized_grouped,
+        allow_custom_components=False,
+        type_to_current_hash=validation_hashes,
+    )
+    try:
+        sanitized = process_flow(sanitized_grouped)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+        msg = "Flow validation failed: malformed grouped graph."
+        raise CustomComponentValidationError(msg) from exc
+    # The code-interpreter policy also applies to proxy-injected executable code. Its type
+    # alone may still say ChatInput, so validate after expansion and after drift substitution.
+    validate_flow_for_current_settings(sanitized)
+    # Trusted interpreter source still executes caller-controlled input fields.
+    # A template hash match must not grant regular users code-execution privileges.
+    # Inspect the expanded graph so grouped and relabelled interpreters are covered.
+    check_code_execution_components_and_raise(sanitized, type_to_current_hash=validation_hashes)
+    check_flow_and_raise(
+        sanitized,
+        allow_custom_components=False,
+        type_to_current_hash=validation_hashes,
+    )
+
+    nodes = sanitized.get("nodes", [])
+    blocked = _substitute_trusted_code_by_hash(nodes) if isinstance(nodes, list) else []
+    if blocked:
+        blocked_names = ", ".join(blocked)
+        logger.warning(f"Flow build blocked: trusted component source unavailable: {blocked_names}")
+        message = f"Flow build blocked: no trusted server component matches: {blocked_names}"
+        raise CustomComponentValidationError(message)
+
+    return _restore_grouped_validated_flow(normalized_flow_data, sanitized)
+
+
+def _admin_only_build_required(settings: Any, *, is_superuser: bool) -> bool:
+    return getattr(settings, "custom_component_admin_only", False) is True and not is_superuser
+
+
+def admin_only_build_required(*, is_superuser: bool) -> bool:
+    """Whether the admin-only component policy currently applies to this caller.
+
+    Exposed so execution seams that hold an already-compiled graph can decide whether that
+    compilation may still be trusted, without paying for the full sanitizer. A graph compiled
+    while the policy was off embeds the caller's own component source; if the policy applies
+    now, that compilation predates it and must not be reused.
+    """
+    from wfx.services.deps import get_settings_service
+
+    settings_service = get_settings_service()
+    if settings_service is None:
+        # Fail closed: without settings we cannot prove the policy is off.
+        return True
+    return _admin_only_build_required(settings_service.settings, is_superuser=is_superuser)
+
+
+def custom_component_admin_only_enabled() -> bool | None:
+    """Whether the admin-only component policy is configured on, caller-independent.
+
+    Returns ``None`` when settings cannot be read, so callers that would fail
+    closed through :func:`admin_only_build_required` can keep doing so without a
+    second settings lookup. When this returns ``False`` the policy cannot apply
+    to any caller, and the caller's superuser flag need not be resolved.
+    """
+    from wfx.services.deps import get_settings_service
+
+    settings_service = get_settings_service()
+    if settings_service is None:
+        return None
+    return getattr(settings_service.settings, "custom_component_admin_only", False) is True
+
+
+async def prepare_admin_only_flow_build(target: Mapping[str, Any] | Any | None) -> dict[str, Any] | None:
+    """Backward-compatible admin-only sanitizer for callers that already selected this policy."""
+    return _sanitize_admin_only_flow_build(
+        target,
+        type_to_current_hash=await ensure_component_hash_lookups_loaded(force=True),
+    )
+
+
+async def prepare_flow_build_for_user(
+    target: Mapping[str, Any] | Any | None,
+    *,
+    is_superuser: bool,
+) -> dict[str, Any] | None:
+    """Apply cumulative build policies and sanitize inline data when required.
+
+    This async form can populate a cold component registry and is used by V1
+    endpoints before caller-supplied graph data reaches a graph constructor or
+    worker. ``None`` means the original payload is safe to preserve unchanged.
+    """
+    from wfx.services.deps import get_settings_service
+
+    settings_service = get_settings_service()
+    if settings_service is None:
+        raise RuntimeError(SETTINGS_SERVICE_REQUIRED_MESSAGE)
+
+    admin_only = _admin_only_build_required(settings_service.settings, is_superuser=is_superuser)
+    interpreter_policy = getattr(settings_service.settings, "block_code_interpreter_components", False)
+    normalized_flow_data = _extract_flow_data(target) if interpreter_policy and not admin_only else None
+    nodes = normalized_flow_data.get("nodes") if normalized_flow_data is not None else None
+    interpreter_hashes_required = interpreter_policy and isinstance(nodes, list) and _contains_component_code(nodes)
+    if interpreter_policy and not admin_only and isinstance(nodes, list) and not interpreter_hashes_required:
+        # A group proxy can populate a child's empty code field during expansion. Inspect
+        # that same effective graph before deciding that registry hashes are unnecessary.
+        has_group = any(
+            isinstance(node, dict)
+            and isinstance(node.get("data"), dict)
+            and isinstance(node["data"].get("node"), dict)
+            and isinstance(node["data"]["node"].get("flow"), dict)
+            for node in nodes
+        )
+        if has_group:
+            from wfx.graph.graph.utils import process_flow
+
+            try:
+                executable = process_flow(normalized_flow_data)
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+                msg = "Flow validation failed: malformed grouped graph."
+                raise CustomComponentValidationError(msg) from exc
+            executable_nodes = executable.get("nodes")
+            interpreter_hashes_required = isinstance(executable_nodes, list) and _contains_component_code(
+                executable_nodes
+            )
+    policy_hashes_required = admin_only or interpreter_hashes_required
+    type_to_current_hash = await ensure_component_hash_lookups_loaded(force=True) if policy_hashes_required else None
+
+    # Policies are cumulative: the admin-only hash gate must not disable the
+    # code-interpreter or global custom-component restrictions.
+    validate_flow_for_current_settings(target)
+    if not admin_only:
+        return None
+
+    return _sanitize_admin_only_flow_build(target, type_to_current_hash=type_to_current_hash)
+
+
+def prepare_flow_build_for_user_from_cache(
+    target: Mapping[str, Any] | Any | None,
+    *,
+    is_superuser: bool,
+) -> dict[str, Any] | None:
+    """Synchronous policy gate for execution seams that construct responses.
+
+    The V2 streaming host must validate before returning ``StreamingResponse``
+    and cannot await registry loading at that seam. Startup normally warms the
+    registry; if it is unavailable, the hash gate fails closed.
+    """
+    from wfx.services.deps import get_settings_service
+
+    settings_service = get_settings_service()
+    if settings_service is None:
+        raise RuntimeError(SETTINGS_SERVICE_REQUIRED_MESSAGE)
+
+    validate_flow_for_current_settings(target)
+    if not _admin_only_build_required(settings_service.settings, is_superuser=is_superuser):
+        return None
+
+    return _sanitize_admin_only_flow_build(
+        target,
+        type_to_current_hash=get_component_hash_lookups_for_validation(),
+    )

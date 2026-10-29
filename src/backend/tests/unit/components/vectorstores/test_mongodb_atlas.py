@@ -4,14 +4,27 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest.importorskip("wfx_bundles")
+
+# Import the module (not just the class) so the unit tests below can patch
+# MongoDBAtlasVectorSearch on the exact module object the component's methods
+# read their globals from. Since the bundle move, the same source file can be
+# materialized under several module identities (wfx.components.mongodb.*,
+# wfx_bundles.mongodb.*, _wfx_ext.official.mongodb.*) depending on what other
+# tests in the worker imported first -- patching by dotted name can land on a
+# different copy than the one this class was loaded from.
+import wfx.components.mongodb.mongodb_atlas as mongodb_atlas_mod
 from langchain_community.embeddings.fake import DeterministicFakeEmbedding
 from pymongo.collection import Collection
-from wfx.components.mongodb import MongoVectorStoreComponent
 from wfx.schema.data import Data
 
 from tests.base import ComponentTestBaseWithoutClient, VersionComponentMapping
 
+MongoVectorStoreComponent = mongodb_atlas_mod.MongoVectorStoreComponent
 
+
+@pytest.mark.api_key_required
 @pytest.mark.skipif(
     not os.environ.get("MONGODB_ATLAS_URI"), reason="Environment variable MONGODB_ATLAS_URI is not defined."
 )
@@ -214,7 +227,7 @@ class TestMongoVectorStoreComponent(ComponentTestBaseWithoutClient):
 def _mock_component(mocker, **overrides) -> tuple[MongoVectorStoreComponent, MagicMock, MagicMock]:
     mock_client = MagicMock()
     mocker.patch("pymongo.MongoClient", return_value=mock_client)
-    mock_store_cls = mocker.patch("wfx.components.mongodb.mongodb_atlas.MongoDBAtlasVectorSearch")
+    mock_store_cls = mocker.patch.object(mongodb_atlas_mod, "MongoDBAtlasVectorSearch")
     kwargs = {
         "mongodb_atlas_cluster_uri": "mongodb://localhost:27017",
         "db_name": "test_db",

@@ -3,10 +3,8 @@ title: Security
 slug: /security
 ---
 
-The Primeagent UI is an IDE and code execution platform, which means that Primeagent is inherently capable of executing arbitrary,
-developer-provided code.
-By design, the Primeagent UI includes a code editor allowing developers to author and execute arbitrary Python with full access to the host
-Primeagent backend process, filesystem, and network.
+The Primeagent UI is an IDE and code execution platform, which means that Primeagent is inherently capable of executing arbitrary, developer-provided code.
+By design, the Primeagent UI includes a code editor allowing developers to author and execute arbitrary Python with full access to the host Primeagent backend process, filesystem, and network.
 In addition, some components wrap and use code execution, including use of AI models to generate code to be executed based
 on user input.
 
@@ -25,7 +23,8 @@ You are responsible for the following:
 Primeagent is a code execution platform with full access to your local system.
 You are responsible for ensuring the safety of flows you execute.
 
-In the event that Primeagent could execute untrusted or LLM-generated code, consider using isolated or containerized execution environments. For more information, see [Containerize a Primeagent application](/develop-application).
+In the event that Primeagent could execute untrusted or LLM-generated code, consider [blocking custom component execution](./deployment-block-custom-components.mdx) and running Primeagent in an isolated and containerized execution environment.
+For more information, see [Containerize a Primeagent application](/develop-application).
 
 ## Secure first-party deployments
 
@@ -58,6 +57,4 @@ For more information, see [Best practices for Primeagent on Kubernetes](/deploym
 
 ## Security bulletin
 
-For the most up-to-date information about security vulnerabilities, fixes, and CVEs, see the [Primeagent Security Policy](https://github.com/khulnasoft-bot/primeagent/blob/main/SECURITY.md) and [Primeagent GitHub Security Advisories](https://github.com/khulnasoft-bot/primeagent/security/advisories).
-
-If you discover a security vulnerability in Primeagent, the Primeagent team encourages you to report it responsibly through the [GitHub Security tab](https://github.com/khulnasoft-bot/primeagent/security). Please don't publicly disclose vulnerabilities until they have been assessed and resolved.
+For more information, see the [Primeagent Security Policy](https://github.com/khulnasoft-bot/primeagent/blob/main/SECURITY.md).

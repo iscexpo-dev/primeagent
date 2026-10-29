@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-slack",
+  "version": "0.2.2",
+  "name": "Slack",
+  "description": "Slack Web API actions (user-identity and bot-identity) and message and reaction triggers as a standalone Primeagent Extension Bundle backed by connections.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "slack",
+      "path": "components/slack"
+    }
+  ],
+  "integrations": [
+    {
+      "provider_id": "slack",
+      "bundle": "slack",
+      "path": "capabilities.v1.json"
+    }
+  ]
+}

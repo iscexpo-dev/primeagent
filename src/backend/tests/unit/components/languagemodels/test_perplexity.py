@@ -1,12 +1,24 @@
+import sys
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest.importorskip("wfx_bundles")
+
 from wfx.components.perplexity.perplexity import PerplexityComponent
 from wfx.custom.custom_component.component import Component
 from wfx.custom.utils import build_custom_component_template
 from wfx.inputs.inputs import DropdownInput, FloatInput, IntInput, SecretStrInput, SliderInput
 
 from tests.base import ComponentTestBaseWithoutClient
+
+# The component moved into wfx-bundles, so ``perplexity.py`` is reachable under several
+# module identities (the ``wfx.components.perplexity.perplexity`` shim, the canonical
+# ``wfx_bundles.perplexity.perplexity``, and the runtime ``_wfx_ext.*`` ext-loader copy).
+# Patch on the module the imported class actually lives in: a fixed string target like
+# "wfx.components.perplexity.perplexity.ChatPerplexity" misses (mock "called 0 times")
+# when an earlier test in the suite causes the class to resolve to a different identity.
+_PERPLEXITY_MODULE = sys.modules[PerplexityComponent.__module__]
 
 
 class TestPerplexityComponent(ComponentTestBaseWithoutClient):
@@ -27,6 +39,12 @@ class TestPerplexityComponent(ComponentTestBaseWithoutClient):
     def file_names_mapping(self):
         # No historical version snapshots to validate this component against.
         return []
+
+    @pytest.fixture
+    def skipped_outputs(self):
+        return {
+            "text_output": "sends the prompt to a live LLM",
+        }
 
     def test_initialization(self, component_class):
         component = component_class()
@@ -62,7 +80,7 @@ class TestPerplexityComponent(ComponentTestBaseWithoutClient):
         # moved out of langchain_community.chat_models into the standalone
         # langchain_perplexity package. build_model must construct that class with the
         # inputs mapped onto its kwargs.
-        mock_chat = mocker.patch("wfx.components.perplexity.perplexity.ChatPerplexity", return_value=MagicMock())
+        mock_chat = mocker.patch.object(_PERPLEXITY_MODULE, "ChatPerplexity", return_value=MagicMock())
         component = component_class(**default_kwargs)
         component.top_p = 0.9
         component.n = 2
@@ -82,7 +100,7 @@ class TestPerplexityComponent(ComponentTestBaseWithoutClient):
     def test_build_model_applies_defaults(self, component_class, mocker):
         # top_p falls back to None and n falls back to 1 when left unset; a falsy
         # temperature falls back to 0.75.
-        mock_chat = mocker.patch("wfx.components.perplexity.perplexity.ChatPerplexity", return_value=MagicMock())
+        mock_chat = mocker.patch.object(_PERPLEXITY_MODULE, "ChatPerplexity", return_value=MagicMock())
         component = component_class(api_key="dummy-key", model_name="llama-3.1-8b-instruct", max_tokens=10)
         component.temperature = 0
         component.top_p = None

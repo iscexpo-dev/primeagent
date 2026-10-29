@@ -1,8 +1,20 @@
+from typing import Annotated
 from unittest.mock import patch
 
 import pytest
+from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
+from fastapi_pagination import Params
 from primeagent.api.utils import get_suggestion_message, remove_api_keys
-from primeagent.api.utils.core import build_content_disposition
+from primeagent.api.utils.core import (
+    MIN_PAGE_SIZE,
+    PARAMS_MAX_PAGE_SIZE,
+    build_content_disposition,
+    custom_params,
+    format_exception_message,
+    get_causing_exception,
+)
 from primeagent.services.database.models.flow.utils import get_outdated_components
 from primeagent.utils.version import get_version_info
 
@@ -247,3 +259,108 @@ def test_build_content_disposition_very_long_filename():
     header = build_content_disposition(long_name)
     assert "attachment;" in header
     assert "filename*=UTF-8''" in header
+
+
+def _wrap_like_create_class(exc: Exception) -> ValueError:
+    """Mirror how ``custom.validate.create_class`` wraps a build failure."""
+    msg = f"Error creating class. {type(exc).__name__}({exc!s})."
+    try:
+        raise ValueError(msg) from exc
+    except ValueError as wrapped:
+        return wrapped
+
+
+def _raise_like_shim(raw: ModuleNotFoundError) -> ModuleNotFoundError:
+    """Mirror how a graduated bundle shim re-raises its curated message from the raw import error."""
+    msg = (
+        "The 'datastax' components moved to the 'wfx-datastax' distribution. "
+        "Install it with:  pip install wfx-datastax   "
+        "(or 'pip install primeagent', which bundles it)."
+    )
+    try:
+        raise ModuleNotFoundError(msg, name="wfx_datastax") from raw
+    except ModuleNotFoundError as curated:
+        return curated
+
+
+def test_format_exception_message_plain_module_not_found_gets_guidance():
+    cause = ModuleNotFoundError("No module named 'langchain_chroma'", name="langchain_chroma")
+    msg = format_exception_message(_wrap_like_create_class(cause))
+    assert "pip install langchain-chroma" in msg
+
+
+def test_format_exception_message_graduated_shim_message_wins_over_raw_cause():
+    # The graduated case Gabriel flagged: the chain bottoms out at the raw
+    # "No module named 'wfx_datastax'", but the curated shim message must win.
+    raw = ModuleNotFoundError("No module named 'wfx_datastax'", name="wfx_datastax")
+    wrapped = _wrap_like_create_class(_raise_like_shim(raw))
+    msg = format_exception_message(wrapped)
+    assert "moved to the 'wfx-datastax' distribution" in msg
+    assert "pip install primeagent" in msg
+    assert not msg.startswith("Error creating class")
+    assert "moved out of the wfx engine" not in msg
+
+
+def test_get_causing_exception_stops_at_curated_shim_error():
+    raw = ModuleNotFoundError("No module named 'wfx_datastax'", name="wfx_datastax")
+    curated = _raise_like_shim(raw)
+    wrapped = _wrap_like_create_class(curated)
+    assert get_causing_exception(wrapped) is curated
+
+
+def _custom_params_client() -> TestClient:
+    app = FastAPI()
+
+    @app.exception_handler(Exception)
+    async def _catch_all(_request, exc):  # mirrors the app-wide handler: a raised error would be a 500
+        return JSONResponse(status_code=500, content={"message": str(exc)})
+
+    @app.get("/probe")
+    def probe(params: Annotated[Params | None, Depends(custom_params)]):
+        return None if params is None else {"page": params.page, "size": params.size}
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.mark.parametrize(
+    ("query", "field"),
+    [
+        ("?page=1&size=101", "size"),
+        ("?page=1&size=1000", "size"),
+        ("?page=1&size=-5", "size"),
+        ("?page=1&size=0", "size"),
+        ("?page=0&size=10", "page"),
+    ],
+)
+def test_custom_params_rejects_out_of_range_with_422(query, field):
+    response = _custom_params_client().get(f"/probe{query}")
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", field]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("", None),
+        ("?page=2&size=10", {"page": 2, "size": 10}),
+        ("?page=1&size=100", {"page": 1, "size": 100}),
+        ("?page=3", {"page": 3, "size": 50}),
+        ("?size=20", {"page": 1, "size": 20}),
+    ],
+)
+def test_custom_params_accepts_in_range(query, expected):
+    response = _custom_params_client().get(f"/probe{query}")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+def test_params_bounds_match_fastapi_pagination():
+    """PARAMS_MAX_PAGE_SIZE and MIN_PAGE_SIZE must track the limits fastapi_pagination.Params enforces."""
+
+    def bound(field: str, attr: str):
+        return next(m for m in Params.model_fields[field].metadata if hasattr(m, attr))
+
+    assert bound("size", "le").le == PARAMS_MAX_PAGE_SIZE
+    assert bound("page", "ge").ge == MIN_PAGE_SIZE

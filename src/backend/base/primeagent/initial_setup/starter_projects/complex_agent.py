@@ -2,15 +2,15 @@ from wfx.components.crewai.crewai import CrewAIAgentComponent
 from wfx.components.crewai.hierarchical_crew import HierarchicalCrewComponent
 from wfx.components.crewai.hierarchical_task import HierarchicalTaskComponent
 from wfx.components.input_output import ChatInput, ChatOutput
+from wfx.components.models import LanguageModelComponent
 from wfx.components.models_and_agents import PromptComponent
-from wfx.components.openai.openai_chat_model import OpenAIModelComponent
 from wfx.components.tools import SearchAPIComponent, YfinanceToolComponent
 from wfx.graph import Graph
 
 
 def complex_agent_graph():
-    llm = OpenAIModelComponent(model_name="gpt-4o-mini")
-    manager_llm = OpenAIModelComponent(model_name="gpt-4o")
+    llm = LanguageModelComponent()
+    manager_llm = LanguageModelComponent()
     search_api_tool = SearchAPIComponent()
     yahoo_search_tool = YfinanceToolComponent()
     dynamic_agent = CrewAIAgentComponent()

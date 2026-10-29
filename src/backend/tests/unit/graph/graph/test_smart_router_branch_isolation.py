@@ -1,6 +1,6 @@
 """Graph-level regression tests for Smart Router branch isolation.
 
-Reproduces https://github.com/khulnasoft/primeagent/issues/13440: the branch that the
+Reproduces https://github.com/khulnasoft-bot/primeagent/issues/13440: the branch that the
 LLM does *not* select must not continue into its downstream nodes. The bug only surfaced
 once a branch reconverged on a shared downstream node, because ``stop()`` alone marks a
 branch INACTIVE for a single scheduling pass and that state is reset between passes -- a

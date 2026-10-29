@@ -32,6 +32,12 @@ jest.mock("@/stores/flowStore", () => ({
   ),
 }));
 
+let blockedComponentTypes: ReadonlySet<string> = new Set<string>();
+
+jest.mock("@/stores/utilityStore", () => ({
+  useUtilityStore: jest.fn((selector) => selector({ blockedComponentTypes })),
+}));
+
 jest.mock("@/utils/componentConstraints", () => ({
   getPresentComponentTypes: jest.fn(
     (nodes: Array<{ data?: { type?: string } }>) =>
@@ -72,6 +78,7 @@ jest.mock("../sidebarDraggableComponent", () => ({
     itemName,
     error,
     display_name,
+    paletteLabel,
     official,
     beta,
     legacy,
@@ -86,6 +93,7 @@ jest.mock("../sidebarDraggableComponent", () => ({
     itemName?: string;
     error?: boolean;
     display_name?: string;
+    paletteLabel?: string;
     official?: boolean;
     beta?: boolean;
     legacy?: boolean;
@@ -100,6 +108,7 @@ jest.mock("../sidebarDraggableComponent", () => ({
       data-item-name={itemName}
       data-error={error}
       data-display-name={display_name}
+      data-palette-label={paletteLabel}
       data-official={official}
       data-beta={beta}
       data-legacy={legacy}
@@ -109,7 +118,7 @@ jest.mock("../sidebarDraggableComponent", () => ({
         onDragStart?.({ type: "dragstart" }, { type: itemName, node: apiClass })
       }
     >
-      {display_name}
+      {paletteLabel ?? display_name}
     </div>
   ),
 }));
@@ -182,6 +191,91 @@ describe("SidebarItemsList", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    blockedComponentTypes = new Set<string>();
+  });
+
+  describe("Catalog policy", () => {
+    it("does not disable items when no component is blocked", () => {
+      render(<SidebarItemsList {...defaultProps} />);
+
+      const component1 = screen.getByTestId("draggable-Component1");
+      expect(component1).toHaveAttribute("data-disabled", "false");
+      expect(component1).toHaveAttribute("data-disabled-tooltip", "");
+    });
+
+    it("disables a blocked item and explains why", () => {
+      blockedComponentTypes = new Set(["S3BucketUploader"]);
+
+      render(
+        <SidebarItemsList
+          {...defaultProps}
+          dataFilter={{
+            TestCategory: {
+              S3BucketUploader: {
+                display_name: "S3 Bucket Uploader",
+                icon: "AwsIcon",
+                error: false,
+                official: true,
+                beta: false,
+                legacy: false,
+              },
+              Allowed: {
+                display_name: "Allowed",
+                icon: "AllowedIcon",
+                error: false,
+                official: true,
+                beta: false,
+                legacy: false,
+              },
+            },
+          }}
+        />,
+      );
+
+      const blocked = screen.getByTestId("draggable-S3BucketUploader");
+      expect(blocked).toHaveAttribute("data-disabled", "true");
+      expect(blocked).toHaveAttribute(
+        "data-disabled-tooltip",
+        "Blocked by your organization's catalog policy",
+      );
+      // Blocking one component must not gate the rest of the palette.
+      expect(screen.getByTestId("draggable-Allowed")).toHaveAttribute(
+        "data-disabled",
+        "false",
+      );
+    });
+
+    it("blocks a unique-input component and outranks its placement reason", () => {
+      // ChatInput is already present in the flow, so the placement constraint
+      // would otherwise claim "already added" — which would send the user off
+      // to delete a node that would not help.
+      blockedComponentTypes = new Set(["ChatInput"]);
+
+      render(
+        <SidebarItemsList
+          {...defaultProps}
+          dataFilter={{
+            TestCategory: {
+              ChatInput: {
+                display_name: "Chat Input",
+                icon: "ChatInputIcon",
+                error: false,
+                official: true,
+                beta: false,
+                legacy: false,
+              },
+            },
+          }}
+        />,
+      );
+
+      const chatInput = screen.getByTestId("draggable-ChatInput");
+      expect(chatInput).toHaveAttribute("data-disabled", "true");
+      expect(chatInput).toHaveAttribute(
+        "data-disabled-tooltip",
+        "Blocked by your organization's catalog policy",
+      );
+    });
   });
 
   describe("Basic Rendering", () => {
@@ -572,6 +666,30 @@ describe("SidebarItemsList", () => {
   });
 
   describe("Props Handling", () => {
+    it("shortens only the visible label for an item in a bundle", () => {
+      render(
+        <SidebarItemsList
+          {...defaultProps}
+          item={{ name: "slack", icon: "Slack" }}
+          bundleDisplayName="Slack"
+          dataFilter={{
+            slack: {
+              SlackOnMessage: {
+                display_name: "Slack: On Message",
+                icon: "Slack",
+              },
+            },
+          }}
+          nodeColors={{ slack: "#FF0000" }}
+        />,
+      );
+
+      const row = screen.getByTestId("draggable-SlackOnMessage");
+      expect(row).toHaveTextContent("On Message");
+      expect(row).toHaveAttribute("data-display-name", "Slack: On Message");
+      expect(row).toHaveAttribute("data-palette-label", "On Message");
+    });
+
     it("should handle different item names", () => {
       const propsWithDifferentItem = {
         ...defaultProps,

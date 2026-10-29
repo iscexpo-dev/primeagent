@@ -163,7 +163,7 @@ def test_component_inputs_toolkit():
 def test_table_input_preserves_list_dict():
     """Test that TableInput with tool_mode=True preserves all dicts in a list.
 
-    Regression test for: https://github.com/khulnasoft/primeagent/issues/12062
+    Regression test for: https://github.com/khulnasoft-bot/primeagent/issues/12062
     """
     component = AllInputsComponent()
 

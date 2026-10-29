@@ -1,0 +1,420 @@
+{
+  "schema_version": 1,
+  "artifacts": {
+    "python": {
+      "wfx": "standalone engine; intentionally not an application tier",
+      "primeagent-base": "runnable bundle-free application",
+      "primeagent": "default application with the curated provider set",
+      "primeagent[bundles]": "full no-Torch application provider inventory"
+    },
+    "images": {
+      "base": "runnable bundle-free application image",
+      "main-backend": "backend-only derivative of the default application",
+      "main-frontend": "frontend-only static image",
+      "wfx": "standalone engine image",
+      "main": "default curated application image",
+      "main-all": "full application image"
+    }
+  },
+  "profiles": {
+    "python-base": {
+      "required_distributions": [
+        "primeagent-base",
+        "primeagent-sdk",
+        "wfx"
+      ],
+      "forbidden_distributions": [
+        "agent-lifecycle-toolkit",
+        "chromadb",
+        "langchain-chroma",
+        "primeagent",
+        "wfx-bundles",
+        "torch",
+        "torchvision"
+      ],
+      "forbidden_distribution_prefixes": [
+        "wfx-"
+      ],
+      "exact_distributions": true,
+      "entry_points": {
+        "primeagent.extensions": [],
+        "wfx.bundles": []
+      },
+      "bundle_names": [],
+      "required_files": {
+        "primeagent-base": [
+          "primeagent/initial_setup/starter_projects/Basic Prompting.json"
+        ]
+      },
+      "module_checks": [
+        {
+          "module": "wfx.components.cassandra",
+          "expect": "error",
+          "contains": "wfx[cassandra]"
+        },
+        {
+          "module": "wfx.components.models_and_agents.policies_component",
+          "expect": "error",
+          "contains": "wfx[toolguard]"
+        }
+      ]
+    },
+    "python-default": {
+      "extends": "python-base",
+      "required_distributions_add": [
+        "primeagent",
+        "wfx-amazon",
+        "wfx-anthropic",
+        "wfx-azure",
+        "wfx-cohere",
+        "wfx-datastax",
+        "wfx-docling",
+        "wfx-google",
+        "wfx-ibm",
+        "wfx-microsoft",
+        "wfx-ollama",
+        "wfx-openai",
+        "wfx-openai-compatible",
+        "wfx-oracle",
+        "wfx-slack",
+        "wfx-toolguard",
+        "wfx-vllm"
+      ],
+      "forbidden_distributions_add": [
+        "wfx-arxiv",
+        "wfx-confluent",
+        "wfx-duckduckgo",
+        "wfx-empiriolabs",
+        "wfx-exa",
+        "wfx-firecrawl",
+        "wfx-nextplaid",
+        "wfx-paddle",
+        "wfx-serpingapi",
+        "wfx-serply",
+        "wfx-valkey"
+      ],
+      "forbidden_distributions_remove": [
+        "primeagent"
+      ],
+      "forbidden_distribution_prefixes": [],
+      "entry_points": {
+        "primeagent.extensions": [
+          "wfx-amazon",
+          "wfx-anthropic",
+          "wfx-azure",
+          "wfx-cohere",
+          "wfx-datastax",
+          "wfx-docling",
+          "wfx-google",
+          "wfx-ibm",
+          "wfx-microsoft",
+          "wfx-ollama",
+          "wfx-openai",
+          "wfx-openai-compatible",
+          "wfx-oracle",
+          "wfx-slack",
+          "wfx-toolguard",
+          "wfx-vllm"
+        ],
+        "wfx.bundles": []
+      },
+      "required_files": {
+        "primeagent-base": [
+          "primeagent/initial_setup/starter_projects/Basic Prompting.json"
+        ],
+        "wfx-openai": [
+          "wfx_openai/extension.json",
+          "wfx_openai/components/openai/openai_chat_model.py"
+        ],
+        "wfx-google": [
+          "wfx_google/extension.json",
+          "wfx_google/components/google/capabilities.v1.json",
+          "wfx_google/components/google/google_generative_ai.py"
+        ],
+        "wfx-microsoft": [
+          "wfx_microsoft/extension.json",
+          "wfx_microsoft/components/microsoft/capabilities.v1.json",
+          "wfx_microsoft/components/microsoft/outlook_send.py"
+        ],
+        "wfx-slack": [
+          "wfx_slack/extension.json",
+          "wfx_slack/components/slack/capabilities.v1.json",
+          "wfx_slack/components/slack/slack_search.py"
+        ],
+        "wfx-azure": [
+          "wfx_azure/extension.json",
+          "wfx_azure/components/azure/azure_openai.py",
+          "wfx_azure/components/azure/azure_openai_embeddings.py"
+        ],
+        "wfx-ollama": [
+          "wfx_ollama/extension.json",
+          "wfx_ollama/components/ollama/ollama.py",
+          "wfx_ollama/components/ollama/ollama_embeddings.py"
+        ],
+        "wfx-datastax": [
+          "wfx_datastax/extension.json",
+          "wfx_datastax/components/cassandra/cassandra.py"
+        ],
+        "wfx-toolguard": [
+          "wfx_toolguard/extension.json",
+          "wfx_toolguard/components/models_and_agents/policies_component.py"
+        ]
+      },
+      "module_checks": [
+        {
+          "module": "wfx.components.cassandra",
+          "attribute": "CassandraVectorStoreComponent",
+          "expect": "success"
+        },
+        {
+          "module": "wfx.components.models_and_agents.policies_component",
+          "attribute": "PoliciesComponent",
+          "expect": "success"
+        },
+        {
+          "module": "wfx.components.google",
+          "attribute": "GoogleGenerativeAIComponent",
+          "expect": "success"
+        },
+        {
+          "module": "wfx.components.azure",
+          "attribute": "AzureChatOpenAIComponent",
+          "expect": "success"
+        },
+        {
+          "module": "wfx.components.ollama",
+          "attribute": "ChatOllamaComponent",
+          "expect": "success"
+        },
+        {
+          "module": "langchain_azure_ai.chat_models",
+          "attribute": "AzureAIOpenAIApiChatModel",
+          "expect": "success"
+        },
+        {
+          "module": "langchain_ollama",
+          "attribute": "ChatOllama",
+          "expect": "success"
+        }
+      ]
+    },
+    "python-full": {
+      "extends": "python-default",
+      "required_distributions_add": [
+        "wfx-arxiv",
+        "wfx-bundles",
+        "wfx-confluent",
+        "wfx-duckduckgo",
+        "wfx-empiriolabs",
+        "wfx-exa",
+        "wfx-firecrawl",
+        "wfx-nextplaid",
+        "wfx-paddle",
+        "wfx-serpingapi",
+        "wfx-serply",
+        "wfx-valkey"
+      ],
+      "forbidden_distributions_remove": [
+        "wfx-arxiv",
+        "wfx-bundles",
+        "wfx-confluent",
+        "wfx-duckduckgo",
+        "wfx-empiriolabs",
+        "wfx-exa",
+        "wfx-firecrawl",
+        "wfx-nextplaid",
+        "wfx-paddle",
+        "wfx-serpingapi",
+        "wfx-serply",
+        "wfx-valkey"
+      ],
+      "entry_points": {
+        "primeagent.extensions": [
+          "wfx-amazon",
+          "wfx-anthropic",
+          "wfx-arxiv",
+          "wfx-azure",
+          "wfx-cohere",
+          "wfx-confluent",
+          "wfx-datastax",
+          "wfx-docling",
+          "wfx-duckduckgo",
+          "wfx-empiriolabs",
+          "wfx-exa",
+          "wfx-firecrawl",
+          "wfx-google",
+          "wfx-ibm",
+          "wfx-microsoft",
+          "wfx-nextplaid",
+          "wfx-ollama",
+          "wfx-openai",
+          "wfx-openai-compatible",
+          "wfx-oracle",
+          "wfx-paddle",
+          "wfx-serpingapi",
+          "wfx-serply",
+          "wfx-slack",
+          "wfx-toolguard",
+          "wfx-valkey",
+          "wfx-vllm"
+        ],
+        "wfx.bundles": [
+          "wfx_bundles"
+        ]
+      },
+      "bundle_names": [
+        "agentql",
+        "aiml",
+        "altk",
+        "apify",
+        "assemblyai",
+        "baidu",
+        "bing",
+        "chroma",
+        "cleanlab",
+        "clickhouse",
+        "cloudflare",
+        "codeagents",
+        "cometapi",
+        "composio",
+        "confluence",
+        "couchbase",
+        "cuga",
+        "deepseek",
+        "elastic",
+        "faiss",
+        "figranium",
+        "funasr",
+        "git",
+        "glean",
+        "groq",
+        "homeassistant",
+        "huggingface",
+        "icosacomputing",
+        "jigsawstack",
+        "langwatch",
+        "litellm",
+        "lmstudio",
+        "maritalk",
+        "mem0",
+        "milvus",
+        "mistral",
+        "mongodb",
+        "mrscraper",
+        "needle",
+        "notdiamond",
+        "notion",
+        "novita",
+        "nvidia",
+        "olivya",
+        "openrouter",
+        "orcarouter",
+        "perplexity",
+        "pgvector",
+        "pinecone",
+        "plivo",
+        "qdrant",
+        "redis",
+        "sambanova",
+        "scrapegraph",
+        "searchapi",
+        "serpapi",
+        "spider",
+        "supabase",
+        "tavily",
+        "twelvelabs",
+        "unstructured",
+        "upstash",
+        "vectara",
+        "vertexai",
+        "vlmrun",
+        "weaviate",
+        "wikipedia",
+        "wolframalpha",
+        "xai",
+        "yahoosearch",
+        "youtube",
+        "zep"
+      ],
+      "required_files": {
+        "primeagent-base": [
+          "primeagent/initial_setup/starter_projects/Basic Prompting.json"
+        ],
+        "wfx-openai": [
+          "wfx_openai/extension.json",
+          "wfx_openai/components/openai/openai_chat_model.py"
+        ],
+        "wfx-google": [
+          "wfx_google/extension.json",
+          "wfx_google/components/google/capabilities.v1.json",
+          "wfx_google/components/google/google_generative_ai.py"
+        ],
+        "wfx-microsoft": [
+          "wfx_microsoft/extension.json",
+          "wfx_microsoft/components/microsoft/capabilities.v1.json",
+          "wfx_microsoft/components/microsoft/outlook_send.py"
+        ],
+        "wfx-slack": [
+          "wfx_slack/extension.json",
+          "wfx_slack/components/slack/capabilities.v1.json",
+          "wfx_slack/components/slack/slack_search.py"
+        ],
+        "wfx-azure": [
+          "wfx_azure/extension.json",
+          "wfx_azure/components/azure/azure_openai.py",
+          "wfx_azure/components/azure/azure_openai_embeddings.py"
+        ],
+        "wfx-ollama": [
+          "wfx_ollama/extension.json",
+          "wfx_ollama/components/ollama/ollama.py",
+          "wfx_ollama/components/ollama/ollama_embeddings.py"
+        ],
+        "wfx-bundles": [
+          "wfx_bundles/mongodb/mongodb_atlas.py",
+          "wfx_bundles/youtube/starter_projects/Youtube Analysis.json"
+        ]
+      },
+      "module_checks": [
+        {
+          "module": "wfx.components.google",
+          "attribute": "GoogleGenerativeAIComponent",
+          "expect": "success"
+        },
+        {
+          "module": "wfx.components.azure",
+          "attribute": "AzureChatOpenAIComponent",
+          "expect": "success"
+        },
+        {
+          "module": "wfx.components.ollama",
+          "attribute": "ChatOllamaComponent",
+          "expect": "success"
+        },
+        {
+          "module": "langchain_azure_ai.chat_models",
+          "attribute": "AzureAIOpenAIApiChatModel",
+          "expect": "success"
+        },
+        {
+          "module": "langchain_ollama",
+          "attribute": "ChatOllama",
+          "expect": "success"
+        },
+        {
+          "module": "wfx.components.youtube",
+          "attribute": "YouTubeTranscriptsComponent",
+          "expect": "success"
+        }
+      ]
+    },
+    "image-base": {
+      "extends": "python-base"
+    },
+    "image-default": {
+      "extends": "python-default"
+    },
+    "image-full": {
+      "extends": "python-full"
+    }
+  }
+}

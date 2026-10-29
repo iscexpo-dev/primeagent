@@ -240,6 +240,8 @@ class TestCLISubprocessIntegration:
 PRIMEAGENT_DATABASE_URL=sqlite:///{db_path}
 PRIMEAGENT_AUTO_SAVING=false
 PRIMEAGENT_AUTO_LOGIN=false
+PRIMEAGENT_SUPERUSER=primeagent
+PRIMEAGENT_SUPERUSER_PASSWORD=test-superuser-password
 PRIMEAGENT_LOG_LEVEL=ERROR
         """.strip()
         )

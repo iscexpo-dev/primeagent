@@ -16,6 +16,7 @@ ShareResourceType = Literal[
     "knowledge_base",
     "variable",
     "file",
+    "connection",
 ]
 
 ShareScopeLiteral = Literal["private", "team", "user", "public"]
@@ -58,6 +59,7 @@ class ShareRead(BaseModel):
     resource_id: UUID
     scope: ShareScopeLiteral
     target_id: UUID | None
+    target_name: str | None = None
     permission_level: SharePermissionLiteral
     created_by: UUID | None
     created_at: datetime

@@ -6,7 +6,8 @@ from uuid import uuid4
 
 import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, UniqueConstraint, text
-from sqlmodel import Field, SQLModel
+from sqlalchemy.sql.naming import conv
+from sqlmodel import Field, Relationship, SQLModel
 
 from primeagent.schema.serialize import UUIDstr
 
@@ -130,7 +131,7 @@ class AuthzRoleAssignment(SQLModel, table=True):  # type: ignore[call-arg]
     role_id: UUIDstr = Field(
         sa_column=Column(sa.Uuid(), ForeignKey("authz_role.id", ondelete="CASCADE"), nullable=False, index=True),
     )
-    domain_type: str = Field(default="global", description="global, org, workspace")
+    domain_type: str = Field(default="global", description="global, workspace, project")
     # Explicit ``sa_column`` so SQLModel emits ``sa.Uuid()`` matching the
     # migration's column type. Without this, SQLModel can fall back to
     # ``AutoString``/``CHAR(32)`` on SQLite, which drifts from the migration
@@ -144,6 +145,75 @@ class AuthzRoleAssignment(SQLModel, table=True):  # type: ignore[call-arg]
         default=None,
         sa_column=Column(sa.Uuid(), ForeignKey("user.id", ondelete="SET NULL"), nullable=True),
     )
+    # SQLite ignores ``ON DELETE CASCADE`` unless ``PRAGMA foreign_keys=ON`` is
+    # issued on every connection, which Primeagent never does, so revoking an
+    # assignment on the default backend left its provenance rows orphaned.
+    # Cascading through the ORM issues the child deletes on every backend.
+    #
+    # ``all, delete`` deliberately excludes ``delete-orphan``: grant rows are
+    # created by setting ``assignment_id`` directly rather than by appending to
+    # this collection, and ``delete-orphan`` would reject those as unparented.
+    grants: list["AuthzRoleAssignmentGrant"] = Relationship(
+        sa_relationship_kwargs={"cascade": "all, delete", "passive_deletes": False},
+    )
+
+
+class AuthzRoleAssignmentGrant(SQLModel, table=True):  # type: ignore[call-arg]
+    """Independent provenance source that keeps an effective assignment alive.
+
+    An assignment may have one manual source and any number of IdP group
+    sources. This avoids making provenance a lossy property of the effective
+    assignment when a manual grant overlaps an externally-derived grant.
+    """
+
+    __tablename__ = "authz_role_assignment_grant"
+    __table_args__ = (
+        CheckConstraint(
+            "(source_kind = 'manual' AND provider_id IS NULL AND external_group IS NULL) "
+            "OR (source_kind = 'idp' AND provider_id IS NOT NULL AND external_group IS NOT NULL)",
+            name=conv("ck_authz_role_assignment_grant_source"),
+        ),
+        Index(
+            "uq_authz_role_assignment_grant_manual",
+            "assignment_id",
+            unique=True,
+            postgresql_where=text("source_kind = 'manual'"),
+            sqlite_where=text("source_kind = 'manual'"),
+        ),
+        Index(
+            "uq_authz_role_assignment_grant_idp",
+            "assignment_id",
+            "provider_id",
+            "external_group",
+            unique=True,
+            postgresql_where=text("source_kind = 'idp'"),
+            sqlite_where=text("source_kind = 'idp'"),
+        ),
+        Index(
+            "ix_authz_role_assignment_grant_provider_group",
+            "provider_id",
+            "external_group",
+        ),
+    )
+
+    id: UUIDstr = Field(default_factory=uuid4, primary_key=True)
+    assignment_id: UUIDstr = Field(
+        sa_column=Column(
+            sa.Uuid(),
+            ForeignKey("authz_role_assignment.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
+    )
+    source_kind: str = Field(description="manual or idp")
+    provider_id: str | None = Field(default=None, max_length=256)
+    external_group: str | None = Field(default=None, max_length=256)
+    administrative_actor: UUIDstr | None = Field(
+        default=None,
+        sa_column=Column(sa.Uuid(), ForeignKey("user.id", ondelete="SET NULL"), nullable=True),
+    )
+    created_at: datetime = Field(default_factory=_tz_aware_now, sa_column=_tz_column())
+    updated_at: datetime = Field(default_factory=_tz_aware_now, sa_column=_tz_column())
 
 
 class AuthzTeam(SQLModel, table=True):  # type: ignore[call-arg]
@@ -177,6 +247,72 @@ class AuthzTeamMember(SQLModel, table=True):  # type: ignore[call-arg]
     created_at: datetime = Field(default_factory=_tz_aware_now, sa_column=_tz_column())
 
 
+class AuthzTeamMemberGrant(SQLModel, table=True):  # type: ignore[call-arg]
+    """Independent provenance keeping one effective Team membership alive."""
+
+    __tablename__ = "authz_team_member_grant"
+    __table_args__ = (
+        CheckConstraint(
+            "(source_kind = 'manual' AND provider_id IS NULL AND external_group_id IS NULL "
+            "AND legacy_source IS NULL) OR "
+            "(source_kind = 'directory' AND provider_id IS NOT NULL AND external_group_id IS NOT NULL "
+            "AND legacy_source IS NULL) OR "
+            "(source_kind = 'legacy' AND provider_id IS NULL AND external_group_id IS NULL "
+            "AND legacy_source IS NOT NULL)",
+            name=conv("ck_authz_team_member_grant_source"),
+        ),
+        Index(
+            "uq_authz_team_member_grant_manual",
+            "membership_id",
+            unique=True,
+            postgresql_where=text("source_kind = 'manual'"),
+            sqlite_where=text("source_kind = 'manual'"),
+        ),
+        Index(
+            "uq_authz_team_member_grant_directory",
+            "membership_id",
+            "provider_id",
+            "external_group_id",
+            unique=True,
+            postgresql_where=text("source_kind = 'directory'"),
+            sqlite_where=text("source_kind = 'directory'"),
+        ),
+        Index(
+            "uq_authz_team_member_grant_legacy",
+            "membership_id",
+            "legacy_source",
+            unique=True,
+            postgresql_where=text("source_kind = 'legacy'"),
+            sqlite_where=text("source_kind = 'legacy'"),
+        ),
+        Index(
+            "ix_authz_team_member_grant_provider_group",
+            "provider_id",
+            "external_group_id",
+        ),
+    )
+
+    id: UUIDstr = Field(default_factory=uuid4, primary_key=True)
+    membership_id: UUIDstr = Field(
+        sa_column=Column(
+            sa.Uuid(),
+            ForeignKey("authz_team_member.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
+    )
+    source_kind: str = Field(max_length=16, description="manual, directory, or unresolved legacy")
+    provider_id: str | None = Field(default=None, max_length=256)
+    external_group_id: str | None = Field(default=None, max_length=512)
+    legacy_source: str | None = Field(default=None, max_length=512)
+    administrative_actor: UUIDstr | None = Field(
+        default=None,
+        sa_column=Column(sa.Uuid(), ForeignKey("user.id", ondelete="SET NULL"), nullable=True),
+    )
+    created_at: datetime = Field(default_factory=_tz_aware_now, sa_column=_tz_column())
+    updated_at: datetime = Field(default_factory=_tz_aware_now, sa_column=_tz_column())
+
+
 class AuthzShare(SQLModel, table=True):  # type: ignore[call-arg]
     """Resource share record granting access at a specific scope/permission level.
 
@@ -200,11 +336,11 @@ class AuthzShare(SQLModel, table=True):  # type: ignore[call-arg]
         # partial unique indexes (which match on the lowercase form).
         CheckConstraint(
             "scope IN ('private', 'team', 'user', 'public')",
-            name="ck_authz_share_scope_enum",
+            name=conv("ck_authz_share_scope_enum"),
         ),
         CheckConstraint(
             "permission_level IN ('read', 'write', 'execute', 'admin')",
-            name="ck_authz_share_permission_enum",
+            name=conv("ck_authz_share_permission_enum"),
         ),
         # Targeted (TEAM/USER) shares require a target_id; untargeted
         # (PRIVATE/PUBLIC) shares forbid one. Matches the partial-unique-index
@@ -213,7 +349,7 @@ class AuthzShare(SQLModel, table=True):  # type: ignore[call-arg]
         CheckConstraint(
             "(scope IN ('team', 'user') AND target_id IS NOT NULL) "
             "OR (scope IN ('private', 'public') AND target_id IS NULL)",
-            name="ck_authz_share_scope_target_consistency",
+            name=conv("ck_authz_share_scope_target_consistency"),
         ),
         Index(
             "uq_authz_share_targeted",
@@ -242,6 +378,44 @@ class AuthzShare(SQLModel, table=True):  # type: ignore[call-arg]
     scope: str = Field(index=True)
     target_id: UUIDstr | None = Field(default=None, index=True)
     permission_level: str = Field(default=SharePermissionLevel.READ.value)
+    created_by: UUIDstr | None = Field(
+        default=None,
+        sa_column=Column(sa.Uuid(), ForeignKey("user.id", ondelete="SET NULL"), nullable=True),
+    )
+    created_at: datetime = Field(default_factory=_tz_aware_now, sa_column=_tz_column())
+
+
+class AuthzAccessException(SQLModel, table=True):  # type: ignore[call-arg]
+    """A per-(user, resource) revocation of role/scope-derived access.
+
+    Deliberately narrow: one row means "this user's access to this resource
+    via a role or scope grant is revoked" — it says nothing about, and never
+    cancels, an independent :class:`AuthzShare` on the same resource. Those
+    are two separate grants with two separate removal paths on purpose, so a
+    revoke here can never silently take away more than it says it does.
+
+    ``user_id`` cascades on delete (an exception naming a deleted user is
+    meaningless); ``created_by`` uses ``SET NULL`` like ``AuthzShare.created_by``
+    so deleting the person who revoked something doesn't undo the revoke.
+    """
+
+    __tablename__ = "authz_access_exception"
+    __table_args__ = (
+        Index("ix_authz_access_exception_resource", "resource_type", "resource_id"),
+        UniqueConstraint(
+            "user_id",
+            "resource_type",
+            "resource_id",
+            name="uq_authz_access_exception_target",
+        ),
+    )
+
+    id: UUIDstr = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUIDstr = Field(
+        sa_column=Column(sa.Uuid(), ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    resource_type: str = Field(index=True)
+    resource_id: UUIDstr = Field(index=True)
     created_by: UUIDstr | None = Field(
         default=None,
         sa_column=Column(sa.Uuid(), ForeignKey("user.id", ondelete="SET NULL"), nullable=True),
@@ -279,14 +453,15 @@ class AuthzAuditLog(SQLModel, table=True):  # type: ignore[call-arg]
     __tablename__ = "authz_audit_log"
     __table_args__ = (
         Index("ix_authz_audit_log_user_timestamp", "user_id", "timestamp"),
+        Index("ix_authz_audit_log_actor_timestamp", "actor_id", "timestamp"),
+        Index("ix_authz_audit_log_actor_type_timestamp", "actor_type", "timestamp"),
         Index("ix_authz_audit_log_resource", "resource_type", "resource_id"),
-        # ``owner_override`` is the third value the framework writes (see
-        # ``_AUDIT_OWNER_OVERRIDE`` in services/authorization/utils.py); it
-        # must be in the CHECK set or owner-shortcut audit rows would
-        # silently fail the constraint.
+        # Keep this vocabulary aligned with ``services.authorization.audit``.
+        # ``skip`` records an operator-visible reconciliation attempt that did
+        # not apply an authoritative directory snapshot.
         CheckConstraint(
-            "result IN ('allow', 'deny', 'owner_override')",
-            name="ck_authz_audit_log_result_enum",
+            "result IN ('allow', 'deny', 'owner_override', 'skip')",
+            name=conv("ck_authz_audit_log_result_enum"),
         ),
     )
 
@@ -295,6 +470,9 @@ class AuthzAuditLog(SQLModel, table=True):  # type: ignore[call-arg]
         default=None,
         sa_column=Column(sa.Uuid(), ForeignKey("user.id", ondelete="SET NULL"), nullable=True, index=True),
     )
+    actor_type: str | None = Field(default=None)
+    # Deliberately no FK: API-key actor attribution must survive key deletion.
+    actor_id: UUIDstr | None = Field(default=None, sa_column=Column(sa.Uuid(), nullable=True))
     action: str = Field(index=True)
     resource_type: str | None = Field(default=None)
     resource_id: UUIDstr | None = Field(default=None)

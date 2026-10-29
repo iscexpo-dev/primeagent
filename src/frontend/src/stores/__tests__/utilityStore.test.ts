@@ -42,6 +42,8 @@ describe("useUtilityStore", () => {
       webhookAuthEnable: true,
       defaultFolderName: "Starter Project",
       hideGettingStartedProgress: false,
+      substituteOutdatedComponentCode: true,
+      catalogGovernanceEnabled: false,
     });
   });
 
@@ -65,6 +67,32 @@ describe("useUtilityStore", () => {
       expect(result.current.webhookAuthEnable).toBe(true);
       expect(result.current.defaultFolderName).toBe("Starter Project");
       expect(result.current.hideGettingStartedProgress).toBe(false);
+      expect(result.current.substituteOutdatedComponentCode).toBe(true);
+      expect(result.current.catalogGovernanceEnabled).toBe(false);
+    });
+  });
+
+  describe("setSubstituteOutdatedComponentCode", () => {
+    it("should update outdated component substitution state", () => {
+      const { result } = renderHook(() => useUtilityStore());
+
+      act(() => {
+        result.current.setSubstituteOutdatedComponentCode(false);
+      });
+
+      expect(result.current.substituteOutdatedComponentCode).toBe(false);
+    });
+  });
+
+  describe("setCatalogGovernanceEnabled", () => {
+    it("should update catalog governance state", () => {
+      const { result } = renderHook(() => useUtilityStore());
+
+      act(() => {
+        result.current.setCatalogGovernanceEnabled(true);
+      });
+
+      expect(result.current.catalogGovernanceEnabled).toBe(true);
     });
   });
 
@@ -182,8 +210,8 @@ describe("useUtilityStore", () => {
 
       act(() => {
         result.current.setSelectedItems("string-item");
-        result.current.setSelectedItems(123 as any);
-        result.current.setSelectedItems({ id: "object-item" } as any);
+        result.current.setSelectedItems(123);
+        result.current.setSelectedItems({ id: "object-item" });
       });
 
       expect(result.current.selectedItems).toEqual([
@@ -513,19 +541,19 @@ describe("useUtilityStore", () => {
       const { result } = renderHook(() => useUtilityStore());
 
       act(() => {
-        result.current.setEventDelivery(EventDeliveryType.STREAMING);
+        result.current.setEventDelivery(EventDeliveryType.WEBHOOK);
       });
 
-      expect(result.current.eventDelivery).toBe(EventDeliveryType.STREAMING);
+      expect(result.current.eventDelivery).toBe(EventDeliveryType.WEBHOOK);
     });
 
     it("should switch between event delivery types", () => {
       const { result } = renderHook(() => useUtilityStore());
 
       act(() => {
-        result.current.setEventDelivery(EventDeliveryType.STREAMING);
+        result.current.setEventDelivery(EventDeliveryType.WEBHOOK);
       });
-      expect(result.current.eventDelivery).toBe(EventDeliveryType.STREAMING);
+      expect(result.current.eventDelivery).toBe(EventDeliveryType.WEBHOOK);
 
       act(() => {
         result.current.setEventDelivery(EventDeliveryType.POLLING);
@@ -695,7 +723,7 @@ describe("useUtilityStore", () => {
       };
 
       act(() => {
-        result.current.setSelectedItems(complexObject as any);
+        result.current.setSelectedItems(complexObject);
       });
 
       expect(result.current.selectedItems).toEqual([complexObject]);

@@ -1,14 +1,14 @@
 from wfx.components.crewai.sequential_crew import SequentialCrewComponent
 from wfx.components.crewai.sequential_task_agent import SequentialTaskAgentComponent
 from wfx.components.input_output import ChatOutput, TextInputComponent
+from wfx.components.models import LanguageModelComponent
 from wfx.components.models_and_agents import PromptComponent
-from wfx.components.openai.openai_chat_model import OpenAIModelComponent
 from wfx.components.tools import SearchAPIComponent
 from wfx.graph import Graph
 
 
 def sequential_tasks_agent_graph():
-    llm = OpenAIModelComponent()
+    llm = LanguageModelComponent()
     search_api_tool = SearchAPIComponent()
 
     text_input = TextInputComponent(_display_name="Topic")

@@ -7,6 +7,7 @@ from wfx.log.logger import logger
 from wfx.schema.data import Data
 from wfx.schema.dotdict import dotdict
 from wfx.schema.message import Message
+from wfx.utils.python_repl_security import ensure_code_execution_enabled
 
 
 class PythonFunctionComponent(Component):
@@ -45,6 +46,7 @@ class PythonFunctionComponent(Component):
     def get_function_callable(self) -> Callable:
         function_code = self.function_code
         self.status = function_code
+        ensure_code_execution_enabled()
         return get_function(function_code)
 
     def execute_function(self) -> list[dotdict | str] | dotdict | str:
@@ -53,6 +55,7 @@ class PythonFunctionComponent(Component):
         if not function_code:
             return "No function code provided."
 
+        ensure_code_execution_enabled()
         try:
             func = get_function(function_code)
             return func()

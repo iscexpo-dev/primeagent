@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schemas.prime.khulnasoft.com/extension/v1.json",
+  "id": "wfx-serpingapi",
+  "version": "0.1.0",
+  "name": "Serping API",
+  "description": "Serping API Google SERP web-search component as a standalone Primeagent Extension Bundle.",
+  "wfx": {
+    "compat": ["1"]
+  },
+  "bundles": [
+    {
+      "name": "serpingapi",
+      "path": "components/serpingapi"
+    }
+  ]
+}

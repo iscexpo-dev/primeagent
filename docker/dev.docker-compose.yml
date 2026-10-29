@@ -15,8 +15,6 @@ services:
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - PRIMEAGENT_DATABASE_URL=postgresql://primeagent:primeagent@postgres:5432/primeagent
-      - PRIMEAGENT_SUPERUSER=primeagent
-      - PRIMEAGENT_SUPERUSER_PASSWORD=primeagent
       - PRIMEAGENT_CONFIG_DIR=/var/lib/primeagent
     env_file:
       - ../.env

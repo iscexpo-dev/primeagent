@@ -1,34 +1,21 @@
-from __future__ import annotations
+# wfx-bundles-shim
+"""Compatibility shim: wfx.components.couchbase moved to wfx-bundles.
 
-from typing import TYPE_CHECKING, Any
+This module re-points to the installed bundle distribution. It contains
+no component implementations and no third-party dependencies, and is
+removed once the deprecation window closes (M4).
+"""
 
-from wfx.components._importing import import_mod
+import importlib
+import sys
 
-if TYPE_CHECKING:
-    from .couchbase import CouchbaseVectorStoreComponent
-
-_dynamic_imports = {
-    "CouchbaseVectorStoreComponent": "couchbase",
-}
-
-__all__ = [
-    "CouchbaseVectorStoreComponent",
-]
-
-
-def __getattr__(attr_name: str) -> Any:
-    """Lazily import Couchbase components on attribute access."""
-    if attr_name not in _dynamic_imports:
-        msg = f"module '{__name__}' has no attribute '{attr_name}'"
-        raise AttributeError(msg)
-    try:
-        result = import_mod(attr_name, _dynamic_imports[attr_name], __spec__.parent)
-    except (ModuleNotFoundError, ImportError, AttributeError) as e:
-        msg = f"Could not import '{attr_name}' from '{__name__}': {e}"
-        raise AttributeError(msg) from e
-    globals()[attr_name] = result
-    return result
-
-
-def __dir__() -> list[str]:
-    return list(__all__)
+try:
+    sys.modules[__name__] = importlib.import_module("wfx_bundles.couchbase")
+except ModuleNotFoundError as exc:
+    if exc.name is not None and (exc.name == "wfx_bundles" or exc.name.startswith("wfx_bundles.")):
+        msg = (
+            "The 'couchbase' components moved to the 'wfx-bundles' distribution. "
+            "Install it with: pip install wfx-bundles."
+        )
+        raise ModuleNotFoundError(msg, name="wfx_bundles") from exc
+    raise

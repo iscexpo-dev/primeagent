@@ -1,0 +1,48 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+local.file_match "primeagent" {
+  path_targets = [
+    {
+      __path__ = "/var/log/primeagent/*.log",
+      job      = "primeagent",
+    },
+  ]
+}
+
+loki.source.file "primeagent" {
+  targets    = local.file_match.primeagent.targets
+  forward_to = [loki.process.primeagent.receiver]
+}
+
+loki.process "primeagent" {
+  stage.json {
+    expressions = {
+      level       = "level",
+      service     = "service",
+      environment = "environment",
+      version     = "version",
+      logger      = "logger",
+    }
+  }
+
+  stage.labels {
+    values = {
+      level       = "",
+      service     = "",
+      environment = "",
+      version     = "",
+      logger      = "",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

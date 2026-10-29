@@ -2,10 +2,9 @@
 
 When primeagent-ide logs through litellm (e.g. to langfuse), litellm imports
 its proxy server module, which in turn needs `apscheduler` and `cryptography`
-at runtime. These are normally shipped via `litellm[proxy]`, but that extra
-pins `boto3` in a way that conflicts with our `aioboto3` transitives. We
-therefore add the specific modules directly to the `litellm` optional
-dependency group — this test guards against them being dropped.
+at runtime. These are normally shipped via the much larger `litellm[proxy]`
+extra. We add the specific modules directly to the `litellm` optional
+dependency group, and this test guards against them being dropped.
 """
 
 from __future__ import annotations
@@ -13,12 +12,16 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from packaging.requirements import Requirement
+from packaging.version import Version
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
 
 REQUIRED_PACKAGES = ("apscheduler", "cryptography")
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _load_base_pyproject() -> dict:
@@ -26,6 +29,26 @@ def _load_base_pyproject() -> dict:
     assert pyproject_path.is_file(), f"pyproject.toml not found at {pyproject_path}"
     with pyproject_path.open("rb") as f:
         return tomllib.load(f)
+
+
+def _load_workspace_pyproject() -> dict:
+    with (REPO_ROOT / "pyproject.toml").open("rb") as f:
+        return tomllib.load(f)
+
+
+def _active_litellm_constraint(python_version: str) -> Requirement:
+    constraints = _load_workspace_pyproject()["tool"]["uv"]["constraint-dependencies"]
+    requirements = [Requirement(spec) for spec in constraints if Requirement(spec).name == "litellm"]
+    active = [
+        requirement
+        for requirement in requirements
+        if requirement.marker is None
+        or requirement.marker.evaluate(
+            environment={"python_version": python_version, "python_full_version": f"{python_version}.0"}
+        )
+    ]
+    assert len(active) == 1
+    return active[0]
 
 
 def _package_name(spec: str) -> str:
@@ -50,3 +73,31 @@ def test_litellm_optional_dependency_includes_runtime_proxy_modules() -> None:
         f"These are needed when primeagent-ide invokes litellm's proxy server module for logging "
         f"(see issue #12228). Current specs: {litellm_specs}"
     )
+
+
+def test_litellm_dependent_extras_are_available_on_python_314() -> None:
+    """LiteLLM and the extras that require it must not retain a Python 3.14 gate."""
+    optional = _load_base_pyproject()["project"]["optional-dependencies"]
+
+    litellm = next(Requirement(spec) for spec in optional["litellm"] if Requirement(spec).name == "litellm")
+    assert any(spec.operator == ">=" and spec.version == "1.103.1" for spec in litellm.specifier)
+    assert litellm.marker is None
+
+    opik = next(Requirement(spec) for spec in optional["opik"] if Requirement(spec).name == "opik")
+    assert opik.marker is None
+
+    toolguard = next(Requirement(spec) for spec in optional["toolguard"] if Requirement(spec).name == "wfx")
+    assert "toolguard" in toolguard.extras
+    assert toolguard.marker is None
+
+
+def test_litellm_constraint_requires_patched_versions_on_all_supported_pythons() -> None:
+    """GHSA-7hp6-4w63-5g45 affects multiple release branches and one prerelease."""
+    vulnerable_versions = ("1.96.2", "1.101.2", "1.102.1", "1.103.0", "1.104.0rc1")
+    for python_version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
+        specifier = _active_litellm_constraint(python_version).specifier
+        assert Version("1.103.1") in specifier
+        assert specifier.contains("1.104.0rc2", prereleases=True)
+        assert Version("2.0.0") not in specifier
+        for version in vulnerable_versions:
+            assert not specifier.contains(version, prereleases=True)

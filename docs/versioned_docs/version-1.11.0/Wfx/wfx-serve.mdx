@@ -1,0 +1,166 @@
+---
+title: Serve flows with WFX
+slug: /wfx-serve
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import WfxPrereqs from '@site/docs/_partial-wfx-run-serve-prereqs.mdx';
+import WfxComponentCategories from '@site/docs/_partial-wfx-component-categories.mdx';
+
+`wfx serve` starts a FastAPI server that exposes your flows as HTTP API endpoints at `POST /flows/{flow_id}/run`.
+
+A `PRIMEAGENT_API_KEY` is required because `wfx serve` starts a publicly accessible server.
+
+To execute a flow once and stream results to `stdout` instead, see [Run flows with WFX](./wfx-run).
+
+Both `wfx serve` and `wfx run` accept a `.json` flow file or a `.py` Python script.
+
+<WfxPrereqs />
+
+## Start the server
+
+1. Generate a Primeagent API key.
+
+   For WFX, generate a secure token locally:
+
+   ```bash
+   uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+   This is different from creating an API key through the Primeagent UI or CLI, which stores the key in the Primeagent database. WFX only needs a secure token string to authenticate requests.
+
+2. Set your environment variables. Use a `.env` file or export directly:
+
+   **`.env` file**:
+
+   ```text
+   PRIMEAGENT_API_KEY="sk..."
+   OPENAI_API_KEY="sk-..."
+   ```
+
+   **Export**:
+
+   ```bash
+   export PRIMEAGENT_API_KEY="sk..."
+   export OPENAI_API_KEY="sk-..."
+   ```
+
+3. Start the server with your flow:
+
+   **With a `.env` file**:
+
+   ```bash
+   uv run wfx serve simple-agent-flow.json --env-file .env
+   ```
+
+   **With exported variables**:
+
+   ```bash
+   uv run wfx serve simple-agent-flow.json
+   ```
+
+4. Copy the `flow_id` from the startup output:
+
+   ```
+    WFX Server
+    Flow loaded: simple-agent-flow.json (c1dab29d-3364-58ef-8fef-99311d32ee42)
+    Server:      http://127.0.0.1:8000
+    Run flows at: POST /flows/{flow_id}/run
+    API key:     x-api-key header or ?x-api-key= query parameter
+   ```
+
+## Call the server
+
+In a new terminal, set your API key and flow ID, then send a test request:
+
+```bash
+export PRIMEAGENT_API_KEY="sk..."
+export FLOW_ID="c1dab29d-3364-58ef-8fef-99311d32ee42"
+```
+
+<Tabs>
+<TabItem value="Python" label="Python" default>
+
+```python
+import os
+
+import requests
+
+flow_id = os.environ["FLOW_ID"]
+api_key = os.environ["PRIMEAGENT_API_KEY"]
+
+url = f"http://localhost:8000/flows/{flow_id}/run"
+
+headers = {
+    "Content-Type": "application/json",
+    "x-api-key": api_key,
+}
+
+payload = {
+    "input_value": "Hello, world!",
+}
+
+response = requests.post(url, headers=headers, json=payload, timeout=60)
+response.raise_for_status()
+print(response.text)
+```
+
+</TabItem>
+<TabItem value="JavaScript" label="JavaScript">
+
+```js
+const flowId = process.env.FLOW_ID;
+const apiKey = process.env.PRIMEAGENT_API_KEY;
+
+const options = {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "x-api-key": apiKey,
+  },
+  body: JSON.stringify({
+    input_value: "Hello, world!",
+  }),
+};
+
+fetch(`http://localhost:8000/flows/${flowId}/run`, options)
+  .then(async (response) => {
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    console.log(await response.text());
+  })
+  .catch((error) => console.error(error));
+```
+
+</TabItem>
+<TabItem value="curl" label="curl">
+
+```bash
+curl -X POST http://localhost:8000/flows/$FLOW_ID/run \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $PRIMEAGENT_API_KEY" \
+  -d '{"input_value": "Hello, world!"}'
+```
+
+</TabItem>
+</Tabs>
+
+## Serve multiple flows
+
+To serve multiple flows, pass a directory to `wfx serve` to load all `.json` flows at server startup:
+
+```bash
+uv run wfx serve ./flows/
+```
+
+<WfxComponentCategories />
+
+## See also
+
+- [Run flows with WFX](./wfx-run)
+- [About WFX](./wfx-overview)
+- [Install WFX](./wfx-install)
+- [Flow DevOps Toolkit SDK](./wfx-devops-sdk.mdx)
+- [Extensions overview](./extensions-overview)

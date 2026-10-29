@@ -1,5 +1,10 @@
+import json
+import os
+import select
+import signal
 import socket
-import threading
+import subprocess
+import sys
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -8,6 +13,8 @@ import pytest
 import typer
 from primeagent.__main__ import (
     DIRECT_UVICORN_PLATFORMS,
+    MULTI_WORKER_BYPASS_ENV_VAR,
+    CommandInterrupted,
     _create_superuser,
     api_key_banner,
     app,
@@ -15,9 +22,12 @@ from primeagent.__main__ import (
     clamp_uvicorn_workers,
     ensure_multi_worker_safe,
     get_number_of_workers,
+    interruption_reported,
+    multi_worker_bypass_warning,
     use_direct_uvicorn,
 )
 from wfx.services import deps
+from wfx.services.settings.service import SettingsService
 
 
 @pytest.fixture(scope="module")
@@ -28,45 +38,27 @@ def default_settings():
     ]
 
 
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
-
-
-def run_flow(runner, port, components_path, default_settings):
-    args = [
-        "run",
-        "--port",
-        str(port),
-        "--components-path",
-        str(components_path),
-        *default_settings,
-    ]
-    result = runner.invoke(app, args)
-    if result.exit_code != 0:
-        msg = f"CLI failed with exit code {result.exit_code}: {result.output}"
-        raise RuntimeError(msg)
-
-
 def test_components_path(runner, default_settings, tmp_path):
-    # create a "components" folder
+    """Process CLI settings synchronously without leaving a server or capture thread running."""
     temp_dir = tmp_path / "components"
     temp_dir.mkdir(exist_ok=True)
-
-    port = get_free_port()
-
-    thread = threading.Thread(
-        target=run_flow,
-        args=(runner, port, temp_dir, default_settings),
-        daemon=True,
+    original_settings = deps.get_settings_service()
+    settings_service = SettingsService(
+        settings=original_settings.settings.model_copy(deep=True),
+        auth_settings=original_settings.auth_settings.model_copy(deep=True),
     )
-    thread.start()
+    # Stop at app setup, after the real CLI option handling has updated settings.
+    # CliRunner replaces process-wide streams, so it must finish before another test starts.
+    with (
+        patch("primeagent.__main__.get_settings_service", return_value=settings_service),
+        patch("primeagent.__main__.configure"),
+        patch("primeagent.__main__.use_direct_uvicorn", return_value=True),
+        patch("primeagent.__main__.setup_app", side_effect=typer.Exit(code=0)) as setup_app,
+    ):
+        result = runner.invoke(app, ["run", "--components-path", str(temp_dir), *default_settings])
 
-    # Give the server some time to start
-    time.sleep(5)
-
-    settings_service = deps.get_settings_service()
+    assert result.exit_code == 0, result.output
+    setup_app.assert_called_once()
     assert str(temp_dir) in settings_service.settings.components_path
 
 
@@ -131,8 +123,8 @@ class TestSuperuserCommand:
 
     @pytest.mark.skip(reason="Skip -- default superuser is created by initialize_services() function")
     @pytest.mark.asyncio
-    async def test_auto_login_forces_default_credentials(self, client):
-        """Test AUTO_LOGIN=true forces default credentials."""
+    async def test_auto_login_uses_bootstrap_superuser(self, client):
+        """Test AUTO_LOGIN=true bootstraps the configured superuser."""
         # Since client fixture already creates default user, we need to test in a clean DB scenario
         # But that's why this test is skipped - the behavior is already handled by initialize_services
 
@@ -263,6 +255,23 @@ def test_build_direct_uvicorn_kwargs_forwards_tls_paths():
     assert result["ssl_keyfile"] == "/etc/key.pem"
 
 
+def test_build_direct_uvicorn_kwargs_starts_each_request_task_from_a_clean_context():
+    """Direct-uvicorn startup must opt into uvicorn's per-request context reset.
+
+    Same reason as ``PrimeagentUvicornWorker.CONFIG_KWARGS`` on the Gunicorn path: a pipelined
+    request is started from inside the finishing request's task, and the copied context
+    otherwise carries that request's ended server span into the new one, which OpenTelemetry
+    reports as nesting. Kept on both paths so platform parity does not drift.
+
+    Asserted through a real ``uvicorn.Config`` so a renamed or rejected option fails here.
+    """
+    import uvicorn
+
+    config = uvicorn.Config("primeagent.main:create_app", **build_direct_uvicorn_kwargs(**_kwargs()))
+
+    assert config.reset_contextvars is True
+
+
 def test_build_direct_uvicorn_kwargs_forwards_none_when_no_tls():
     # Plain HTTP startup: cert/key remain None so uvicorn doesn't try to load anything.
     result = build_direct_uvicorn_kwargs(**_kwargs())
@@ -331,6 +340,7 @@ def test_build_direct_uvicorn_kwargs_pins_full_shape():
         "ssl_certfile",
         "ssl_keyfile",
         "forwarded_allow_ips",
+        "reset_contextvars",
     }
     assert result["reload"] is False
 
@@ -348,8 +358,13 @@ def test_ensure_multi_worker_safe_allows_single_worker():
     ensure_multi_worker_safe(num_workers=1)
 
 
-def _settings_service_with_queue(queue_type: str) -> SimpleNamespace:
-    return SimpleNamespace(settings=SimpleNamespace(job_queue_type=queue_type))
+def _settings_service_with_queue(queue_type: str, *, bypass: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(
+        settings=SimpleNamespace(
+            job_queue_type=queue_type,
+            dangerously_allow_multi_worker_without_shared_queue=bypass,
+        )
+    )
 
 
 def test_ensure_multi_worker_safe_refuses_multiple_workers():
@@ -387,3 +402,279 @@ def test_ensure_multi_worker_safe_allows_redis_queue():
     """Redis-backed job queue shares state across workers; multi-worker is safe."""
     with patch("primeagent.__main__.get_settings_service", return_value=_settings_service_with_queue("redis")):
         ensure_multi_worker_safe(num_workers=4)
+
+
+# ---------------------------------------------------------------------------
+# ensure_multi_worker_safe: PRIMEAGENT_DANGEROUSLY_ALLOW_MULTI_WORKER_WITHOUT_SHARED_QUEUE
+# turns the refusal into a loud warning. The flag does not make multi-worker
+# safe — it only lets a headless deployment that never touches the UI or MCP
+# over SSE trade those features for worker throughput without standing up Redis.
+# ---------------------------------------------------------------------------
+
+
+def _capture_startup_warnings(monkeypatch) -> list[str]:
+    """Record ``logger.warning`` calls made by ``primeagent.__main__``.
+
+    ``logger`` is a structlog BoundLogger that may be filtered out entirely at
+    the configured level, so asserting on caplog would make the test depend on
+    log configuration. Swapping the module-level symbol for a recorder captures
+    exactly what the guard emits.
+    """
+    captured: list[str] = []
+
+    class _Recorder:
+        def warning(self, msg: str, *args: object, **_kwargs: object) -> None:
+            captured.append(msg % args if args else msg)
+
+        def __getattr__(self, _name: str):  # pragma: no cover - swallow other levels
+            return lambda *_a, **_k: None
+
+    import primeagent.__main__ as primeagent_main
+
+    monkeypatch.setattr(primeagent_main, "logger", _Recorder())
+    return captured
+
+
+def test_ensure_multi_worker_safe_bypass_allows_multiple_workers(monkeypatch):
+    """The opt-in flag must let the in-memory queue boot with workers > 1."""
+    _capture_startup_warnings(monkeypatch)
+    with patch(
+        "primeagent.__main__.get_settings_service",
+        return_value=_settings_service_with_queue("asyncio", bypass=True),
+    ):
+        ensure_multi_worker_safe(num_workers=4)
+
+
+def test_ensure_multi_worker_safe_bypass_warns_about_ui_and_mcp_sse(monkeypatch):
+    """Booting under the bypass must name the two features it breaks outright."""
+    warnings = _capture_startup_warnings(monkeypatch)
+    with patch(
+        "primeagent.__main__.get_settings_service",
+        return_value=_settings_service_with_queue("asyncio", bypass=True),
+    ):
+        ensure_multi_worker_safe(num_workers=4)
+
+    assert len(warnings) == 1
+    msg = warnings[0]
+    # The operator must be able to tie a broken editor/playground back to this flag.
+    assert "/build" in msg
+    assert "playground" in msg
+    # MCP over SSE needs the stream and its POST endpoint in one process; the
+    # warning has to point at the transport that does work.
+    assert "SSE" in msg
+    assert "Streamable HTTP" in msg
+    # ...and it must still name the supported alternative.
+    assert "PRIMEAGENT_JOB_QUEUE_TYPE=redis" in msg
+    # The flag that caused this is named so the config is greppable.
+    assert MULTI_WORKER_BYPASS_ENV_VAR in msg
+
+
+def test_multi_worker_bypass_warning_lists_the_degraded_subsystems():
+    """Every subsystem that silently degrades to per-worker must be spelled out.
+
+    These are not startup failures — they are behaviors that quietly change
+    meaning under multiple workers, so the boot warning is the only place an
+    operator learns about them.
+    """
+    from primeagent.services.background_execution.live_bus import _DURABLE_POLL_INTERVAL_S
+
+    msg = multi_worker_bypass_warning(num_workers=4)
+
+    # Reattach falls back to polling the durable log; quote the real interval so
+    # the warning cannot drift from the constant the bus actually uses.
+    assert str(_DURABLE_POLL_INTERVAL_S) in msg
+    # Rate limits are counted per worker unless the storage URI is shared.
+    assert "PRIMEAGENT_RATE_LIMIT_STORAGE_URI" in msg
+    # The orphan-sweep lock is a file lock, so it is node-local, not cluster-wide.
+    assert "orphan-sweep" in msg
+    # Webhook UI feedback needs the browser and the request on the same worker.
+    assert "Webhook" in msg
+    assert "4 workers" in msg
+
+
+def test_ensure_multi_worker_safe_redis_never_warns_even_with_bypass_set(monkeypatch):
+    """A Redis queue is safe; a stale bypass flag must not produce scary output.
+
+    Redis short-circuits before the bypass is consulted, so a correctly
+    configured deployment that leaves the flag set in its environment sees
+    nothing at all.
+    """
+    warnings = _capture_startup_warnings(monkeypatch)
+    with patch(
+        "primeagent.__main__.get_settings_service",
+        return_value=_settings_service_with_queue("redis", bypass=True),
+    ):
+        ensure_multi_worker_safe(num_workers=4)
+
+    assert warnings == []
+
+
+def test_ensure_multi_worker_safe_bypass_off_still_refuses(monkeypatch):
+    """The flag is opt-in: the default must keep refusing to boot."""
+    warnings = _capture_startup_warnings(monkeypatch)
+    with (
+        patch(
+            "primeagent.__main__.get_settings_service",
+            return_value=_settings_service_with_queue("asyncio", bypass=False),
+        ),
+        pytest.raises(RuntimeError),
+    ):
+        ensure_multi_worker_safe(num_workers=4)
+
+    assert warnings == []
+
+
+def test_ensure_multi_worker_safe_error_points_at_the_bypass_flag():
+    """The refusal must tell headless operators the escape hatch exists."""
+    with (
+        patch("primeagent.__main__.get_settings_service", return_value=_settings_service_with_queue("asyncio")),
+        pytest.raises(RuntimeError) as exc_info,
+    ):
+        ensure_multi_worker_safe(num_workers=3)
+
+    assert MULTI_WORKER_BYPASS_ENV_VAR in str(exc_info.value)
+
+
+def _stop_midway(tmp_path, command: str, *args: str, signum: int) -> subprocess.CompletedProcess:
+    """Run a command until it waits on its database, signal it, and return how it ended.
+
+    The database takes the connection and never answers, so the command is stopped mid-run every time.
+    """
+    pytest.importorskip("psycopg", reason="needs the postgresql extra")
+    from primeagent.services.database.sqlite_to_postgres import upgrade_to_head
+
+    listener = socket.create_server(("127.0.0.1", 0))
+    silent = f"postgresql://nobody@127.0.0.1:{listener.getsockname()[1]}/none"
+    env = {**os.environ, "PRIMEAGENT_CONFIG_DIR": str(tmp_path)}
+    if command == "convert-sqlite-to-postgres":
+        source = f"sqlite:///{tmp_path / 'primeagent.db'}"
+        upgrade_to_head(source)
+        args = (*args, "--source", source, "--target", silent)
+    else:
+        env["PRIMEAGENT_DATABASE_URL"] = silent
+    child = subprocess.Popen(  # noqa: S603 - the interpreter running the tests, fixed arguments
+        [sys.executable, "-m", "primeagent", command, *args],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while not select.select([listener], [], [], 0.1)[0]:
+            if child.poll() is not None:
+                out, err = child.communicate()
+                pytest.fail(f"the command exited {child.returncode} before reaching its database\n{out}\n{err}")
+            assert time.monotonic() < deadline, "the command never reached its database"
+        child.send_signal(signum)
+        out, err = child.communicate(timeout=120)
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=10)
+        listener.close()
+    return subprocess.CompletedProcess(child.args, child.returncode, out, err)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT and SIGTERM are POSIX signals")
+@pytest.mark.parametrize(
+    ("command", "args", "signum"),
+    [
+        ("relocate-files", ["--bucket", "unused"], signal.SIGTERM),
+        ("relocate-kb", ["--to", "postgres"], signal.SIGINT),
+        ("convert-sqlite-to-postgres", [], signal.SIGINT),
+        ("check-integrity", [], signal.SIGTERM),
+        ("migration-preflight", [], signal.SIGINT),
+    ],
+)
+def test_a_migration_command_stopped_by_a_signal_ends_its_stream_with_an_error(tmp_path, command, args, signum):
+    # Exit 0 and a stream that just stops read as a finished move to a script or a CI step.
+    result = _stop_midway(tmp_path, command, *args, "--json", signum=signum)
+
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    assert result.returncode == 128 + signum, result.stderr
+    assert events[-1]["event"] == "error"
+    assert events[-1]["code"] == "interrupted"
+    assert events[-1]["message"].startswith(f"Stopped by {signal.Signals(signum).name} before the end.")
+    assert "report" not in [event["event"] for event in events]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT and SIGTERM are POSIX signals")
+def test_without_json_a_stopped_command_says_so_on_stderr(tmp_path):
+    result = _stop_midway(tmp_path, "relocate-files", "--bucket", "unused", signum=signal.SIGINT)
+
+    assert result.returncode == 130
+    assert "Stopped by SIGINT before the end." in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT and SIGTERM are POSIX signals")
+@pytest.mark.parametrize("outcome", ["completed", "failed", "exited", signal.SIGINT, signal.SIGTERM])
+def test_interruption_reporting_restores_previous_handlers(outcome):
+    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        if outcome == "completed":
+            with interruption_reported("The copy did not finish.", as_json=False):
+                pass
+        elif outcome in ("failed", "exited"):
+            failure = ValueError("copy failed") if outcome == "failed" else SystemExit(7)
+            with (
+                pytest.raises(type(failure)) as exc_info,
+                interruption_reported("The copy did not finish.", as_json=False),
+            ):
+                raise failure
+            assert exc_info.value is failure
+        else:
+            with (
+                pytest.raises(CommandInterrupted) as exc_info,
+                interruption_reported("The copy did not finish.", as_json=False),
+            ):
+                signal.raise_signal(outcome)
+            assert exc_info.value.code == 128 + outcome
+        assert {signum: signal.getsignal(signum) for signum in previous} == previous
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT and SIGTERM are POSIX signals")
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+def test_an_interruption_inside_a_task_group_keeps_its_exit_code_and_final_event(signum):
+    code = """
+import asyncio
+import json
+import signal
+import sys
+
+import anyio
+from primeagent.__main__ import interruption_reported
+
+async def copy():
+    try:
+        async with anyio.create_task_group():
+            async with anyio.create_task_group():
+                signal.raise_signal(int(sys.argv[1]))
+    finally:
+        signal.raise_signal(signal.SIGTERM)
+        print(json.dumps({"event": "cleanup"}), flush=True)
+
+with interruption_reported("The copy did not finish.", as_json=True):
+    asyncio.run(copy())
+"""
+    result = subprocess.run(  # noqa: S603 - fixed code in the interpreter running the tests
+        [sys.executable, "-c", code, str(int(signum))], capture_output=True, text=True, timeout=60, check=False
+    )
+
+    assert result.returncode == 128 + signum, result.stderr
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [event["event"] for event in events] == ["cleanup", "error"]
+    assert events[-1]["code"] == "interrupted"
+    assert events[-1]["message"].startswith(f"Stopped by {signal.Signals(signum).name} before the end.")
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT and SIGTERM are POSIX signals")
+def test_the_signal_helper_reports_a_child_that_exits_before_connecting(tmp_path):
+    with pytest.raises(pytest.fail.Exception, match="before reaching its database") as exc_info:
+        _stop_midway(tmp_path, "no-such-command", signum=signal.SIGTERM)
+
+    assert "No such command" in str(exc_info.value)

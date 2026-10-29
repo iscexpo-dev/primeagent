@@ -1,14 +1,9 @@
 import { useTranslation } from "react-i18next";
-import { FaDiscord, FaGithub } from "react-icons/fa";
-import { ForwardedIconComponent } from "@/components/common/genericIconComponent";
-import {
-  DATASTAX_DOCS_URL,
-  DISCORD_URL,
-  DOCS_URL,
-  GITHUB_URL,
-  TWITTER_URL,
-} from "@/constants/constants";
+import { DATASTAX_DOCS_URL, DOCS_URL } from "@/constants/constants";
 import { useLogout } from "@/controllers/API/queries/auth";
+import { CustomAccountMenuCommunityLinks } from "@/customization/components/custom-account-menu-community-links";
+import { CustomAccountMenuNavigationItems } from "@/customization/components/custom-account-menu-navigation-items";
+import { CustomHeaderMenuItemsTitle } from "@/customization/components/custom-header-menu-items-title";
 import { CustomProfileIcon } from "@/customization/components/custom-profile-icon";
 import { ENABLE_DATASTAX_PRIMEAGENT } from "@/customization/feature-flags";
 import { useCustomNavigate } from "@/customization/hooks/use-custom-navigate";
@@ -32,11 +27,7 @@ export const AccountMenu = () => {
   const navigate = useCustomNavigate();
   const { mutate: mutationLogout } = useLogout();
   const hideLogoutButton = useUtilityStore((state) => state.hideLogoutButton);
-
-  const { isAdmin, autoLogin } = useAuthStore((state) => ({
-    isAdmin: state.isAdmin,
-    autoLogin: state.autoLogin,
-  }));
+  const autoLogin = useAuthStore((state) => state.autoLogin);
 
   const handleLogout = () => {
     mutationLogout();
@@ -63,6 +54,7 @@ export const AccountMenu = () => {
       </HeaderMenuToggle>
       <HeaderMenuItems position="right" classNameSize="w-[272px]">
         <div className="divide-y divide-foreground/10">
+          <CustomHeaderMenuItemsTitle />
           <div>
             <div className="h-[44px] items-center px-4 pt-3">
               <div className="flex items-center justify-between">
@@ -90,35 +82,9 @@ export const AccountMenu = () => {
           </div>
 
           <div>
-            <HeaderMenuItemButton
-              onClick={() => {
-                navigate("/settings");
-              }}
-            >
-              <span
-                data-testid="menu_settings_button"
-                id="menu_settings_button"
-              >
-                {t("account.settings")}
-              </span>
-            </HeaderMenuItemButton>
-
-            {isAdmin && !autoLogin && (
-              <div>
-                <HeaderMenuItemButton
-                  onClick={() => {
-                    navigate("/admin");
-                  }}
-                >
-                  <span
-                    data-testid="menu_admin_page_button"
-                    id="menu_admin_page_button"
-                  >
-                    {t("account.adminPage")}
-                  </span>
-                </HeaderMenuItemButton>
-              </div>
-            )}
+            <CustomAccountMenuNavigationItems
+              onNavigate={(path) => navigate(path)}
+            />
             <HeaderMenuItemLink
               newPage
               href={ENABLE_DATASTAX_PRIMEAGENT ? DATASTAX_DOCS_URL : DOCS_URL}
@@ -129,42 +95,7 @@ export const AccountMenu = () => {
             </HeaderMenuItemLink>
           </div>
 
-          <div>
-            <HeaderMenuItemLink newPage href={GITHUB_URL}>
-              <span
-                data-testid="menu_github_button"
-                id="menu_github_button"
-                className="flex items-center gap-2"
-              >
-                <FaGithub className="h-4 w-4" />
-                {t("account.github")}
-              </span>
-            </HeaderMenuItemLink>
-            <HeaderMenuItemLink newPage href={DISCORD_URL}>
-              <span
-                data-testid="menu_discord_button"
-                id="menu_discord_button"
-                className="flex items-center gap-2"
-              >
-                <FaDiscord className="h-4 w-4 text-[#5865F2]" />
-                {t("account.discord")}
-              </span>
-            </HeaderMenuItemLink>
-            <HeaderMenuItemLink newPage href={TWITTER_URL}>
-              <span
-                data-testid="menu_twitter_button"
-                id="menu_twitter_button"
-                className="flex items-center gap-2"
-              >
-                <ForwardedIconComponent
-                  strokeWidth={2}
-                  name="TwitterX"
-                  className="h-4 w-4"
-                />
-                {t("account.twitter")}
-              </span>
-            </HeaderMenuItemLink>
-          </div>
+          <CustomAccountMenuCommunityLinks />
 
           <div className="flex items-center justify-between px-4 py-[6.5px] text-sm">
             <span className="">{t("account.theme")}</span>

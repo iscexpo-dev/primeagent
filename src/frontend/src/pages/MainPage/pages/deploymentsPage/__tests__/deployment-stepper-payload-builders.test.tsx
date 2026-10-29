@@ -76,7 +76,7 @@ function renderEditHook(
   };
   const merged = { ...defaults, ...overrides };
   const wrapper = ({ children }: { children: React.ReactNode }) => (
-    <DeploymentStepperProvider initialState={merged as never}>
+    <DeploymentStepperProvider initialState={merged}>
       {children}
     </DeploymentStepperProvider>
   );

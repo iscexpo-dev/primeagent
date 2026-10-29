@@ -1,6 +1,6 @@
 """Tests for MCP reverse proxy support (root_path / X-Forwarded-Prefix).
 
-Covers the fix for https://github.com/khulnasoft/primeagent/issues/9797 where MCP
+Covers the fix for https://github.com/khulnasoft-bot/primeagent/issues/9797 where MCP
 SSE transport breaks when Primeagent sits behind a reverse proxy that adds a URL
 prefix (basePath).
 """
@@ -8,9 +8,6 @@ prefix (basePath).
 import pytest
 from mcp.server.sse import SseServerTransport
 from primeagent.api.v1.mcp_projects import get_project_sse, project_sse_transports
-
-pytestmark = pytest.mark.asyncio
-
 
 # ---------------------------------------------------------------------------
 # Unit: SseServerTransport respects root_path in the ASGI scope

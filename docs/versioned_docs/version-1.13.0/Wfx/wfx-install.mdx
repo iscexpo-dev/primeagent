@@ -1,0 +1,101 @@
+---
+title: Install WFX
+slug: /wfx-install
+---
+
+import PartialExtensionBundleInstall from '@site/docs/_partial-extension-bundle-install.mdx';
+
+WFX can be installed from PyPI, cloned from the Primeagent repository, or run without installing using `uvx`.
+
+If you have installed Primeagent OSS version 1.6 or later, `wfx` is already included in your environment.
+
+## Prerequisites
+
+- [Python](https://www.python.org/downloads/) 3.10–3.14
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.4 or later
+
+## Install from PyPI
+
+1. Create and activate a virtual environment:
+
+   ```bash
+   uv venv wfx-venv
+   source wfx-venv/bin/activate
+   ```
+
+2. Install WFX:
+
+   ```bash
+   uv pip install wfx
+   ```
+
+   To install the latest nightly (pre-release) version:
+
+   ```bash
+   uv pip install --pre wfx
+   ```
+
+## Install with bundle components
+
+Install the WFX engine and any provider extensions your flows need.
+
+<PartialExtensionBundleInstall />
+
+## Clone the Primeagent repository
+
+To run WFX from source without a PyPI install:
+
+1. Clone the Primeagent repository:
+
+   ```bash
+   git clone https://github.com/khulnasoft-bot/primeagent
+   ```
+
+2. Change directory to `src/wfx`:
+
+   ```bash
+   cd primeagent/src/wfx
+   ```
+
+3. Run `wfx` commands using `uv run`:
+
+   ```bash
+   uv run wfx serve my-flow.json
+   ```
+
+Running `uv run wfx` from `src/wfx` installs the WFX engine only.
+Bundle components will still need to be installed.
+To use bundle components, see [Install with bundle components](#install-with-bundle-components), or run `make init` from the repository root to install the full Primeagent development workspace.
+
+## Run without installing
+
+Use `uvx` to run WFX in a temporary environment without a permanent install:
+
+```bash
+uvx wfx serve my-flow.json
+```
+
+`uvx` downloads and caches WFX automatically.
+This is useful for one-off flow runs or CI pipelines where you do not want to manage a virtual environment.
+
+## Verify the installation
+
+After installing, confirm WFX is available:
+
+```bash
+wfx --version
+```
+
+To list available commands:
+
+```bash
+wfx --help
+```
+
+## See also
+
+- [About WFX](./wfx-overview)
+- [Run flows with WFX](./wfx-run)
+- [Serve flows with WFX](./wfx-serve)
+- [Flow DevOps Toolkit SDK](./wfx-devops-sdk.mdx)
+- [Extensions overview](./extensions-overview)
